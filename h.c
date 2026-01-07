@@ -13,10 +13,21 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
+#define cleanup(func) __attribute__((cleanup(func)))
+
+static void free_char(char **p) { free(*p); }
+static void free_curl(CURL **p) { if (*p) curl_easy_cleanup(*p); }
+static void free_slist(struct curl_slist **p) { if (*p) curl_slist_free_all(*p); }
+static void free_cjson(cJSON **p) { if (*p) cJSON_Delete(*p); }
+static void close_dir(DIR **p) { if (*p) closedir(*p); }
+static void curl_cleanup(char *p) { (void)p; curl_global_cleanup(); }
+
 typedef struct {
     char *data;
     size_t size;
 } Buffer;
+
+static void free_buffer(Buffer *p) { free(p->data); }
 
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t total = size * nmemb;
@@ -36,11 +47,11 @@ static int fetch_github_repo_info(const char *user, const char *repo,
     char url[512];
     snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s", user, repo);
 
-    CURL *curl = curl_easy_init();
+    cleanup(free_curl) CURL *curl = curl_easy_init();
     if (!curl) return 0;
 
-    Buffer buf = {0};
-    struct curl_slist *headers = NULL;
+    cleanup(free_buffer) Buffer buf = {0};
+    cleanup(free_slist) struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "User-Agent: h-cli");
     headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
 
@@ -53,19 +64,12 @@ static int fetch_github_repo_info(const char *user, const char *repo,
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
 
-    if (res != CURLE_OK || http_code != 200) {
-        free(buf.data);
-        return 0;
-    }
+    if (res != CURLE_OK || http_code != 200) return 0;
 
-    cJSON *json = cJSON_Parse(buf.data);
-    free(buf.data);
+    cleanup(free_cjson) cJSON *json = cJSON_Parse(buf.data);
     if (!json) return 0;
 
-    int success = 0;
     cJSON *owner_obj = cJSON_GetObjectItem(json, "owner");
     cJSON *name_obj = cJSON_GetObjectItem(json, "name");
 
@@ -76,12 +80,11 @@ static int fetch_github_repo_info(const char *user, const char *repo,
             out_owner[owner_size - 1] = '\0';
             strncpy(out_repo, name_obj->valuestring, repo_size - 1);
             out_repo[repo_size - 1] = '\0';
-            success = 1;
+            return 1;
         }
     }
 
-    cJSON_Delete(json);
-    return success;
+    return 0;
 }
 
 static char *expand_tilde(const char *path) {
@@ -144,7 +147,7 @@ static void search_dir(const char *dir, const char *term, int case_sensitive,
                        int depth, int max_depth, SearchResult *best) {
     if (depth > max_depth) return;
 
-    DIR *d = opendir(dir);
+    cleanup(close_dir) DIR *d = opendir(dir);
     if (!d) return;
 
     struct dirent *ent;
@@ -170,7 +173,6 @@ static void search_dir(const char *dir, const char *term, int case_sensitive,
 
         search_dir(path, term, case_sensitive, depth + 1, max_depth, best);
     }
-    closedir(d);
 }
 
 static void mkpath(const char *path) {
@@ -231,7 +233,7 @@ int main(int argc, char **argv) {
         const char *default_root = getenv("H_CODE_ROOT");
         if (!default_root) default_root = "~/src";
         const char *code_root_arg = argc > 2 ? argv[2] : default_root;
-        char *code_root = expand_tilde(code_root_arg);
+        cleanup(free_char) char *code_root = expand_tilde(code_root_arg);
 
         char exe[PATH_MAX];
         ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
@@ -252,7 +254,6 @@ int main(int argc, char **argv) {
                "  [ \"$_h_dir\" != \"$PWD\" ] && cd \"$_h_dir\"\n"
                "  return $_h_ret\n"
                "}\n", exe, code_root);
-        free(code_root);
         return 0;
     }
 
@@ -265,19 +266,18 @@ int main(int argc, char **argv) {
         print_cwd_and_exit("Usage: h --resolve <code-root> <term>", 1);
     }
 
-    char *code_root = expand_tilde(argv[2]);
+    cleanup(free_char) char *code_root = expand_tilde(argv[2]);
     if (argc < 4) {
-        free(code_root);
         print_cwd_and_exit("Usage: h (<name> | <repo>/<name> | <url>) [git opts]", 1);
     }
 
     const char *term = argv[3];
     if (strcmp(term, "-h") == 0 || strcmp(term, "--help") == 0) {
-        free(code_root);
         print_cwd_and_exit("Usage: h (<name> | <repo>/<name> | <url>) [git opts]", 1);
     }
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    cleanup(curl_cleanup) char curl_guard = 0;
 
     char path[PATH_MAX] = {0};
     char url[PATH_MAX] = {0};
@@ -295,11 +295,7 @@ int main(int argc, char **argv) {
     } else if (strstr(term, "://")) {
         char host[256] = {0}, uri_path[PATH_MAX] = {0};
         const char *p = strstr(term, "://");
-        if (!p) {
-            free(code_root);
-            curl_global_cleanup();
-            print_cwd_and_exit("Missing url scheme", 1);
-        }
+        if (!p) print_cwd_and_exit("Missing url scheme", 1);
         p += 3;
         const char *slash = strchr(p, '/');
         if (slash) {
@@ -333,16 +329,12 @@ int main(int argc, char **argv) {
             strncpy(path, best.path, sizeof(path) - 1);
         }
     } else {
-        free(code_root);
-        curl_global_cleanup();
         char msg[512];
         snprintf(msg, sizeof(msg), "Unknown pattern for %s", term);
         print_cwd_and_exit(msg, 1);
     }
 
     if (!path[0]) {
-        free(code_root);
-        curl_global_cleanup();
         char msg[512];
         snprintf(msg, sizeof(msg), "%s not found", term);
         print_cwd_and_exit(msg, 1);
@@ -352,16 +344,12 @@ int main(int argc, char **argv) {
 
     if (!is_dir(path)) {
         if (!url[0]) {
-            free(code_root);
-            curl_global_cleanup();
             char msg[512];
             snprintf(msg, sizeof(msg), "%s not found", term);
             print_cwd_and_exit(msg, 1);
         }
         int ret = clone_repo(url, path, argc - 4, argv + 4);
         if (ret != 0) {
-            free(code_root);
-            curl_global_cleanup();
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd))) puts(cwd);
             exit(ret);
@@ -369,7 +357,5 @@ int main(int argc, char **argv) {
     }
 
     puts(path);
-    free(code_root);
-    curl_global_cleanup();
     return 0;
 }

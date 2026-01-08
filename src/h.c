@@ -1,4 +1,5 @@
 #define _DEFAULT_SOURCE
+#include "util.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -108,30 +109,9 @@ static int fetch_github_repo_info(const char *user, const char *repo,
   return 0;
 }
 
-static char *expand_tilde(const char *path) {
-  if (path[0] != '~')
-    return strdup(path);
-  const char *home = getenv("HOME");
-  if (!home)
-    return strdup(path);
-  size_t len = strlen(home) + strlen(path);
-  char *result = malloc(len);
-  snprintf(result, len, "%s%s", home, path + 1);
-  return result;
-}
-
 static int is_dir(const char *path) {
   struct stat st;
   return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-static int fail(const char *msg) {
-  char cwd[PATH_MAX];
-  if (getcwd(cwd, sizeof(cwd)))
-    puts(cwd);
-  if (msg)
-    fprintf(stderr, "%s\n", msg);
-  return 1;
 }
 
 static int is_valid_name_char(char c) {
@@ -265,22 +245,22 @@ static void strip_git_extension(char *path) {
 
 int main(int argc, char **argv) {
   if (argc < 2)
-    return fail("Usage: eval \"$(h-shell-init [options] [code-root])\"");
+    return fail_with_cwd("Usage: eval \"$(h-shell-init [options] [code-root])\"");
 
   if (strcmp(argv[1], "--resolve") != 0)
-    return fail(
+    return fail_with_cwd(
         "h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
 
   if (argc < 3)
-    return fail("Usage: h --resolve <code-root> <term>");
+    return fail_with_cwd("Usage: h --resolve <code-root> <term>");
 
   cleanup(free_char) char *code_root = expand_tilde(argv[2]);
   if (argc < 4)
-    return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
+    return fail_with_cwd("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
 
   const char *term = argv[3];
   if (strcmp(term, "-h") == 0 || strcmp(term, "--help") == 0)
-    return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
+    return fail_with_cwd("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
 
   curl_global_init(CURL_GLOBAL_DEFAULT);
   cleanup(curl_cleanup) char curl_guard = 0;
@@ -302,7 +282,7 @@ int main(int argc, char **argv) {
     char host[256] = {0}, uri_path[PATH_MAX] = {0};
     const char *p = strstr(term, "://");
     if (!p)
-      return fail("Missing url scheme");
+      return fail_with_cwd("Missing url scheme");
     p += 3;
     const char *slash = strchr(p, '/');
     if (slash) {
@@ -342,13 +322,13 @@ int main(int argc, char **argv) {
   } else {
     char msg[512];
     snprintf(msg, sizeof(msg), "Unknown pattern for %s", term);
-    return fail(msg);
+    return fail_with_cwd(msg);
   }
 
   if (!path[0]) {
     char msg[512];
     snprintf(msg, sizeof(msg), "%s not found", term);
-    return fail(msg);
+    return fail_with_cwd(msg);
   }
 
   strip_git_extension(path);
@@ -361,7 +341,7 @@ int main(int argc, char **argv) {
   if (!url[0]) {
     char msg[512];
     snprintf(msg, sizeof(msg), "%s not found", term);
-    return fail(msg);
+    return fail_with_cwd(msg);
   }
 
   int ret = clone_repo(url, path, argc - 4, argv + 4);

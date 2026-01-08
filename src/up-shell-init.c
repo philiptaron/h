@@ -1,15 +1,10 @@
 #define _DEFAULT_SOURCE
+#include "util.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static int fail(const char *msg) {
-  if (msg)
-    fprintf(stderr, "%s\n", msg);
-  return 1;
-}
 
 int main(int argc, char **argv) {
   const char *cd_cmd = "cd";

@@ -3,17 +3,20 @@ LDFLAGS += $(shell pkg-config --libs libcurl libcjson)
 
 all: h up h-shell-init up-shell-init
 
-h: h.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+util.o: util.c util.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
-up: up.c
-	$(CC) $(CFLAGS) -o $@ $<
+h: h.c util.o
+	$(CC) $(CFLAGS) -o $@ h.c util.o $(LDFLAGS)
 
-h-shell-init: h-shell-init.c
-	$(CC) $(CFLAGS) -o $@ $<
+up: up.c util.o
+	$(CC) $(CFLAGS) -o $@ up.c util.o
 
-up-shell-init: up-shell-init.c
-	$(CC) $(CFLAGS) -o $@ $<
+h-shell-init: h-shell-init.c util.o
+	$(CC) $(CFLAGS) -o $@ h-shell-init.c util.o
+
+up-shell-init: up-shell-init.c util.o
+	$(CC) $(CFLAGS) -o $@ up-shell-init.c util.o
 
 install:
 	install -Dm755 h up h-shell-init up-shell-init -t $(PREFIX)/bin

@@ -54,7 +54,12 @@ static void parent_dir(char *path) {
 int main(int argc, char **argv) {
   if (argc > 1) {
     if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
+      fprintf(stderr, "up %s\n", VERSION);
       return fail_with_cwd("up is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"");
+    }
+    if (strcmp(argv[1], "-V") == 0 || strcmp(argv[1], "--version") == 0) {
+      printf("up %s\n", VERSION);
+      return 0;
     }
   }
 

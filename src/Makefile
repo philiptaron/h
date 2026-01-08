@@ -1,4 +1,5 @@
-CFLAGS += $(shell pkg-config --cflags libcurl libcjson)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
+CFLAGS += $(shell pkg-config --cflags libcurl libcjson) -DVERSION=\"$(VERSION)\"
 LDFLAGS += $(shell pkg-config --libs libcurl libcjson)
 
 all: h up h-shell-init up-shell-init

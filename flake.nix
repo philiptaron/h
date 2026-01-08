@@ -8,6 +8,7 @@
     inputs:
     let
       eachSystem = inputs.nixpkgs.lib.genAttrs (import inputs.systems);
+      version = inputs.self.shortRev or inputs.self.dirtyShortRev or "unknown";
       drv =
         {
           stdenv,
@@ -23,7 +24,10 @@
             cjson
           ];
           nativeBuildInputs = [ pkg-config ];
-          makeFlags = [ "PREFIX=$(out)" ];
+          makeFlags = [
+            "PREFIX=$(out)"
+            "VERSION=${version}"
+          ];
         };
     in
     {

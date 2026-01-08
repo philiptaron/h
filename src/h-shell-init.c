@@ -20,8 +20,13 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--git-opts") == 0 && i + 1 < argc) {
       git_opts = argv[++i];
     } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      printf("Usage: eval \"$(h-shell-init [--pushd] [--name NAME] "
-             "[--git-opts \"OPTIONS\"] [code-root])\"\n");
+      printf("h-shell-init %s\n"
+             "Usage: eval \"$(h-shell-init [--pushd] [--name NAME] "
+             "[--git-opts \"OPTIONS\"] [code-root])\"\n",
+             VERSION);
+      return 0;
+    } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
+      printf("h-shell-init %s\n", VERSION);
       return 0;
     } else if (argv[i][0] != '-') {
       code_root_arg = argv[i];

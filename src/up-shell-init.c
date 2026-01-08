@@ -13,7 +13,12 @@ int main(int argc, char **argv) {
     if (strcmp(argv[i], "--pushd") == 0) {
       cd_cmd = "pushd";
     } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      printf("Usage: eval \"$(up-shell-init [--pushd])\"\n");
+      printf("up-shell-init %s\n"
+             "Usage: eval \"$(up-shell-init [--pushd])\"\n",
+             VERSION);
+      return 0;
+    } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
+      printf("up-shell-init %s\n", VERSION);
       return 0;
     } else {
       char msg[512];

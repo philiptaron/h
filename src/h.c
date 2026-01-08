@@ -286,10 +286,16 @@ static void strip_git_extension(char *path) {
 
 int main(int argc, char **argv) {
   if (argc < 2)
-    return fail_with_cwd("Usage: eval \"$(h-shell-init [options] [code-root])\"");
+    return fail_with_cwd("h " VERSION "\nUsage: eval \"$(h-shell-init [options] [code-root])\"");
+
+  if (strcmp(argv[1], "-V") == 0 || strcmp(argv[1], "--version") == 0) {
+    printf("h %s\n", VERSION);
+    return 0;
+  }
 
   if (strcmp(argv[1], "--resolve") != 0)
-    return fail_with_cwd("h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
+    return fail_with_cwd("h " VERSION
+                         "\nh is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
 
   if (argc < 3)
     return fail_with_cwd("Usage: h --resolve <code-root> <term>");

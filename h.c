@@ -265,74 +265,11 @@ static void strip_git_extension(char *path) {
 
 int main(int argc, char **argv) {
   if (argc < 2)
-    return fail("Usage: eval \"$(h --setup [options] [code-root])\"");
-
-  if (strcmp(argv[1], "--setup") == 0) {
-    const char *func_name = "h";
-    const char *cd_cmd = "cd";
-    const char *git_opts = "";
-    const char *code_root_arg = NULL;
-
-    for (int i = 2; i < argc; i++) {
-      if (strcmp(argv[i], "--pushd") == 0) {
-        cd_cmd = "pushd";
-      } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
-        func_name = argv[++i];
-      } else if (strcmp(argv[i], "--git-opts") == 0 && i + 1 < argc) {
-        git_opts = argv[++i];
-      } else if (argv[i][0] != '-') {
-        code_root_arg = argv[i];
-      } else {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "Unknown option: %s", argv[i]);
-        return fail(msg);
-      }
-    }
-
-    const char *default_root = getenv("H_CODE_ROOT");
-    if (!default_root)
-      default_root = "~/src";
-    if (!code_root_arg)
-      code_root_arg = default_root;
-    cleanup(free_char) char *code_root = expand_tilde(code_root_arg);
-
-    char exe[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (len == -1) {
-      char *pwd = getenv("PWD");
-      if (!pwd)
-        pwd = ".";
-      if (argv[0][0] == '/')
-        strncpy(exe, argv[0], sizeof(exe) - 1);
-      else
-        snprintf(exe, sizeof(exe), "%s/%s", pwd, argv[0]);
-    } else {
-      exe[len] = '\0';
-    }
-
-    if (git_opts[0]) {
-      printf("%s() {\n"
-             "  _h_dir=$(command %s --resolve \"%s\" %s \"$@\")\n"
-             "  _h_ret=$?\n"
-             "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
-             "  return $_h_ret\n"
-             "}\n",
-             func_name, exe, code_root, git_opts, cd_cmd);
-    } else {
-      printf("%s() {\n"
-             "  _h_dir=$(command %s --resolve \"%s\" \"$@\")\n"
-             "  _h_ret=$?\n"
-             "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
-             "  return $_h_ret\n"
-             "}\n",
-             func_name, exe, code_root, cd_cmd);
-    }
-    return 0;
-  }
+    return fail("Usage: eval \"$(h-shell-init [options] [code-root])\"");
 
   if (strcmp(argv[1], "--resolve") != 0)
     return fail(
-        "h is not installed\n\nUsage: eval \"$(h --setup [code-root])\"");
+        "h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
 
   if (argc < 3)
     return fail("Usage: h --resolve <code-root> <term>");

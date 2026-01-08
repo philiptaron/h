@@ -7,7 +7,7 @@ Rewritten in C from [zimbatm/h](https://github.com/zimbatm/h). Depends on libcur
 ## Setup
 
 ```bash
-eval "$(h --setup [options] [code-root])"
+eval "$(h-shell-init [options] [code-root])"
 ```
 
 Options:
@@ -26,7 +26,7 @@ Options:
 Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).
 
 ```bash
-eval "$(up --setup [--pushd])"
+eval "$(up-shell-init [--pushd])"
 ```
 
 ## License

@@ -14,7 +14,28 @@ eval "$(h --setup ~/code)"
 - `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>` or clone it (queries GitHub API for correct casing)
 - `h <url>` - cd to `~/code/<domain>/<path>` or clone it
 
+### Setup options
+
+```bash
+eval "$(h --setup [options] [code-root])"
+```
+
+- `--pushd` - use `pushd` instead of `cd`
+- `--name NAME` - use NAME as the shell function name (default: `h`)
+- `--git-opts "OPTIONS"` - default git clone options (can be overridden per-call)
+
+Example:
+```bash
+eval "$(h --setup --pushd --name g --git-opts '--depth 1' ~/code)"
+```
+
+## up
+
 Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).
+
+```bash
+eval "$(up --setup [--pushd])"
+```
 
 ## License
 

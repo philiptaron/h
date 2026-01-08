@@ -56,23 +56,36 @@ static void parent_dir(char *path) {
     }
 }
 
+static int fail(const char *msg) {
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd))) puts(cwd);
+    if (msg) fprintf(stderr, "%s\n", msg);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (strcmp(argv[1], "--setup") == 0) {
+            const char *cd_cmd = "cd";
+            for (int i = 2; i < argc; i++) {
+                if (strcmp(argv[i], "--pushd") == 0) {
+                    cd_cmd = "pushd";
+                } else {
+                    char msg[512];
+                    snprintf(msg, sizeof(msg), "Unknown option: %s", argv[i]);
+                    return fail(msg);
+                }
+            }
             printf("up() {\n"
                    "  _up_dir=$(command up \"$@\")\n"
                    "  if [ $? = 0 ]; then\n"
-                   "    [ \"$_up_dir\" != \"$PWD\" ] && cd \"$_up_dir\"\n"
+                   "    [ \"$_up_dir\" != \"$PWD\" ] && %s \"$_up_dir\"\n"
                    "  fi\n"
-                   "}\n");
+                   "}\n", cd_cmd);
             return 0;
         }
         if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-            char cwd[PATH_MAX];
-            if (getcwd(cwd, sizeof(cwd))) puts(cwd);
-            fprintf(stderr, "up is not installed\n\n"
-                           "Usage: eval \"$(up --setup)\"\n");
-            return 1;
+            return fail("up is not installed\n\nUsage: eval \"$(up --setup [--pushd])\"");
         }
     }
 

@@ -2,21 +2,22 @@
   description = "faster shell navigation of projects";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs";
+  inputs.systems.url = "github:nix-systems/default";
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, systems }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      eachSystem = nixpkgs.lib.genAttrs (import systems);
     in
     {
-      packages = forAllSystems (pkgs: {
-        default = pkgs.stdenv.mkDerivation {
-          name = "h";
-          src = ./.;
-          buildInputs = [ pkgs.curl pkgs.cjson ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          makeFlags = [ "PREFIX=$(out)" ];
-        };
-      });
+      packages = eachSystem (system:
+        let pkgs = nixpkgs.legacyPackages.${system}; in {
+          default = pkgs.stdenv.mkDerivation {
+            name = "h";
+            src = ./.;
+            buildInputs = [ pkgs.curl pkgs.cjson ];
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            makeFlags = [ "PREFIX=$(out)" ];
+          };
+        });
     };
 }

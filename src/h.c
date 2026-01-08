@@ -109,11 +109,6 @@ static int fetch_github_repo_info(const char *user, const char *repo,
   return 0;
 }
 
-static int is_dir(const char *path) {
-  struct stat st;
-  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
 static int is_valid_name_char(char c) {
   return isalnum(c) || c == '.' || c == '-' || c == '_';
 }

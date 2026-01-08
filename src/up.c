@@ -7,16 +7,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int is_dir(const char *path) {
-  struct stat st;
-  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-static int is_file(const char *path) {
-  struct stat st;
-  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
-}
-
 static int is_root(const char *path) { return strcmp(path, "/") == 0; }
 
 static int is_home(const char *path) {

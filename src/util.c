@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 char *expand_tilde(const char *path) {
@@ -31,4 +32,14 @@ int fail_with_cwd(const char *msg) {
   if (msg)
     fprintf(stderr, "%s\n", msg);
   return 1;
+}
+
+int is_dir(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+int is_file(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }

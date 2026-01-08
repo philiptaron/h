@@ -70,7 +70,11 @@ int main(int argc, char **argv) {
            "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
            "  return $_h_ret\n"
            "}\n",
-           func_name, exe, code_root, git_opts, cd_cmd);
+           func_name,
+           exe,
+           code_root,
+           git_opts,
+           cd_cmd);
   } else {
     printf("%s() {\n"
            "  _h_dir=$(command %s --resolve \"%s\" \"$@\")\n"
@@ -78,7 +82,10 @@ int main(int argc, char **argv) {
            "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
            "  return $_h_ret\n"
            "}\n",
-           func_name, exe, code_root, cd_cmd);
+           func_name,
+           exe,
+           code_root,
+           cd_cmd);
   }
 
   free(code_root);

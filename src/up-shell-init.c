@@ -50,7 +50,8 @@ int main(int argc, char **argv) {
          "    [ \"$_up_dir\" != \"$PWD\" ] && %s \"$_up_dir\"\n"
          "  fi\n"
          "}\n",
-         exe, cd_cmd);
+         exe,
+         cd_cmd);
 
   return 0;
 }

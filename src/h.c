@@ -16,7 +16,9 @@
 
 #define cleanup(func) __attribute__((cleanup(func)))
 
-static void free_char(char **p) { free(*p); }
+static void free_char(char **p) {
+  free(*p);
+}
 static void free_curl(CURL **p) {
   if (*p)
     curl_easy_cleanup(*p);
@@ -43,10 +45,11 @@ typedef struct {
   size_t size;
 } Buffer;
 
-static void free_buffer(Buffer *p) { free(p->data); }
+static void free_buffer(Buffer *p) {
+  free(p->data);
+}
 
-static size_t write_callback(void *contents, size_t size, size_t nmemb,
-                             void *userp) {
+static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
   size_t total = size * nmemb;
   Buffer *buf = (Buffer *)userp;
   char *ptr = realloc(buf->data, buf->size + total + 1);
@@ -59,9 +62,12 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb,
   return total;
 }
 
-static int fetch_github_repo_info(const char *user, const char *repo,
-                                  char *out_owner, size_t owner_size,
-                                  char *out_repo, size_t repo_size) {
+static int fetch_github_repo_info(const char *user,
+                                  const char *repo,
+                                  char *out_owner,
+                                  size_t owner_size,
+                                  char *out_repo,
+                                  size_t repo_size) {
   char url[512];
   snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s", user, repo);
 
@@ -72,8 +78,7 @@ static int fetch_github_repo_info(const char *user, const char *repo,
   cleanup(free_buffer) Buffer buf = {0};
   cleanup(free_slist) struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "User-Agent: h-cli");
-  headers =
-      curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
+  headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
 
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -122,8 +127,12 @@ static int is_simple_name(const char *s) {
   return 1;
 }
 
-static int is_github_repo(const char *host, const char *path, char *user,
-                          size_t user_size, char *repo, size_t repo_size) {
+static int is_github_repo(const char *host,
+                          const char *path,
+                          char *user,
+                          size_t user_size,
+                          char *repo,
+                          size_t repo_size) {
   if (strcmp(host, "github.com") != 0)
     return 0;
 
@@ -149,11 +158,14 @@ static int is_github_repo(const char *host, const char *path, char *user,
   return 1;
 }
 
-static void correct_github_casing(char *user, size_t user_size, char *repo,
-                                  size_t repo_size) {
+static void correct_github_casing(char *user, size_t user_size, char *repo, size_t repo_size) {
   char api_owner[256], api_repo[256];
-  if (fetch_github_repo_info(user, repo, api_owner, sizeof(api_owner),
-                             api_repo, sizeof(api_repo))) {
+  if (fetch_github_repo_info(user,
+                             repo,
+                             api_owner,
+                             sizeof(api_owner),
+                             api_repo,
+                             sizeof(api_repo))) {
     strncpy(user, api_owner, user_size - 1);
     user[user_size - 1] = '\0';
     strncpy(repo, api_repo, repo_size - 1);
@@ -161,9 +173,14 @@ static void correct_github_casing(char *user, size_t user_size, char *repo,
   }
 }
 
-static void setup_github_clone(const char *code_root, char *user,
-                               size_t user_size, char *repo, size_t repo_size,
-                               char *url, size_t url_size, char *path,
+static void setup_github_clone(const char *code_root,
+                               char *user,
+                               size_t user_size,
+                               char *repo,
+                               size_t repo_size,
+                               char *url,
+                               size_t url_size,
+                               char *path,
                                size_t path_size) {
   correct_github_casing(user, user_size, repo, repo_size);
   snprintf(url, url_size, "https://github.com/%s/%s.git", user, repo);
@@ -175,8 +192,12 @@ typedef struct {
   int depth;
 } SearchResult;
 
-static void search_dir(const char *dir, const char *term, int case_sensitive,
-                       int depth, int max_depth, SearchResult *best) {
+static void search_dir(const char *dir,
+                       const char *term,
+                       int case_sensitive,
+                       int depth,
+                       int max_depth,
+                       SearchResult *best) {
   if (depth > max_depth)
     return;
 
@@ -224,8 +245,7 @@ static void mkpath(const char *path) {
   mkdir(tmp, 0755);
 }
 
-static int clone_repo(const char *url, const char *path, int argc,
-                      char **argv) {
+static int clone_repo(const char *url, const char *path, int argc, char **argv) {
   char parent[PATH_MAX];
   strncpy(parent, path, sizeof(parent) - 1);
   char *last_slash = strrchr(parent, '/');
@@ -269,8 +289,7 @@ int main(int argc, char **argv) {
     return fail_with_cwd("Usage: eval \"$(h-shell-init [options] [code-root])\"");
 
   if (strcmp(argv[1], "--resolve") != 0)
-    return fail_with_cwd(
-        "h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
+    return fail_with_cwd("h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
 
   if (argc < 3)
     return fail_with_cwd("Usage: h --resolve <code-root> <term>");
@@ -290,10 +309,16 @@ int main(int argc, char **argv) {
   char url[PATH_MAX] = {0};
   char user[256], repo[256];
 
-  if (is_github_repo("github.com", term, user, sizeof(user), repo,
-                     sizeof(repo))) {
-    setup_github_clone(code_root, user, sizeof(user), repo, sizeof(repo), url,
-                       sizeof(url), path, sizeof(path));
+  if (is_github_repo("github.com", term, user, sizeof(user), repo, sizeof(repo))) {
+    setup_github_clone(code_root,
+                       user,
+                       sizeof(user),
+                       repo,
+                       sizeof(repo),
+                       url,
+                       sizeof(url),
+                       path,
+                       sizeof(path));
   } else if (strstr(term, "://")) {
     char host[256] = {0}, uri_path[PATH_MAX] = {0};
     const char *p = strstr(term, "://");
@@ -310,10 +335,16 @@ int main(int argc, char **argv) {
     }
     for (char *c = host; *c; c++)
       *c = tolower(*c);
-    if (is_github_repo(host, uri_path, user, sizeof(user), repo,
-                       sizeof(repo))) {
-      setup_github_clone(code_root, user, sizeof(user), repo, sizeof(repo), url,
-                         sizeof(url), path, sizeof(path));
+    if (is_github_repo(host, uri_path, user, sizeof(user), repo, sizeof(repo))) {
+      setup_github_clone(code_root,
+                         user,
+                         sizeof(user),
+                         repo,
+                         sizeof(repo),
+                         url,
+                         sizeof(url),
+                         path,
+                         sizeof(path));
     } else {
       strncpy(url, term, sizeof(url) - 1);
       snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, uri_path);
@@ -328,10 +359,16 @@ int main(int argc, char **argv) {
       for (char *c = host; *c; c++)
         *c = tolower(*c);
       const char *repo_path = colon + 1;
-      if (is_github_repo(host, repo_path, user, sizeof(user), repo,
-                         sizeof(repo))) {
-        setup_github_clone(code_root, user, sizeof(user), repo, sizeof(repo),
-                           url, sizeof(url), path, sizeof(path));
+      if (is_github_repo(host, repo_path, user, sizeof(user), repo, sizeof(repo))) {
+        setup_github_clone(code_root,
+                           user,
+                           sizeof(user),
+                           repo,
+                           sizeof(repo),
+                           url,
+                           sizeof(url),
+                           path,
+                           sizeof(path));
       } else {
         strncpy(url, term, sizeof(url) - 1);
         snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, repo_path);

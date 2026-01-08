@@ -7,7 +7,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int is_root(const char *path) { return strcmp(path, "/") == 0; }
+static int is_root(const char *path) {
+  return strcmp(path, "/") == 0;
+}
 
 static int is_home(const char *path) {
   const char *home = getenv("HOME");
@@ -52,8 +54,7 @@ static void parent_dir(char *path) {
 int main(int argc, char **argv) {
   if (argc > 1) {
     if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-      return fail_with_cwd(
-          "up is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"");
+      return fail_with_cwd("up is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"");
     }
   }
 

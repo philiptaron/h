@@ -17,7 +17,7 @@
         }:
         stdenv.mkDerivation {
           name = "h";
-          src = ./.;
+          src = ./src;
           buildInputs = [
             curl
             cjson

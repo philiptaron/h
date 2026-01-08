@@ -336,18 +336,22 @@ int main(int argc, char **argv) {
 
     strip_git_extension(path);
 
-    if (!is_dir(path)) {
-        if (!url[0]) {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "%s not found", term);
-            return fail(msg);
-        }
-        int ret = clone_repo(url, path, argc - 4, argv + 4);
-        if (ret != 0) {
-            char cwd[PATH_MAX];
-            if (getcwd(cwd, sizeof(cwd))) puts(cwd);
-            return ret;
-        }
+    if (is_dir(path)) {
+        puts(path);
+        return 0;
+    }
+
+    if (!url[0]) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "%s not found", term);
+        return fail(msg);
+    }
+
+    int ret = clone_repo(url, path, argc - 4, argv + 4);
+    if (ret != 0) {
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd))) puts(cwd);
+        return ret;
     }
 
     puts(path);

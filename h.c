@@ -10,380 +10,431 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <curl/curl.h>
 #include <cjson/cJSON.h>
+#include <curl/curl.h>
 
 #define cleanup(func) __attribute__((cleanup(func)))
 
 static void free_char(char **p) { free(*p); }
-static void free_curl(CURL **p) { if (*p) curl_easy_cleanup(*p); }
-static void free_slist(struct curl_slist **p) { if (*p) curl_slist_free_all(*p); }
-static void free_cjson(cJSON **p) { if (*p) cJSON_Delete(*p); }
-static void close_dir(DIR **p) { if (*p) closedir(*p); }
-static void curl_cleanup(char *p) { (void)p; curl_global_cleanup(); }
+static void free_curl(CURL **p) {
+  if (*p)
+    curl_easy_cleanup(*p);
+}
+static void free_slist(struct curl_slist **p) {
+  if (*p)
+    curl_slist_free_all(*p);
+}
+static void free_cjson(cJSON **p) {
+  if (*p)
+    cJSON_Delete(*p);
+}
+static void close_dir(DIR **p) {
+  if (*p)
+    closedir(*p);
+}
+static void curl_cleanup(char *p) {
+  (void)p;
+  curl_global_cleanup();
+}
 
 typedef struct {
-    char *data;
-    size_t size;
+  char *data;
+  size_t size;
 } Buffer;
 
 static void free_buffer(Buffer *p) { free(p->data); }
 
-static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-    size_t total = size * nmemb;
-    Buffer *buf = (Buffer *)userp;
-    char *ptr = realloc(buf->data, buf->size + total + 1);
-    if (!ptr) return 0;
-    buf->data = ptr;
-    memcpy(&buf->data[buf->size], contents, total);
-    buf->size += total;
-    buf->data[buf->size] = '\0';
-    return total;
+static size_t write_callback(void *contents, size_t size, size_t nmemb,
+                             void *userp) {
+  size_t total = size * nmemb;
+  Buffer *buf = (Buffer *)userp;
+  char *ptr = realloc(buf->data, buf->size + total + 1);
+  if (!ptr)
+    return 0;
+  buf->data = ptr;
+  memcpy(&buf->data[buf->size], contents, total);
+  buf->size += total;
+  buf->data[buf->size] = '\0';
+  return total;
 }
 
 static int fetch_github_repo_info(const char *user, const char *repo,
-                                   char *out_owner, size_t owner_size,
-                                   char *out_repo, size_t repo_size) {
-    char url[512];
-    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s", user, repo);
+                                  char *out_owner, size_t owner_size,
+                                  char *out_repo, size_t repo_size) {
+  char url[512];
+  snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s", user, repo);
 
-    cleanup(free_curl) CURL *curl = curl_easy_init();
-    if (!curl) return 0;
-
-    cleanup(free_buffer) Buffer buf = {0};
-    cleanup(free_slist) struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "User-Agent: h-cli");
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
-
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-
-    if (res != CURLE_OK || http_code != 200) return 0;
-
-    cleanup(free_cjson) cJSON *json = cJSON_Parse(buf.data);
-    if (!json) return 0;
-
-    cJSON *owner_obj = cJSON_GetObjectItem(json, "owner");
-    cJSON *name_obj = cJSON_GetObjectItem(json, "name");
-
-    if (owner_obj && name_obj) {
-        cJSON *login = cJSON_GetObjectItem(owner_obj, "login");
-        if (login && cJSON_IsString(login) && cJSON_IsString(name_obj)) {
-            strncpy(out_owner, login->valuestring, owner_size - 1);
-            out_owner[owner_size - 1] = '\0';
-            strncpy(out_repo, name_obj->valuestring, repo_size - 1);
-            out_repo[repo_size - 1] = '\0';
-            return 1;
-        }
-    }
-
+  cleanup(free_curl) CURL *curl = curl_easy_init();
+  if (!curl)
     return 0;
+
+  cleanup(free_buffer) Buffer buf = {0};
+  cleanup(free_slist) struct curl_slist *headers = NULL;
+  headers = curl_slist_append(headers, "User-Agent: h-cli");
+  headers =
+      curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
+
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+  CURLcode res = curl_easy_perform(curl);
+  long http_code = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+  if (res != CURLE_OK || http_code != 200)
+    return 0;
+
+  cleanup(free_cjson) cJSON *json = cJSON_Parse(buf.data);
+  if (!json)
+    return 0;
+
+  cJSON *owner_obj = cJSON_GetObjectItem(json, "owner");
+  cJSON *name_obj = cJSON_GetObjectItem(json, "name");
+
+  if (owner_obj && name_obj) {
+    cJSON *login = cJSON_GetObjectItem(owner_obj, "login");
+    if (login && cJSON_IsString(login) && cJSON_IsString(name_obj)) {
+      strncpy(out_owner, login->valuestring, owner_size - 1);
+      out_owner[owner_size - 1] = '\0';
+      strncpy(out_repo, name_obj->valuestring, repo_size - 1);
+      out_repo[repo_size - 1] = '\0';
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 static char *expand_tilde(const char *path) {
-    if (path[0] != '~') return strdup(path);
-    const char *home = getenv("HOME");
-    if (!home) return strdup(path);
-    size_t len = strlen(home) + strlen(path);
-    char *result = malloc(len);
-    snprintf(result, len, "%s%s", home, path + 1);
-    return result;
+  if (path[0] != '~')
+    return strdup(path);
+  const char *home = getenv("HOME");
+  if (!home)
+    return strdup(path);
+  size_t len = strlen(home) + strlen(path);
+  char *result = malloc(len);
+  snprintf(result, len, "%s%s", home, path + 1);
+  return result;
 }
 
 static int is_dir(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static int fail(const char *msg) {
-    char cwd[PATH_MAX];
-    if (getcwd(cwd, sizeof(cwd))) puts(cwd);
-    if (msg) fprintf(stderr, "%s\n", msg);
-    return 1;
+  char cwd[PATH_MAX];
+  if (getcwd(cwd, sizeof(cwd)))
+    puts(cwd);
+  if (msg)
+    fprintf(stderr, "%s\n", msg);
+  return 1;
 }
 
 static int is_valid_name_char(char c) {
-    return isalnum(c) || c == '.' || c == '-' || c == '_';
+  return isalnum(c) || c == '.' || c == '-' || c == '_';
 }
 
 static int is_simple_name(const char *s) {
-    if (!*s) return 0;
-    for (; *s; s++)
-        if (!is_valid_name_char(*s)) return 0;
-    return 1;
+  if (!*s)
+    return 0;
+  for (; *s; s++)
+    if (!is_valid_name_char(*s))
+      return 0;
+  return 1;
 }
 
 static int is_github_repo(const char *s, char *user, char *repo) {
-    const char *slash = strchr(s, '/');
-    if (!slash || slash == s || !slash[1]) return 0;
-    if (strchr(slash + 1, '/')) return 0;
+  const char *slash = strchr(s, '/');
+  if (!slash || slash == s || !slash[1])
+    return 0;
+  if (strchr(slash + 1, '/'))
+    return 0;
 
-    size_t ulen = slash - s;
-    size_t rlen = strlen(slash + 1);
-    for (size_t i = 0; i < ulen; i++)
-        if (!is_valid_name_char(s[i])) return 0;
-    for (size_t i = 0; i < rlen; i++)
-        if (!is_valid_name_char(slash[1 + i])) return 0;
+  size_t ulen = slash - s;
+  size_t rlen = strlen(slash + 1);
+  for (size_t i = 0; i < ulen; i++)
+    if (!is_valid_name_char(s[i]))
+      return 0;
+  for (size_t i = 0; i < rlen; i++)
+    if (!is_valid_name_char(slash[1 + i]))
+      return 0;
 
-    strncpy(user, s, ulen);
-    user[ulen] = '\0';
-    strcpy(repo, slash + 1);
-    return 1;
+  strncpy(user, s, ulen);
+  user[ulen] = '\0';
+  strcpy(repo, slash + 1);
+  return 1;
 }
 
 typedef struct {
-    char path[PATH_MAX];
-    int depth;
+  char path[PATH_MAX];
+  int depth;
 } SearchResult;
 
 static void search_dir(const char *dir, const char *term, int case_sensitive,
                        int depth, int max_depth, SearchResult *best) {
-    if (depth > max_depth) return;
+  if (depth > max_depth)
+    return;
 
-    cleanup(close_dir) DIR *d = opendir(dir);
-    if (!d) return;
+  cleanup(close_dir) DIR *d = opendir(dir);
+  if (!d)
+    return;
 
-    struct dirent *ent;
-    while ((ent = readdir(d))) {
-        if (ent->d_name[0] == '.') continue;
+  struct dirent *ent;
+  while ((ent = readdir(d))) {
+    if (ent->d_name[0] == '.')
+      continue;
 
-        char path[PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
 
-        if (!is_dir(path)) continue;
+    if (!is_dir(path))
+      continue;
 
-        int match;
-        if (case_sensitive) {
-            match = strcmp(ent->d_name, term) == 0;
-        } else {
-            match = strcasecmp(ent->d_name, term) == 0;
-        }
-
-        if (match && depth > best->depth) {
-            strncpy(best->path, path, sizeof(best->path) - 1);
-            best->depth = depth;
-        }
-
-        search_dir(path, term, case_sensitive, depth + 1, max_depth, best);
+    int match;
+    if (case_sensitive) {
+      match = strcmp(ent->d_name, term) == 0;
+    } else {
+      match = strcasecmp(ent->d_name, term) == 0;
     }
+
+    if (match && depth > best->depth) {
+      strncpy(best->path, path, sizeof(best->path) - 1);
+      best->depth = depth;
+    }
+
+    search_dir(path, term, case_sensitive, depth + 1, max_depth, best);
+  }
 }
 
 static void mkpath(const char *path) {
-    char tmp[PATH_MAX];
-    strncpy(tmp, path, sizeof(tmp) - 1);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            mkdir(tmp, 0755);
-            *p = '/';
-        }
+  char tmp[PATH_MAX];
+  strncpy(tmp, path, sizeof(tmp) - 1);
+  for (char *p = tmp + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      mkdir(tmp, 0755);
+      *p = '/';
     }
-    mkdir(tmp, 0755);
+  }
+  mkdir(tmp, 0755);
 }
 
-static int clone_repo(const char *url, const char *path, int argc, char **argv) {
-    char parent[PATH_MAX];
-    strncpy(parent, path, sizeof(parent) - 1);
-    char *last_slash = strrchr(parent, '/');
-    if (last_slash) *last_slash = '\0';
-    mkpath(parent);
+static int clone_repo(const char *url, const char *path, int argc,
+                      char **argv) {
+  char parent[PATH_MAX];
+  strncpy(parent, path, sizeof(parent) - 1);
+  char *last_slash = strrchr(parent, '/');
+  if (last_slash)
+    *last_slash = '\0';
+  mkpath(parent);
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        char **args = malloc((argc + 6) * sizeof(char *));
-        int i = 0;
-        args[i++] = "git";
-        args[i++] = "clone";
-        if (argc == 0) args[i++] = "--recursive";
-        for (int j = 0; j < argc; j++) args[i++] = argv[j];
-        args[i++] = "--";
-        args[i++] = (char *)url;
-        args[i++] = (char *)path;
-        args[i] = NULL;
+  pid_t pid = fork();
+  if (pid == 0) {
+    char **args = malloc((argc + 6) * sizeof(char *));
+    int i = 0;
+    args[i++] = "git";
+    args[i++] = "clone";
+    if (argc == 0)
+      args[i++] = "--recursive";
+    for (int j = 0; j < argc; j++)
+      args[i++] = argv[j];
+    args[i++] = "--";
+    args[i++] = (char *)url;
+    args[i++] = (char *)path;
+    args[i] = NULL;
 
-        dup2(STDERR_FILENO, STDOUT_FILENO);
-        execvp("git", args);
-        _exit(127);
-    }
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    execvp("git", args);
+    _exit(127);
+  }
 
-    int status;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+  int status;
+  waitpid(pid, &status, 0);
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
 static void strip_git_extension(char *path) {
-    size_t len = strlen(path);
-    if (len > 4 && strcmp(path + len - 4, ".git") == 0)
-        path[len - 4] = '\0';
+  size_t len = strlen(path);
+  if (len > 4 && strcmp(path + len - 4, ".git") == 0)
+    path[len - 4] = '\0';
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2)
-        return fail("Usage: eval \"$(h --setup [options] [code-root])\"");
+  if (argc < 2)
+    return fail("Usage: eval \"$(h --setup [options] [code-root])\"");
 
-    if (strcmp(argv[1], "--setup") == 0) {
-        const char *func_name = "h";
-        const char *cd_cmd = "cd";
-        const char *git_opts = "";
-        const char *code_root_arg = NULL;
+  if (strcmp(argv[1], "--setup") == 0) {
+    const char *func_name = "h";
+    const char *cd_cmd = "cd";
+    const char *git_opts = "";
+    const char *code_root_arg = NULL;
 
-        for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--pushd") == 0) {
-                cd_cmd = "pushd";
-            } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
-                func_name = argv[++i];
-            } else if (strcmp(argv[i], "--git-opts") == 0 && i + 1 < argc) {
-                git_opts = argv[++i];
-            } else if (argv[i][0] != '-') {
-                code_root_arg = argv[i];
-            } else {
-                char msg[512];
-                snprintf(msg, sizeof(msg), "Unknown option: %s", argv[i]);
-                return fail(msg);
-            }
-        }
-
-        const char *default_root = getenv("H_CODE_ROOT");
-        if (!default_root) default_root = "~/src";
-        if (!code_root_arg) code_root_arg = default_root;
-        cleanup(free_char) char *code_root = expand_tilde(code_root_arg);
-
-        char exe[PATH_MAX];
-        ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-        if (len == -1) {
-            char *pwd = getenv("PWD");
-            if (!pwd) pwd = ".";
-            if (argv[0][0] == '/')
-                strncpy(exe, argv[0], sizeof(exe) - 1);
-            else
-                snprintf(exe, sizeof(exe), "%s/%s", pwd, argv[0]);
-        } else {
-            exe[len] = '\0';
-        }
-
-        if (git_opts[0]) {
-            printf("%s() {\n"
-                   "  _h_dir=$(command %s --resolve \"%s\" %s \"$@\")\n"
-                   "  _h_ret=$?\n"
-                   "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
-                   "  return $_h_ret\n"
-                   "}\n", func_name, exe, code_root, git_opts, cd_cmd);
-        } else {
-            printf("%s() {\n"
-                   "  _h_dir=$(command %s --resolve \"%s\" \"$@\")\n"
-                   "  _h_ret=$?\n"
-                   "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
-                   "  return $_h_ret\n"
-                   "}\n", func_name, exe, code_root, cd_cmd);
-        }
-        return 0;
+    for (int i = 2; i < argc; i++) {
+      if (strcmp(argv[i], "--pushd") == 0) {
+        cd_cmd = "pushd";
+      } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+        func_name = argv[++i];
+      } else if (strcmp(argv[i], "--git-opts") == 0 && i + 1 < argc) {
+        git_opts = argv[++i];
+      } else if (argv[i][0] != '-') {
+        code_root_arg = argv[i];
+      } else {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Unknown option: %s", argv[i]);
+        return fail(msg);
+      }
     }
 
-    if (strcmp(argv[1], "--resolve") != 0)
-        return fail("h is not installed\n\nUsage: eval \"$(h --setup [code-root])\"");
+    const char *default_root = getenv("H_CODE_ROOT");
+    if (!default_root)
+      default_root = "~/src";
+    if (!code_root_arg)
+      code_root_arg = default_root;
+    cleanup(free_char) char *code_root = expand_tilde(code_root_arg);
 
-    if (argc < 3)
-        return fail("Usage: h --resolve <code-root> <term>");
-
-    cleanup(free_char) char *code_root = expand_tilde(argv[2]);
-    if (argc < 4)
-        return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
-
-    const char *term = argv[3];
-    if (strcmp(term, "-h") == 0 || strcmp(term, "--help") == 0)
-        return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
-
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    cleanup(curl_cleanup) char curl_guard = 0;
-
-    char path[PATH_MAX] = {0};
-    char url[PATH_MAX] = {0};
-    char user[256], repo[256];
-
-    if (is_github_repo(term, user, repo)) {
-        char api_owner[256], api_repo[256];
-        if (fetch_github_repo_info(user, repo, api_owner, sizeof(api_owner),
-                                   api_repo, sizeof(api_repo))) {
-            strncpy(user, api_owner, sizeof(user) - 1);
-            strncpy(repo, api_repo, sizeof(repo) - 1);
-        }
-        snprintf(url, sizeof(url), "git@github.com:%s/%s.git", user, repo);
-        snprintf(path, sizeof(path), "%s/github.com/%s/%s", code_root, user, repo);
-    } else if (strstr(term, "://")) {
-        char host[256] = {0}, uri_path[PATH_MAX] = {0};
-        const char *p = strstr(term, "://");
-        if (!p) return fail("Missing url scheme");
-        p += 3;
-        const char *slash = strchr(p, '/');
-        if (slash) {
-            size_t hlen = slash - p;
-            strncpy(host, p, hlen < sizeof(host) ? hlen : sizeof(host) - 1);
-            strncpy(uri_path, slash + 1, sizeof(uri_path) - 1);
-        } else {
-            strncpy(host, p, sizeof(host) - 1);
-        }
-        for (char *c = host; *c; c++) *c = tolower(*c);
-        strncpy(url, term, sizeof(url) - 1);
-        snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, uri_path);
-    } else if (strncmp(term, "git@", 4) == 0 || strncmp(term, "gitea@", 6) == 0) {
-        const char *at = strchr(term, '@');
-        const char *colon = strchr(at, ':');
-        if (at && colon) {
-            char host[256] = {0};
-            size_t hlen = colon - at - 1;
-            strncpy(host, at + 1, hlen < sizeof(host) ? hlen : sizeof(host) - 1);
-            strncpy(url, term, sizeof(url) - 1);
-            snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, colon + 1);
-        }
-    } else if (is_simple_name(term)) {
-        int case_sensitive = 0;
-        for (const char *c = term; *c; c++) {
-            if (isupper(*c)) { case_sensitive = 1; break; }
-        }
-        SearchResult best = { .depth = 0 };
-        search_dir(code_root, term, case_sensitive, 1, 3, &best);
-        if (best.depth > 0) {
-            strncpy(path, best.path, sizeof(path) - 1);
-        }
+    char exe[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (len == -1) {
+      char *pwd = getenv("PWD");
+      if (!pwd)
+        pwd = ".";
+      if (argv[0][0] == '/')
+        strncpy(exe, argv[0], sizeof(exe) - 1);
+      else
+        snprintf(exe, sizeof(exe), "%s/%s", pwd, argv[0]);
     } else {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "Unknown pattern for %s", term);
-        return fail(msg);
+      exe[len] = '\0';
     }
 
-    if (!path[0]) {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "%s not found", term);
-        return fail(msg);
+    if (git_opts[0]) {
+      printf("%s() {\n"
+             "  _h_dir=$(command %s --resolve \"%s\" %s \"$@\")\n"
+             "  _h_ret=$?\n"
+             "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
+             "  return $_h_ret\n"
+             "}\n",
+             func_name, exe, code_root, git_opts, cd_cmd);
+    } else {
+      printf("%s() {\n"
+             "  _h_dir=$(command %s --resolve \"%s\" \"$@\")\n"
+             "  _h_ret=$?\n"
+             "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
+             "  return $_h_ret\n"
+             "}\n",
+             func_name, exe, code_root, cd_cmd);
     }
+    return 0;
+  }
 
-    strip_git_extension(path);
+  if (strcmp(argv[1], "--resolve") != 0)
+    return fail(
+        "h is not installed\n\nUsage: eval \"$(h --setup [code-root])\"");
 
-    if (is_dir(path)) {
-        puts(path);
-        return 0;
+  if (argc < 3)
+    return fail("Usage: h --resolve <code-root> <term>");
+
+  cleanup(free_char) char *code_root = expand_tilde(argv[2]);
+  if (argc < 4)
+    return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
+
+  const char *term = argv[3];
+  if (strcmp(term, "-h") == 0 || strcmp(term, "--help") == 0)
+    return fail("Usage: h (<name> | <repo>/<name> | <url>) [git opts]");
+
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  cleanup(curl_cleanup) char curl_guard = 0;
+
+  char path[PATH_MAX] = {0};
+  char url[PATH_MAX] = {0};
+  char user[256], repo[256];
+
+  if (is_github_repo(term, user, repo)) {
+    char api_owner[256], api_repo[256];
+    if (fetch_github_repo_info(user, repo, api_owner, sizeof(api_owner),
+                               api_repo, sizeof(api_repo))) {
+      strncpy(user, api_owner, sizeof(user) - 1);
+      strncpy(repo, api_repo, sizeof(repo) - 1);
     }
-
-    if (!url[0]) {
-        char msg[512];
-        snprintf(msg, sizeof(msg), "%s not found", term);
-        return fail(msg);
+    snprintf(url, sizeof(url), "git@github.com:%s/%s.git", user, repo);
+    snprintf(path, sizeof(path), "%s/github.com/%s/%s", code_root, user, repo);
+  } else if (strstr(term, "://")) {
+    char host[256] = {0}, uri_path[PATH_MAX] = {0};
+    const char *p = strstr(term, "://");
+    if (!p)
+      return fail("Missing url scheme");
+    p += 3;
+    const char *slash = strchr(p, '/');
+    if (slash) {
+      size_t hlen = slash - p;
+      strncpy(host, p, hlen < sizeof(host) ? hlen : sizeof(host) - 1);
+      strncpy(uri_path, slash + 1, sizeof(uri_path) - 1);
+    } else {
+      strncpy(host, p, sizeof(host) - 1);
     }
-
-    int ret = clone_repo(url, path, argc - 4, argv + 4);
-    if (ret != 0) {
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof(cwd))) puts(cwd);
-        return ret;
+    for (char *c = host; *c; c++)
+      *c = tolower(*c);
+    strncpy(url, term, sizeof(url) - 1);
+    snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, uri_path);
+  } else if (strncmp(term, "git@", 4) == 0 || strncmp(term, "gitea@", 6) == 0) {
+    const char *at = strchr(term, '@');
+    const char *colon = strchr(at, ':');
+    if (at && colon) {
+      char host[256] = {0};
+      size_t hlen = colon - at - 1;
+      strncpy(host, at + 1, hlen < sizeof(host) ? hlen : sizeof(host) - 1);
+      strncpy(url, term, sizeof(url) - 1);
+      snprintf(path, sizeof(path), "%s/%s/%s", code_root, host, colon + 1);
     }
+  } else if (is_simple_name(term)) {
+    int case_sensitive = 0;
+    for (const char *c = term; *c; c++) {
+      if (isupper(*c)) {
+        case_sensitive = 1;
+        break;
+      }
+    }
+    SearchResult best = {.depth = 0};
+    search_dir(code_root, term, case_sensitive, 1, 3, &best);
+    if (best.depth > 0) {
+      strncpy(path, best.path, sizeof(path) - 1);
+    }
+  } else {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Unknown pattern for %s", term);
+    return fail(msg);
+  }
 
+  if (!path[0]) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "%s not found", term);
+    return fail(msg);
+  }
+
+  strip_git_extension(path);
+
+  if (is_dir(path)) {
     puts(path);
     return 0;
+  }
+
+  if (!url[0]) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "%s not found", term);
+    return fail(msg);
+  }
+
+  int ret = clone_repo(url, path, argc - 4, argv + 4);
+  if (ret != 0) {
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)))
+      puts(cwd);
+    return ret;
+  }
+
+  puts(path);
+  return 0;
 }

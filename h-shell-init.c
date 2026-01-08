@@ -80,7 +80,9 @@ int main(int argc, char **argv) {
 
   if (git_opts[0]) {
     printf("%s() {\n"
-           "  _h_dir=$(command %s --resolve \"%s\" %s \"$@\")\n"
+           "  _h_term=\"$1\"\n"
+           "  shift\n"
+           "  _h_dir=$(command %s --resolve \"%s\" \"$_h_term\" %s \"$@\")\n"
            "  _h_ret=$?\n"
            "  [ \"$_h_dir\" != \"$PWD\" ] && %s \"$_h_dir\"\n"
            "  return $_h_ret\n"

@@ -88,6 +88,43 @@ int main(int argc, char **argv) {
            cd_cmd);
   }
 
+  // Output shell-appropriate tab completion
+  printf("if [ -n \"$ZSH_VERSION\" ]; then\n"
+         "  _%s_complete() {\n"
+         "    local code_root='%s'\n"
+         "    local -a projects\n"
+         "    [[ -d \"$code_root\" ]] || return\n"
+         "    projects=(\n"
+         "      \"$code_root\"/*(N/:t)\n"
+         "      \"$code_root\"/*/*(N/:t)\n"
+         "      \"$code_root\"/*/*/*(N/:t)\n"
+         "    )\n"
+         "    projects=(\"${(u)projects[@]}\")\n"
+         "    compadd -a projects\n"
+         "  }\n"
+         "  compdef _%s_complete %s\n"
+         "elif [ -n \"$BASH_VERSION\" ]; then\n"
+         "  _%s_complete() {\n"
+         "    local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+         "    local code_root='%s'\n"
+         "    COMPREPLY=()\n"
+         "    [[ -d \"$code_root\" ]] || return\n"
+         "    local dirs\n"
+         "    dirs=$(find \"$code_root\" -mindepth 1 -maxdepth 3 -type d "
+         "-not -name '.*' 2>/dev/null | sed 's|.*/||' | sort -u)\n"
+         "    COMPREPLY=($(compgen -W \"$dirs\" -- \"$cur\"))\n"
+         "  }\n"
+         "  complete -F _%s_complete %s\n"
+         "fi\n",
+         func_name,
+         code_root,
+         func_name,
+         func_name,
+         func_name,
+         code_root,
+         func_name,
+         func_name);
+
   free(code_root);
   return 0;
 }

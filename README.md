@@ -15,6 +15,8 @@ Options:
 - `--name NAME` - use NAME as the shell function name (default: `h`)
 - `--git-opts "OPTIONS"` - default git clone options (can be overridden per-call)
 
+Tab completion for project names is set up automatically for both bash and zsh.
+
 ## Usage
 
 - `h <name>` - search for project matching `<name>` up to 3 levels deep

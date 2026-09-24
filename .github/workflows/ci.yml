@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux finds its own executable through /proc/self/exe, macOS through
+        # _NSGetExecutablePath (src/util.c), so both are built and smoke-tested
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Build
+        run: nix build --print-build-logs
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          out=$(readlink -f result)
+          export PATH="$out/bin:$PATH"
+          # run from $PATH in another directory: the generated functions must call the h and up
+          # next to the init programs, not ./h in the current directory
+          cd "$RUNNER_TEMP"
+          h-shell-init --name h ~/code | grep -F "command $out/bin/h --resolve"
+          h-shell-init --name hq --git-opts '-c user.name=x' ~/code | grep -F "command $out/bin/h --resolve"
+          up-shell-init | grep -F "command $out/bin/up"
+          # the functions themselves: h finds a project, up goes back to its root
+          project=~/code/github.com/example/project
+          mkdir -p "$project/.git" "$project/src/deeper"
+          eval "$(h-shell-init ~/code)"
+          eval "$(up-shell-init)"
+          h project
+          test "$PWD" = "$project"
+          cd src/deeper
+          up
+          test "$PWD" = "$project"
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: clang-format
+        run: nix shell --inputs-from . nixpkgs#clang-tools --command sh -c 'cd src && clang-format --dry-run -Werror *.c *.h'

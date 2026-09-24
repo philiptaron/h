@@ -40,26 +40,7 @@ int main(int argc, char **argv) {
   char *code_root = expand_tilde(code_root_arg);
 
   char exe[PATH_MAX];
-  ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-  if (len == -1) {
-    char *pwd = getenv("PWD");
-    if (!pwd)
-      pwd = ".";
-    if (argv[0][0] == '/')
-      strncpy(exe, argv[0], sizeof(exe) - 1);
-    else
-      snprintf(exe, sizeof(exe), "%s/%s", pwd, argv[0]);
-  } else {
-    exe[len] = '\0';
-  }
-
-  // Replace "h-shell-init" with "h" in the path
-  char *basename = strrchr(exe, '/');
-  if (basename) {
-    snprintf(basename + 1, sizeof(exe) - (basename - exe) - 1, "h");
-  } else {
-    strncpy(exe, "h", sizeof(exe) - 1);
-  }
+  sibling_exe(exe, sizeof(exe), argv[0], "h");
 
   if (git_opts[0]) {
     printf("%s() {\n"

@@ -23,26 +23,7 @@ int main(int argc, char **argv) {
   }
 
   char exe[PATH_MAX];
-  ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-  if (len == -1) {
-    char *pwd = getenv("PWD");
-    if (!pwd)
-      pwd = ".";
-    if (argv[0][0] == '/')
-      strncpy(exe, argv[0], sizeof(exe) - 1);
-    else
-      snprintf(exe, sizeof(exe), "%s/%s", pwd, argv[0]);
-  } else {
-    exe[len] = '\0';
-  }
-
-  // Replace "up-shell-init" with "up" in the path
-  char *basename = strrchr(exe, '/');
-  if (basename) {
-    snprintf(basename + 1, sizeof(exe) - (basename - exe) - 1, "up");
-  } else {
-    strncpy(exe, "up", sizeof(exe) - 1);
-  }
+  sibling_exe(exe, sizeof(exe), argv[0], "up");
 
   printf("up() {\n"
          "  _up_dir=$(command %s \"$@\")\n"

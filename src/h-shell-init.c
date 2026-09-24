@@ -6,6 +6,31 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
+
+// The parent process's command name (the shell running the eval), or "" if it cannot be found:
+// proc_name on macOS, which has no /proc, and /proc/<ppid>/comm elsewhere.
+static void parent_name(char *out, size_t size) {
+  out[0] = '\0';
+#ifdef __APPLE__
+  int len = proc_name(getppid(), out, size);
+  out[len > 0 && (size_t)len < size ? len : 0] = '\0';
+#else
+  char proc_path[64];
+  snprintf(proc_path, sizeof(proc_path), "/proc/%d/comm", getppid());
+  FILE *f = fopen(proc_path, "r");
+  if (!f)
+    return;
+  if (fgets(out, size, f))
+    out[strcspn(out, "\n")] = '\0';
+  else
+    out[0] = '\0';
+  fclose(f);
+#endif
+}
+
 int main(int argc, char **argv) {
   const char *func_name = "h";
   const char *cd_cmd = "cd";
@@ -74,20 +99,12 @@ int main(int argc, char **argv) {
   // because bash parses zsh glob qualifiers like *(N/:t) as syntax errors
   // even inside an untaken branch.
   enum { SHELL_UNKNOWN, SHELL_BASH, SHELL_ZSH } shell = SHELL_UNKNOWN;
-  char parent_comm[256] = "";
-  char proc_path[64];
-  snprintf(proc_path, sizeof(proc_path), "/proc/%d/comm", getppid());
-  FILE *f = fopen(proc_path, "r");
-  if (f) {
-    if (fgets(parent_comm, sizeof(parent_comm), f)) {
-      parent_comm[strcspn(parent_comm, "\n")] = '\0';
-      if (strcmp(parent_comm, "zsh") == 0)
-        shell = SHELL_ZSH;
-      else if (strcmp(parent_comm, "bash") == 0)
-        shell = SHELL_BASH;
-    }
-    fclose(f);
-  }
+  char parent_comm[256];
+  parent_name(parent_comm, sizeof(parent_comm));
+  if (strcmp(parent_comm, "zsh") == 0)
+    shell = SHELL_ZSH;
+  else if (strcmp(parent_comm, "bash") == 0)
+    shell = SHELL_BASH;
 
   // Output tab completion for the detected shell
   if (shell == SHELL_ZSH) {

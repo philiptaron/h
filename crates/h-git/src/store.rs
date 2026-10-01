@@ -122,9 +122,25 @@ impl Store {
         }
     }
 
+    /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` when that
+    /// names something, and otherwise `reference` itself, such as a commit hash.
+    fn revision(&self, name: &str, reference: &str) -> String {
+        let qualified = format!("{name}/{reference}");
+        let object = format!("{qualified}^{{object}}");
+        match git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]) {
+            Ok(_) => qualified,
+            Err(_) => reference.to_string(),
+        }
+    }
+
     /// Show `spec` (a `<ref>` or `<ref>:<path>`) of upstream `name`, as `git show` prints it.
     pub fn show(&self, name: &str, spec: &str) -> Result<(), GitError> {
-        git::passthrough(self.dir(), &["show", &format!("{name}/{spec}")])
+        let (reference, path) = match spec.find(':') {
+            Some(i) if i > 0 => spec.split_at(i),
+            _ => (spec, ""),
+        };
+        let spec = format!("{}{path}", self.revision(name, reference));
+        git::passthrough(self.dir(), &["show", &spec])
     }
 
     /// Check out `reference` of upstream `name` into a detached worktree at `dir`, or a fresh
@@ -139,7 +155,7 @@ impl Store {
         if let Some(parent) = dir.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let commit = format!("{name}/{reference}");
+        let commit = self.revision(name, reference);
         let args: Vec<OsString> = vec![
             "worktree".into(),
             "add".into(),

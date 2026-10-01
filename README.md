@@ -56,6 +56,7 @@ h store fetch                                 # fetch everything (run this from 
 h store list                                  # the upstreams' names
 h store show nixpkgs master:lib/default.nix   # a file, straight from the store
 h store show torvalds/linux v6.12             # a commit
+h store show nixpkgs 1f0e2d3:flake.nix         # commit hashes work too
 h store worktree nixpkgs staging              # a detached checkout in a temporary directory
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```

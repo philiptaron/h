@@ -205,6 +205,11 @@ fn show_prints_files_and_commits_from_the_store() {
     assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
     let out = sb.ok(&["show", PROJ_URL, "main"]);
     assert!(out.stdout.contains("init"), "{out:?}");
+    // A commit hash works too, in full or abbreviated.
+    let hash = run(sb.git(&sb.src).args(["rev-parse", "HEAD"])).stdout.trim().to_string();
+    for rev in [&hash[..], &hash[..7]] {
+        assert_eq!(sb.ok(&["show", "proj", &format!("{rev}:README")]).stdout, "hello\n");
+    }
     let out = sb.h(&["show", "proj", "main:missing"]);
     assert_ne!(out.code, Some(0));
     let out = sb.h(&["show", "proj"]);
@@ -267,6 +272,12 @@ fn worktrees_are_detached_checkouts_from_the_store() {
     assert_eq!(out.code, Some(0), "{out:?}");
     assert_eq!(out.stdout, format!("{}\n", sb.root().join("rel").display()));
     assert!(sb.root().join("rel/README").is_file());
+
+    // So can a commit hash.
+    let hash = run(sb.git(&sb.src).args(["rev-parse", "HEAD"])).stdout.trim().to_string();
+    let dir = sb.tmp.path().join("by-hash");
+    sb.ok(&["worktree", "proj", &hash, dir.to_str().unwrap()]);
+    assert_eq!(run(sb.git(&dir).args(["rev-parse", "HEAD"])).stdout.trim(), hash);
 
     let out = sb.h(&["worktree", "proj"]);
     assert_eq!(out.stderr, "Usage: h store worktree <term> <ref> [DIR]\n");

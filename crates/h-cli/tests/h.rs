@@ -617,6 +617,40 @@ fn container_clones_take_the_remote_object_format() {
 }
 
 #[test]
+fn container_clones_keep_no_tags_for_later_fetches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    make_git_repo(&src);
+    let src_git = |args: &[&str]| {
+        let out = run(git_command(tmp.path()).arg("-C").arg(&src).args(args));
+        assert_eq!(out.code, Some(0), "{out:?}");
+    };
+    src_git(&["tag", "v1"]);
+    let root = tmp.path().join("code");
+    let url = "https://example.com/owner/proj.git";
+    rewrite_url(tmp.path(), url, &src);
+
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, tmp.path());
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args([
+        "go",
+        url,
+        "--container",
+        "--no-tags",
+    ]));
+    let path = root.join("example.com/owner/proj");
+    assert_resolved(&out, &path);
+    let git = |args: &[&str]| run(git_command(tmp.path()).arg("-C").arg(&path).args(args)).stdout;
+    assert_eq!(git(&["config", "remote.origin.tagOpt"]), "--no-tags\n");
+    assert_eq!(git(&["tag"]), "");
+    src_git(&["tag", "v2"]);
+    src_git(&["commit", "-q", "--allow-empty", "-m", "tagged later"]);
+    src_git(&["tag", "v3"]);
+    git(&["fetch", "-q"]);
+    assert_eq!(git(&["tag"]), "", "later fetches bring no tags either");
+}
+
+#[test]
 fn failed_container_clones_leave_nothing_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("code");

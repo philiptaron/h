@@ -42,7 +42,8 @@ A container clone has `origin` with ordinary remote-tracking branches and no loc
 and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from
 the default branch. Like `git clone`, it takes the remote's object format (SHA-1 or SHA-256)
 rather than the default for new repositories. A remote with no default branch, such as an
-empty one, cannot be cloned this way.
+empty one, cannot be cloned this way. Only clone options that `git fetch` shares are accepted;
+`--no-tags` keeps later fetches from bringing tags too, as it does for `git clone`.
 
 ## The object store
 

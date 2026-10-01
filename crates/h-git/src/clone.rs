@@ -190,7 +190,13 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         line.push(b'\n');
         std::fs::write(&alternates, line).map_err(GitError::Spawn)?;
     }
-    git::run(Some(&bare), &["remote", "add", "origin", req.url])?;
+    let mut remote_add = vec!["remote", "add"];
+    // As with `git clone --no-tags`, later fetches leave tags alone too.
+    if fetch_opts.iter().any(|o| o == "--no-tags") {
+        remote_add.push("--no-tags");
+    }
+    remote_add.extend(["origin", req.url]);
+    git::run(Some(&bare), &remote_add)?;
     let mut fetch: Vec<OsString> = vec!["fetch".into()];
     fetch.extend(fetch_opts);
     fetch.push("origin".into());

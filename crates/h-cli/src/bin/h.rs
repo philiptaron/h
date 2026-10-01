@@ -21,7 +21,8 @@ const USAGE: &str = "\
 Usage: h [--root DIR] <command> [args] [-- <git options>]
 
 Commands:
-  go <term> [clone options]   print the project directory, cloning it first if needed
+  go <term> [clone options] [--container]
+                              print the project directory, cloning it first if needed
   resolve <term>              print the project directory, failing if it is absent
 
 A term is a project name, <user>/<repo> on GitHub, or a git URL. The code root defaults to
@@ -106,9 +107,10 @@ fn resolve_term(config: &Config, term: &str) -> Result<Resolution, String> {
     resolve(&config.root, term, |user, repo| github::fetch_repo_info(&api, user, repo))
 }
 
-/// `h go <term> [clone options]`: print the directory, cloning if needed.
+/// `h go <term> [clone options] [--container]`: print the directory, cloning if needed.
 fn go(config: &Config, args: &[OsString]) -> ExitCode {
-    const USAGE: &str = "Usage: h go (<name> | <user>/<repo> | <url>) [clone options]";
+    const USAGE: &str =
+        "Usage: h go (<name> | <user>/<repo> | <url>) [clone options] [--container]";
     let Some(term) = args.first() else {
         return fail_with_cwd(USAGE);
     };
@@ -119,6 +121,8 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
         Ok(term) => term,
         Err(msg) => return fail_with_cwd(&msg),
     };
+    let container = args[1..].iter().any(|a| a == "--container");
+    let extra: Vec<OsString> = args[1..].iter().filter(|a| *a != "--container").cloned().collect();
 
     let resolution = match resolve_term(config, term) {
         Ok(resolution) => resolution,
@@ -136,7 +140,8 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
         url,
         path: &resolution.path,
         git_opts: &config.git_opts,
-        extra: &args[1..],
+        extra: &extra,
+        container,
         upstream_url: resolution.upstream_url.as_deref(),
     };
     match clone_repo(&request) {

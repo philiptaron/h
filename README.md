@@ -24,7 +24,9 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 - `h <name>` - search for project matching `<name>` up to 3 levels deep
 - `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>` or clone it (queries GitHub API for correct casing)
 - `h <url>` - cd to `~/code/<domain>/<path>` or clone it
-- `h <term> [clone options]` - extra options go to `git clone`
+- `h <term> [clone options]` - extra options go to `git clone`; `--container` clones into
+  `<dir>/.bare` with a `.git` file beside it and no working tree, for projects worked on only
+  through `git worktree add`
 
 Clones recurse into submodules unless an option says otherwise.
 

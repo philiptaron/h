@@ -10,7 +10,8 @@ use common::*;
 const H: &str = env!("CARGO_BIN_EXE_h");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const GO_USAGE: &str = "Usage: h go (<name> | <user>/<repo> | <url>) [clone options]\n";
+const GO_USAGE: &str =
+    "Usage: h go (<name> | <user>/<repo> | <url>) [clone options] [--container]\n";
 
 fn h(cwd: &Path, args: &[&str]) -> Run {
     run(command(H).current_dir(cwd).args(args))
@@ -440,4 +441,44 @@ fn clones_with_real_git() {
 
     // A second call finds the clone instead of cloning again.
     assert_resolved(&go(&root, &url), path);
+}
+
+#[test]
+fn container_clones_are_bare_with_a_git_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    make_git_repo(&src);
+    let root = tmp.path().join("code");
+    let url = "https://example.com/owner/proj.git";
+    rewrite_url(tmp.path(), url, &src);
+
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, tmp.path());
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args([
+        "go",
+        url,
+        "--container",
+        "--",
+        "-c",
+        "user.name=Me",
+    ]));
+    let path = root.join("example.com/owner/proj");
+    assert_resolved(&out, &path);
+
+    assert_eq!(fs::read_to_string(path.join(".git")).unwrap(), "gitdir: ./.bare\n");
+    assert!(path.join(".bare/HEAD").is_file());
+    assert!(!path.join("README").exists(), "no working tree in the container");
+    let git = |args: &[&str]| {
+        let out = run(git_command(tmp.path()).arg("-C").arg(&path).args(args));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout.trim().to_string()
+    };
+    assert_eq!(git(&["rev-parse", "--is-bare-repository"]), "true");
+    assert_eq!(git(&["config", "user.name"]), "Me");
+    assert_eq!(git(&["rev-parse", "--abbrev-ref", "origin/HEAD"]), "origin/main");
+    assert_eq!(git(&["branch", "--list"]), "", "no local branches are created");
+
+    // Work happens in worktrees beside the bare repository.
+    git(&["worktree", "add", "--quiet", "feature", "origin/main"]);
+    assert_eq!(fs::read_to_string(path.join("feature/README")).unwrap(), "hello\n");
 }

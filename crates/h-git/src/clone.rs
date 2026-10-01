@@ -1,11 +1,14 @@
-//! Cloning repositories with `git`, and wiring up a fork's upstream so it can be pulled from but
-//! never pushed to.
+//! Cloning repositories with `git`: optionally laying the clone out as a bare repository plus
+//! worktrees, and wiring up a fork's upstream so it can be pulled from but never pushed to.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use crate::git::{self, GitError};
+use crate::git::{self, GitError, config_pairs, non_config_opts};
+
+/// The name of the bare repository inside a container clone.
+pub const BARE_DIR: &str = ".bare";
 
 /// The push URL that makes every push to a remote fail.
 pub const NO_PUSH: &str = "no_push";
@@ -19,6 +22,9 @@ pub struct CloneRequest<'a> {
     pub git_opts: &'a [OsString],
     /// Options the user gave for this clone.
     pub extra: &'a [OsString],
+    /// Lay the clone out as `<path>/.bare` plus a `.git` file, with no working tree, so that all
+    /// work happens in worktrees under `<path>`.
+    pub container: bool,
     /// The URL of the repository this one is a fork of.
     pub upstream_url: Option<&'a str>,
 }
@@ -36,7 +42,7 @@ fn decides_submodules(opts: &[OsString]) -> bool {
     })
 }
 
-/// Arguments to pass to `git` to clone as `req` asks.
+/// Arguments to pass to `git` for a plain (non-container) clone.
 ///
 /// Submodules are cloned too unless an option says otherwise.
 pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
@@ -58,9 +64,9 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
         // Any failure here is reported by git itself.
         let _ = std::fs::create_dir_all(parent);
     }
-    let result = git::run(None, &git_clone_args(req));
+    let result = if req.container { clone_container(req) } else { clone_plain(req) };
     let result = result.and_then(|()| match req.upstream_url {
-        Some(url) => add_upstream(req.path, url),
+        Some(url) => add_upstream(&git_dir(req), url),
         None => Ok(()),
     });
     match result {
@@ -70,6 +76,39 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
             err.code()
         }
     }
+}
+
+/// The directory to run `git -C` in once the clone exists.
+fn git_dir(req: &CloneRequest) -> std::path::PathBuf {
+    if req.container { req.path.join(BARE_DIR) } else { req.path.to_path_buf() }
+}
+
+fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
+    git::run(None, &git_clone_args(req))
+}
+
+/// Create `<path>/.bare` by fetching into a fresh bare repository, then point `<path>/.git` at
+/// it. Unlike `git clone --bare`, the result has `origin` with ordinary remote-tracking branches,
+/// so worktrees are added from `origin/<branch>` and local branches are only ever the user's.
+fn clone_container(req: &CloneRequest) -> Result<(), GitError> {
+    let bare = req.path.join(BARE_DIR);
+    git::run(
+        None,
+        &[OsString::from("init"), "--bare".into(), "--quiet".into(), bare.clone().into()],
+    )?;
+    let mut opts = req.git_opts.to_vec();
+    opts.extend(req.extra.iter().cloned());
+    for (key, value) in config_pairs(&opts) {
+        git::run(Some(&bare), &[OsString::from("config"), key, value])?;
+    }
+    git::run(Some(&bare), &["remote", "add", "origin", req.url])?;
+    let mut fetch: Vec<OsString> = vec!["fetch".into()];
+    fetch.extend(non_config_opts(req.extra));
+    fetch.push("origin".into());
+    git::run(Some(&bare), &fetch)?;
+    git::run(Some(&bare), &["remote", "set-head", "origin", "--auto"])?;
+    std::fs::write(req.path.join(".git"), format!("gitdir: ./{BARE_DIR}\n"))
+        .map_err(GitError::Spawn)
 }
 
 /// Add `url` as the `upstream` remote of the repository at `dir`, fetchable but not pushable,
@@ -101,6 +140,7 @@ mod tests {
             path: Path::new("/code/x/y"),
             git_opts,
             extra,
+            container: false,
             upstream_url: None,
         }
     }

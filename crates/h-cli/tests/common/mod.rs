@@ -174,7 +174,9 @@ impl MockGitHub {
 pub fn make_git_repo(path: &Path) {
     fs::create_dir_all(path).unwrap();
     fs::write(path.join("README"), "hello\n").unwrap();
-    for args in [&["init", "-q"][..], &["add", "README"], &["commit", "-q", "-m", "init"]] {
+    for args in
+        [&["init", "-q", "-b", "main"][..], &["add", "README"], &["commit", "-q", "-m", "init"]]
+    {
         let status = git_command(path.parent().unwrap())
             .current_dir(path)
             .args(args)
@@ -191,16 +193,35 @@ pub fn git_command(home: &Path) -> Command {
     cmd
 }
 
+/// The global git configuration file used by isolated git commands under `home`.
+///
+/// It starts out missing, which git treats as empty; tests add URL rewrites to it.
+pub fn global_gitconfig(home: &Path) -> PathBuf {
+    home.join("test-gitconfig")
+}
+
 /// Keep any git run by `cmd` away from the user's and system configuration.
 pub fn isolate_git(cmd: &mut Command, home: &Path) {
     cmd.env("HOME", home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", global_gitconfig(home))
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com");
+}
+
+/// Make isolated git commands under `home` fetch `url` from the local repository at `local`.
+pub fn rewrite_url(home: &Path, url: &str, local: &Path) {
+    let status = git_command(home)
+        .args(["config", "--file"])
+        .arg(global_gitconfig(home))
+        .arg(format!("url.file://{}.insteadOf", local.display()))
+        .arg(url)
+        .status()
+        .unwrap();
+    assert!(status.success());
 }
 
 /// Whether `program` can be found on `PATH`.

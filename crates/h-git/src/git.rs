@@ -6,6 +6,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::os::fd::AsFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -73,9 +74,73 @@ pub fn run(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitErro
     }
 }
 
+/// The `key=value` pairs given as `-c key=value` (or `-ckey=value`) among git options.
+///
+/// These are what the shell functions carry: the identity to clone with. `git clone -c` writes
+/// them into the new repository, and repositories created another way get them through
+/// `git config` instead.
+pub fn config_pairs(opts: &[OsString]) -> Vec<(OsString, OsString)> {
+    let mut pairs = Vec::new();
+    let mut iter = opts.iter();
+    while let Some(opt) = iter.next() {
+        let bytes = opt.as_bytes();
+        let setting = if bytes == b"-c" {
+            match iter.next() {
+                Some(next) => next.as_bytes(),
+                None => break,
+            }
+        } else if let Some(rest) = bytes.strip_prefix(b"-c") {
+            rest
+        } else {
+            continue;
+        };
+        if let Some(eq) = setting.iter().position(|&b| b == b'=') {
+            let key = OsStr::from_bytes(&setting[..eq]).to_owned();
+            let value = OsStr::from_bytes(&setting[eq + 1..]).to_owned();
+            pairs.push((key, value));
+        }
+    }
+    pairs
+}
+
+/// The git options that are not `-c key=value` pairs.
+pub fn non_config_opts(opts: &[OsString]) -> Vec<OsString> {
+    let mut rest = Vec::new();
+    let mut iter = opts.iter();
+    while let Some(opt) = iter.next() {
+        let bytes = opt.as_bytes();
+        if bytes == b"-c" {
+            iter.next();
+        } else if !bytes.starts_with(b"-c") {
+            rest.push(opt.clone());
+        }
+    }
+    rest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn opts(list: &[&str]) -> Vec<OsString> {
+        list.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn extracts_config_pairs() {
+        let got = config_pairs(&opts(&["-c", "user.name=Me", "--depth", "1", "-cx.y=z", "-c"]));
+        let want = [("user.name", "Me"), ("x.y", "z")];
+        let want: Vec<(OsString, OsString)> =
+            want.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect();
+        assert_eq!(got, want);
+        assert_eq!(config_pairs(&opts(&["-c", "novalue"])), []);
+    }
+
+    #[test]
+    fn keeps_the_other_options() {
+        let got = non_config_opts(&opts(&["-c", "user.name=Me", "--depth", "1", "-cx.y=z"]));
+        assert_eq!(got, opts(&["--depth", "1"]));
+    }
 
     #[test]
     fn reports_failures() {

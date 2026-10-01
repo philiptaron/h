@@ -93,7 +93,7 @@ pub fn render_h_init(
     let store_commands = store_commands.join("|");
     let mut out = format!(
         "{name}() {{\n\
-         \x20 case \"$1:$2\" in\n\
+         \x20 case \"${{1-}}:${{2-}}\" in\n\
          \x20   {store_commands})\n\
          \x20     {common} \"$@\"{tail}\n\
          \x20     return\n\
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(
             out,
             r#"h() {
-  case "$1:$2" in
+  case "${1-}:${2-}" in
     store:init|store:add|store:remove|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:ingest|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" "$@"
       return
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(
             out,
             r#"j() {
-  case "$1:$2" in
+  case "${1-}:${2-}" in
     store:init|store:add|store:remove|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:ingest|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" --store "/store" "$@" -- -c user.name="Me Too"
       return

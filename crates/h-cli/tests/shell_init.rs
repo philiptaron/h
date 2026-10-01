@@ -203,6 +203,22 @@ fn bash_h_store_jumps_to_a_project_named_store() {
 }
 
 #[test]
+fn h_works_in_shells_that_treat_unset_variables_as_errors() {
+    let tmp = code_tree();
+    let script = r#"set -u
+           eval "$("$H_SHELL_INIT" "$ROOT")"
+           h project; echo "ret=$?"; pwd"#;
+    let want = format!("ret=0\n{}\n", tmp.path().join("github.com/owner/project").display());
+    let out = run(bash(tmp.path(), script));
+    assert_eq!((out.stdout, out.stderr), (want.clone(), String::new()), "bash");
+    if have("zsh") {
+        let script = format!("autoload -Uz compinit && compinit -u -D\n{script}");
+        let out = run(zsh(tmp.path(), &script));
+        assert_eq!((out.stdout, out.stderr), (want, String::new()), "zsh");
+    }
+}
+
+#[test]
 fn bash_completion() {
     let tmp = code_tree();
     if !run(bash(tmp.path(), "type compgen")).code.is_some_and(|c| c == 0) {

@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-h-git.workspace = true
+h-core.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -57,15 +57,6 @@ pub fn print_path(path: &Path) {
     let _ = out.write_all(b"\n");
 }
 
-/// Strip a trailing `.git` from a path, provided something precedes it.
-pub fn strip_git_extension(path: &Path) -> PathBuf {
-    let bytes = path.as_os_str().as_bytes();
-    match bytes.strip_suffix(b".git") {
-        Some(stem) if !stem.is_empty() => PathBuf::from(OsStr::from_bytes(stem)),
-        _ => path.to_path_buf(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,20 +86,5 @@ mod tests {
     #[test]
     fn leaves_tilde_without_home() {
         assert_eq!(expand("~/src", None), PathBuf::from("~/src"));
-    }
-
-    #[test]
-    fn strips_git_extension() {
-        assert_eq!(strip_git_extension(Path::new("/a/b.git")), PathBuf::from("/a/b"));
-        assert_eq!(strip_git_extension(Path::new("/a/b")), PathBuf::from("/a/b"));
-        assert_eq!(strip_git_extension(Path::new("/a/.git")), PathBuf::from("/a/"));
-        assert_eq!(strip_git_extension(Path::new(".git")), PathBuf::from(".git"));
-    }
-
-    #[test]
-    fn strips_git_extension_from_non_utf8() {
-        let path = PathBuf::from(OsString::from_vec(b"/a/\xff.git".to_vec()));
-        let want = PathBuf::from(OsString::from_vec(b"/a/\xff".to_vec()));
-        assert_eq!(strip_git_extension(&path), want);
     }
 }

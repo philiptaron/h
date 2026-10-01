@@ -4,8 +4,8 @@
 
 use std::process::ExitCode;
 
-use h_git::shell::{Command, sibling_exe};
-use h_git::util::fail;
+use h_core::shell::{Command, sibling_exe};
+use h_core::util::fail;
 use up_cli::shell_init::{UP_USAGE, parse_up_init_args, render_up_init};
 
 fn main() -> ExitCode {

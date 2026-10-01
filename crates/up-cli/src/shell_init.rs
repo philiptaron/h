@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 
-use h_git::shell::{CdCommand, Command, unknown_option};
+use h_core::shell::{CdCommand, Command, unknown_option};
 
 pub const UP_USAGE: &str = "Usage: eval \"$(up-shell-init [--pushd])\"";
 

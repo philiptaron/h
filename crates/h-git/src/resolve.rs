@@ -1,12 +1,11 @@
 //! Turning the user's search term into a directory (and, if needed, a URL to clone).
 
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use crate::github::RepoInfo;
 use crate::search::search;
-use crate::util::strip_git_extension;
 
 /// What a search term refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +81,15 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
         Ok(Target::Name(term.to_string()))
     } else {
         Err(ParseError::UnknownPattern)
+    }
+}
+
+/// Strip a trailing `.git` from a path, provided something precedes it.
+pub fn strip_git_extension(path: &Path) -> PathBuf {
+    let bytes = path.as_os_str().as_bytes();
+    match bytes.strip_suffix(b".git") {
+        Some(stem) if !stem.is_empty() => PathBuf::from(OsStr::from_bytes(stem)),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -281,5 +289,20 @@ mod tests {
         assert_eq!(resolve(tmp.path(), "nope", |_, _| None), Err("nope not found".into()));
         assert_eq!(resolve(tmp.path(), "a b", |_, _| None), Err("Unknown pattern for a b".into()));
         assert_eq!(resolve(tmp.path(), "git@host", |_, _| None), Err("git@host not found".into()));
+    }
+
+    #[test]
+    fn strips_git_extension() {
+        assert_eq!(strip_git_extension(Path::new("/a/b.git")), PathBuf::from("/a/b"));
+        assert_eq!(strip_git_extension(Path::new("/a/b")), PathBuf::from("/a/b"));
+        assert_eq!(strip_git_extension(Path::new("/a/.git")), PathBuf::from("/a/"));
+        assert_eq!(strip_git_extension(Path::new(".git")), PathBuf::from(".git"));
+    }
+
+    #[test]
+    fn strips_git_extension_from_non_utf8() {
+        let path = PathBuf::from(OsString::from_vec(b"/a/\xff.git".to_vec()));
+        let want = PathBuf::from(OsString::from_vec(b"/a/\xff".to_vec()));
+        assert_eq!(strip_git_extension(&path), want);
     }
 }

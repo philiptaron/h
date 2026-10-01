@@ -1,0 +1,7 @@
+[package]
+name = "h-core"
+description = "Helpers shared by the h and up command-line tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true

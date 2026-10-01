@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use h_git::util::{fail_with_cwd, print_path};
+use h_core::util::{fail_with_cwd, print_path};
 use up_cli::root::find_project_root;
 
 fn main() -> ExitCode {

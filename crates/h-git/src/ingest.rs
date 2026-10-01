@@ -77,10 +77,10 @@ struct Repo {
 /// and `credential.*`, as `-c` pairs: what the shell function passes `h`, when nothing does.
 pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
     let pattern = r"^(user|credential)\.";
-    let out = git::output(Some(dir), &["config", "--local", "--get-regexp", pattern]);
+    let out = git::output(Some(dir), &["config", "--local", "-z", "--get-regexp", pattern]);
     out.unwrap_or_default()
-        .lines()
-        .filter_map(|line| line.split_once(' '))
+        .split('\0')
+        .filter_map(|entry| entry.split_once('\n'))
         .map(|(key, value)| (OsString::from(key), OsString::from(value)))
         .collect()
 }
@@ -358,13 +358,22 @@ fn clone_missing(
     let mut missing = Vec::new();
     let mut present = Vec::new();
     for line in status.lines() {
-        let Some(path) = line.get(1..).and_then(|rest| rest.split(' ').nth(1)) else {
+        // `<state><hash> <path>[ (<describe>)]`, where the path may itself contain spaces, so it
+        // is matched against the paths `.gitmodules` names, the longest first.
+        let Some((_, rest)) = line.get(1..).and_then(|rest| rest.split_once(' ')) else {
             continue;
         };
-        let initialized = paths.iter().any(|(name, p)| {
-            p == path
-                && query(worktree, &["config", "--get", &format!("submodule.{name}.url")]).is_some()
-        });
+        let Some((name, path)) = paths
+            .iter()
+            .filter(|(_, p)| {
+                rest == p || rest.strip_prefix(p.as_str()).is_some_and(|r| r.starts_with(" ("))
+            })
+            .max_by_key(|(_, p)| p.len())
+        else {
+            continue;
+        };
+        let initialized =
+            query(worktree, &["config", "--get", &format!("submodule.{name}.url")]).is_some();
         match line.as_bytes().first() {
             Some(b'-') if initialized => missing.push(path.to_string()),
             Some(b'-') => {}
@@ -392,12 +401,13 @@ fn clone_missing(
 /// The submodules `.gitmodules` in `worktree` names, as `(name, path)`.
 fn submodule_paths(worktree: &Path) -> Vec<(String, String)> {
     let file = worktree.join(".gitmodules");
-    let args = [OsString::from("config"), "--file".into(), file.into(), "--get-regexp".into()];
-    let args = [&args[..], &[r"^submodule\..*\.path$".into()]].concat();
+    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
+    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.path$".into()]].concat();
     let out = git::output(Some(worktree), &args).unwrap_or_default();
-    out.lines()
-        .filter_map(|line| {
-            let (key, path) = line.split_once(' ')?;
+    // NUL-terminated `<key>\n<value>` entries, since names and paths may contain spaces.
+    out.split('\0')
+        .filter_map(|entry| {
+            let (key, path) = entry.split_once('\n')?;
             let name = key.strip_prefix("submodule.")?.strip_suffix(".path")?;
             Some((name.to_string(), path.to_string()))
         })

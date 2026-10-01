@@ -242,12 +242,13 @@ pub fn gitmodules(path: &Path) -> Vec<(String, String)> {
     if !file.is_file() {
         return Vec::new();
     }
-    let args = [OsString::from("config"), "--file".into(), file.into(), "--get-regexp".into()];
-    let args = [&args[..], &[r"^submodule\..*\.url$".into()]].concat();
+    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
+    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.url$".into()]].concat();
     let out = git::output(Some(path), &args).unwrap_or_default();
-    out.lines()
-        .filter_map(|line| {
-            let (key, url) = line.split_once(' ')?;
+    // NUL-terminated `<key>\n<value>` entries, since submodule names may contain spaces.
+    out.split('\0')
+        .filter_map(|entry| {
+            let (key, url) = entry.split_once('\n')?;
             let name = key.strip_prefix("submodule.")?.strip_suffix(".url")?;
             Some((name.to_string(), url.to_string()))
         })

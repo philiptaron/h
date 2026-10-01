@@ -207,6 +207,24 @@ fn submodules_are_put_under_the_store_at_every_level() {
 }
 
 #[test]
+fn submodules_at_paths_with_spaces_are_cloned_from_the_store() {
+    let sb = Sandbox::new();
+    let app = sb.clone_without_store("app");
+    sb.ok(&["store", "ingest", app.to_str().unwrap()]);
+    sb.publish("extra");
+    sb.add_submodule("app", "extra", "third party/extra");
+    sb.git(&app, &["pull", "-q", "--no-rebase"]);
+
+    let out = sb.ok(&["store", "ingest", app.to_str().unwrap()]);
+    assert!(out.stderr.contains("added example.com/o/extra\n"), "{out:?}");
+    let extra = app.join("third party/extra");
+    assert_eq!(fs::read_to_string(extra.join("README")).unwrap(), "extra\n");
+    // Its name is its path, spaces and all.
+    assert_eq!(sb.alternates(&app.join(".git/modules/third party/extra")), sb.store_objects());
+    assert_eq!(sb.local_objects(&extra), 0);
+}
+
+#[test]
 fn a_fork_brings_its_upstream_into_the_store() {
     let sb = Sandbox::new();
     let fork = Fork::publish(sb.home(), &["dev"]);

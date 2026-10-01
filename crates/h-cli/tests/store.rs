@@ -289,6 +289,7 @@ fn maintain_runs_only_non_destructive_tasks() {
     assert!(objects.contains("count: 0"), "weekly packs everything: {objects}");
     let out = sb.h(&["maintain", "monthly"]);
     assert_eq!(out.code, Some(1));
+    assert_eq!(out.stderr, "Unknown schedule monthly: use hourly, daily or weekly\n");
 }
 
 #[test]

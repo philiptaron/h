@@ -155,7 +155,8 @@ impl Store {
     /// Run the maintenance tasks for `schedule` (`hourly`, `daily` or `weekly`).
     pub fn maintain(&self, schedule: &str) -> Result<(), GitError> {
         let Some(tasks) = maintenance_tasks(schedule) else {
-            return Err(GitError::Failed { args: vec![schedule.into()], code: 1 });
+            let msg = format!("Unknown schedule {schedule}: use hourly, daily or weekly");
+            return Err(GitError::Invalid(msg));
         };
         let mut args = vec!["maintenance".to_string(), "run".to_string(), "--quiet".to_string()];
         args.extend(tasks.iter().map(|task| format!("--task={task}")));

@@ -1,7 +1,8 @@
 //! Running `git`.
 //!
 //! Git's stdout is sent to stderr, so that stdout stays free for the single directory the shell
-//! functions `cd` to. Commands that need git's output capture it explicitly.
+//! functions `cd` to. Commands that need git's output capture it explicitly. Every git runs free
+//! of the repository h itself was started in, such as the one a hook's `GIT_DIR` names.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -57,13 +58,45 @@ fn stderr_as_stdout() -> Stdio {
     }
 }
 
-/// A `git` command running in `dir` (with `-C`), its stdout redirected to stderr.
-pub fn command(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
+/// The variables that tie git to one repository, which git sets for hooks and for the commands
+/// of `git rebase --exec` and `git bisect run`: git's own `local_repo_env`, as printed by `git
+/// rev-parse --local-env-vars`, less the configuration given with `git -c`
+/// (`GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`), which git too keeps when it runs a command
+/// in another repository.
+const LOCAL_REPO_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// A `git` command running in `dir` (with `-C`), free of the repository h was started in, so
+/// that it works on `dir` (or the repository it creates) and nothing else.
+fn git(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
     let mut cmd = Command::new("git");
+    for var in LOCAL_REPO_ENV {
+        cmd.env_remove(var);
+    }
     if let Some(dir) = dir {
         cmd.arg("-C").arg(dir);
     }
-    cmd.args(args).stdout(stderr_as_stdout());
+    cmd.args(args);
+    cmd
+}
+
+/// A `git` command running in `dir` (with `-C`), its stdout redirected to stderr.
+pub fn command(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
+    let mut cmd = git(dir, args);
+    cmd.stdout(stderr_as_stdout());
     cmd
 }
 
@@ -80,11 +113,7 @@ pub fn run(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitErro
 
 /// Run `git` with `args` and return what it printed on stdout.
 pub fn output(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = dir {
-        cmd.arg("-C").arg(dir);
-    }
-    let out = cmd.args(args).output().map_err(GitError::Spawn)?;
+    let out = git(dir, args).output().map_err(GitError::Spawn)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -113,11 +142,7 @@ pub fn run_with_input(
 
 /// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
 pub fn passthrough(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
-    let mut cmd = Command::new("git");
-    if let Some(dir) = dir {
-        cmd.arg("-C").arg(dir);
-    }
-    let status = cmd.args(args).status().map_err(GitError::Spawn)?;
+    let status = git(dir, args).status().map_err(GitError::Spawn)?;
     if status.success() {
         Ok(())
     } else {
@@ -205,5 +230,20 @@ mod tests {
     #[test]
     fn captures_output() {
         assert!(output(None, &["--version"]).unwrap().starts_with("git version"));
+    }
+
+    #[test]
+    fn clears_what_git_clears_for_another_repository() {
+        let kept = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
+        let local = output(None, &["rev-parse", "--local-env-vars"]).unwrap();
+        let mut want: Vec<&str> = local.lines().filter(|var| !kept.contains(var)).collect();
+        want.sort();
+        let mut have = LOCAL_REPO_ENV.to_vec();
+        have.sort();
+        assert_eq!(have, want, "LOCAL_REPO_ENV is out of date with this git");
+
+        let cmd = git(None, &["--version"]);
+        let removed: Vec<_> = cmd.get_envs().filter(|(_, value)| value.is_none()).collect();
+        assert_eq!(removed.len(), LOCAL_REPO_ENV.len(), "{removed:?}");
     }
 }

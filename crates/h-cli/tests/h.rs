@@ -297,10 +297,22 @@ fn clones_missing_github_repos() {
 /// Install a credential helper in the isolated git configuration under `home` that answers
 /// every request with `password`, and return the file where it records what git asked it.
 fn credential_helper(home: &Path, password: &str) -> PathBuf {
+    credential_helper_for(home, None, password)
+}
+
+/// Like [`credential_helper`], answering only requests for `host` when there is one.
+fn credential_helper_for(home: &Path, host: Option<&str>, password: &str) -> PathBuf {
     let asked = home.join("helper-asked");
     let helper = home.join("credential-helper");
+    let answer = "echo username=me; echo password=".to_string() + password;
+    let answer = match host {
+        Some(host) => {
+            format!("printf '%s\\n' \"$input\" | grep -qx 'host={host}' && {{ {answer}; }}")
+        }
+        None => answer,
+    };
     let script = format!(
-        "#!/bin/sh\n[ \"$1\" = get ] || exit 0\ncat >> '{}'\necho username=me\necho password={password}\n",
+        "#!/bin/sh\n[ \"$1\" = get ] || exit 0\ninput=$(cat)\nprintf '%s\\n' \"$input\" >> '{}'\n{answer}\nexit 0\n",
         asked.display()
     );
     fs::write(&helper, script).unwrap();
@@ -370,11 +382,36 @@ fn private_repos_are_looked_up_again_with_the_token() {
     let out = go_with_git(home, &api, "zimbatm/h", &["-c", "credential.username=Ident"]);
     assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
     assert_eq!(tokens_sent(&api), [None, Some("s3cret".into())]);
+    // The mock stands in for the API, so it is asked for its own host's credential.
+    let api_host = format!("host={}", api.url.strip_prefix("http://").unwrap());
     let asked = fs::read_to_string(asked).unwrap();
-    for line in ["protocol=https", "host=github.com", "username=Ident"] {
+    for line in ["protocol=http", &api_host, "username=Ident"] {
         assert!(asked.lines().any(|l| l == line), "{line} in {asked:?}");
     }
     assert!(!out.stdout.contains("s3cret") && !out.stderr.contains("s3cret"), "{out:?}");
+}
+
+#[test]
+fn github_tokens_go_only_to_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/zimbatm/h.git", &home.join("src"));
+    // The helper has a token for github.com only, and the API is somewhere else.
+    let asked = credential_helper_for(home, Some("github.com"), "s3cret");
+    let api = MockGitHub::serve(|_, head| {
+        if head.to_ascii_lowercase().contains("authorization:") {
+            (200, ZIMBATM_H.into())
+        } else {
+            (404, r#"{"message": "Not Found"}"#.into())
+        }
+    });
+
+    let out = go_with_git(home, &api, "zimbatm/h", &[]);
+    assert_resolved(&out, &home.join("code/github.com/zimbatm/h"));
+    assert_eq!(tokens_sent(&api), [None]);
+    let asked = fs::read_to_string(asked).unwrap();
+    assert!(!asked.lines().any(|l| l == "host=github.com"), "{asked:?}");
 }
 
 #[test]

@@ -37,7 +37,9 @@ helpers. Only when GitHub answers 404, as it does for a private repository, or r
 limit, does `h` ask `git credential fill` for the token git keeps for github.com, with the
 `credential.*` settings among the git options (so each identity's `credential.username` picks its
 own), and look again with it. Nothing ever prompts: with no stored credential, or one GitHub turns
-down, the lookup goes unanswered and the casing stays as typed.
+down, the lookup goes unanswered and the casing stays as typed. The token only ever goes to the
+host it is kept for: an API other than `https://api.github.com` (`$H_GITHUB_API`) is asked for its
+own host's credential, never github.com's.
 
 Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
 is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push

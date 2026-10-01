@@ -31,14 +31,35 @@ pub fn api_base() -> String {
     std::env::var(API_ENV).unwrap_or_else(|_| DEFAULT_API.to_string())
 }
 
-/// The token git's credential helpers keep for github.com, as `git credential fill` gives it,
-/// with the `credential.*` settings among `config` (the `-c` pairs h is given), so that each
-/// identity's `credential.username` picks its own. `None` when no helper has one.
+/// The protocol and host whose credential may go to the API at `api_base`: github.com's for
+/// GitHub's own API, since git keeps that token under github.com rather than api.github.com, and
+/// otherwise the API's own, so a test server or another host never gets github.com's token.
+/// `None` when `api_base` has no usable protocol and host.
+fn credential_host(api_base: &str) -> Option<(String, String)> {
+    let (protocol, rest) = api_base.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?;
+    let usable = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_control() || c == ' ');
+    if !usable(protocol) || !usable(host) {
+        return None;
+    }
+    let (protocol, host) = (protocol.to_ascii_lowercase(), host.to_ascii_lowercase());
+    if protocol == "https" && host == "api.github.com" {
+        return Some((protocol, "github.com".into()));
+    }
+    Some((protocol, host))
+}
+
+/// The token git's credential helpers keep for the API at `api_base` (github.com's, for GitHub's
+/// own; see [`credential_host`]), as `git credential fill` gives it, with the `credential.*`
+/// settings among `config` (the `-c` pairs h is given), so that each identity's
+/// `credential.username` picks its own. `None` when no helper has one.
 ///
 /// Nothing ever prompts: `credential.interactive=false` keeps git from asking at all (git 2.46),
 /// and for older versions an empty `GIT_ASKPASS` stops every askpass program, since git tries
 /// none when the first it finds is empty, and `GIT_TERMINAL_PROMPT=0` stops the terminal.
-pub fn credential_token(config: &[(OsString, OsString)]) -> Option<String> {
+pub fn credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Option<String> {
+    let (protocol, host) = credential_host(api_base)?;
     let mut args: Vec<OsString> = Vec::new();
     for (key, value) in config {
         let is_credential = key.as_bytes().get(..11).is_some_and(|prefix| {
@@ -60,7 +81,8 @@ pub fn credential_token(config: &[(OsString, OsString)]) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let asked = child.stdin.take()?.write_all(b"protocol=https\nhost=github.com\n\n");
+    let request = format!("protocol={protocol}\nhost={host}\n\n");
+    let asked = child.stdin.take()?.write_all(request.as_bytes());
     let out = child.wait_with_output().ok()?;
     if asked.is_err() || !out.status.success() {
         return None;
@@ -193,6 +215,23 @@ mod tests {
         // Port 1 on localhost is essentially never listening; the connection is refused at once.
         let token = || panic!("no answer at all, so no reason to ask for a token");
         assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", token), None);
+    }
+
+    #[test]
+    fn tokens_are_asked_for_only_for_the_apis_own_host() {
+        let host = |base: &str| credential_host(base);
+        let pair = |p: &str, h: &str| Some((p.to_string(), h.to_string()));
+        assert_eq!(host("https://api.github.com"), pair("https", "github.com"));
+        assert_eq!(host("https://API.GitHub.com/"), pair("https", "github.com"));
+        // Anything else is asked for its own credential, never github.com's.
+        assert_eq!(host("http://api.github.com"), pair("http", "api.github.com"));
+        assert_eq!(host("http://127.0.0.1:8080"), pair("http", "127.0.0.1:8080"));
+        assert_eq!(host("https://ghe.example.com/api/v3"), pair("https", "ghe.example.com"));
+        assert_eq!(host("https://me@ghe.example.com/api"), pair("https", "ghe.example.com"));
+        assert_eq!(host("https://github.com.example.org"), pair("https", "github.com.example.org"));
+        for bad in ["api.github.com", "https://", "://x", "https://a\nb", "https://a b"] {
+            assert_eq!(host(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

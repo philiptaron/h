@@ -527,6 +527,8 @@ fn clones_borrow_from_an_existing_store() {
                 path
             ],
             [&c[..], &["config", "--type=bool", "--get-regexp", settings]].concat(),
+            // The fake git reports a negotiator, so h leaves it be.
+            [&c[..], &["config", "--get", "fetch.negotiationAlgorithm"]].concat(),
             [
                 &c[..],
                 &["submodule", "update", "--require-init", "--recursive", "--reference", store],

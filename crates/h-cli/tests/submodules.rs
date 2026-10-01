@@ -238,17 +238,102 @@ fn empty_repositories_clone_with_a_store() {
     assert!(sb.root.join("example.com/o/empty/.git").is_dir());
 }
 
+/// Set `key` in the isolated global configuration of `sb`.
+fn set_global(sb: &Sandbox, key: &str, value: &str) {
+    let config = git_command(sb.tmp.path())
+        .args(["config", "--file"])
+        .arg(global_gitconfig(sb.tmp.path()))
+        .args([key, value])
+        .status()
+        .unwrap();
+    assert!(config.success());
+}
+
 #[test]
 fn sticky_recursive_clones_are_honored() {
     let sb = Sandbox::new();
     sb.fill_store();
-    let config = git_command(sb.tmp.path())
-        .args(["config", "--file"])
-        .arg(global_gitconfig(sb.tmp.path()))
-        .args(["submodule.stickyRecursiveClone", "true"])
-        .status()
-        .unwrap();
-    assert!(config.success());
+    set_global(&sb, "submodule.stickyRecursiveClone", "true");
     sb.ok(true, &["go", &url("app")]);
     assert_eq!(sb.config(&sb.app(), "submodule.recurse"), "true");
+}
+
+/// Publish `name` with `commits` commits of its own, all newer than anything else here.
+fn publish_history(sb: &Sandbox, name: &str, commits: usize) {
+    use std::io::Write;
+    let src = sb.src(name);
+    let init = git_command(sb.tmp.path()).args(["init", "-q", "-b", "main"]).arg(&src).status();
+    assert!(init.unwrap().success());
+    let mut stream = String::new();
+    for i in 0..commits {
+        let when = 4_000_000_000 + i * 60;
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter T <t@e> {when} +0000\ndata 1\nc\n\
+             M 644 inline f\ndata {}\n{i}\n\n",
+            i.to_string().len() + 1
+        ));
+    }
+    let mut import = git_command(sb.tmp.path())
+        .arg("-C")
+        .arg(&src)
+        .args(["fast-import", "--quiet"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    import.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    rewrite_url(sb.tmp.path(), &url(name), &src);
+}
+
+/// How many commits the clones made by `h go <args>` offer the server as ones they have.
+fn haves(sb: &Sandbox, args: &[&str]) -> usize {
+    let _ = fs::remove_dir_all(&sb.root);
+    let trace = sb.tmp.path().join("packets");
+    let _ = fs::remove_file(&trace);
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.tmp.path());
+    let out = run(cmd
+        .current_dir(sb.tmp.path())
+        .env("GIT_TRACE_PACKET", &trace)
+        .arg("--root")
+        .arg(&sb.root)
+        .arg("--store")
+        .arg(&sb.store)
+        .args(args));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let packets = fs::read_to_string(&trace).unwrap();
+    packets.lines().filter(|line| line.contains("clone> have ")).count()
+}
+
+#[test]
+fn submodule_clones_do_not_offer_the_whole_store() {
+    let sb = Sandbox::new();
+    sb.fill_store();
+    // History unrelated to app, all of it newer than the submodules' own commits.
+    publish_history(&sb, "big", 1000);
+    sb.ok(true, &["store", "add", &url("big")]);
+    // A submodule the store has all of is not negotiated at all; one that moved on since the
+    // store last fetched it is.
+    sb.git(&sb.src("lib"), &["commit", "-q", "--allow-empty", "-m", "newer"]);
+    sb.git(&sb.src("app/lib"), &["pull", "-q"]);
+    sb.git(&sb.src("app"), &["commit", "-qam", "lib moved on"]);
+
+    let app = url("app");
+    let submodule_haves = || {
+        let superproject = haves(&sb, &["go", &app, "--no-recurse-submodules"]);
+        haves(&sb, &["go", &app]) - superproject
+    };
+    let skipping = submodule_haves();
+    assert!(skipping < 100, "{skipping}");
+    assert!(sb.borrows_everything(&sb.app().join("lib/deep")));
+    let lib = sb.git(&sb.app().join("lib"), &["count-objects", "-v"]);
+    assert!(
+        lib.contains("count: 0\n") && lib.contains("in-pack: 1\n"),
+        "only the new commit: {lib}"
+    );
+
+    // A negotiator the user chose is left alone.
+    set_global(&sb, "fetch.negotiationAlgorithm", "consecutive");
+    let consecutive = submodule_haves();
+    assert!(consecutive >= 1000, "the newer, unrelated commits come first: {consecutive}");
 }

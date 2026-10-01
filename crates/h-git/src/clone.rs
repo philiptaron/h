@@ -167,7 +167,17 @@ fn update_submodules(path: &Path, store: &Path, opts: &SubmoduleOptions) -> Resu
     }
     let filter = opts.also_filter.unwrap_or_else(|| enabled("clone.filtersubmodules"));
     let progress = opts.progress.unwrap_or_else(|| !opts.quiet && std::io::stderr().is_terminal());
-    git::run(Some(path), &submodules::update_args(opts, store, filter, progress))
+    let mut args: Vec<OsString> = Vec::new();
+    // Each submodule's clone offers the server every commit in the store as one it has, newest
+    // first, until the server recognizes one: all of them for a submodule the store lacks, and
+    // for one whose history is older than the rest of the store. The skipping negotiator gives
+    // up on unrelated history quickly, and still finds the submodule's own commits in the store.
+    // The `-c` reaches the submodules' clones, nested ones included, through the environment.
+    if git::output(Some(path), &["config", "--get", "fetch.negotiationAlgorithm"]).is_err() {
+        args.extend(["-c", "fetch.negotiationAlgorithm=skipping"].map(OsString::from));
+    }
+    args.extend(submodules::update_args(opts, store, filter, progress));
+    git::run(Some(path), &args)
 }
 
 /// Clone options that mean the same to `git fetch`, so a container clone can pass them on.

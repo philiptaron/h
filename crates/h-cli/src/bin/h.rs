@@ -27,6 +27,7 @@ Commands:
   resolve <term>              print the project directory, failing if it is absent
   store init                  create the object store
   store add <term>...         add upstream repositories to the store and fetch them
+  store remove <term>...      remove upstreams and their refs from the store (objects stay)
   store fetch [-q] [<term>...]
                               fetch every upstream in the store, or only the named ones
   store list                  list the upstreams in the store
@@ -314,6 +315,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         }
         Some("list") => store_list(store),
         Some("add") => store_add(config, store, &terms),
+        Some("remove") => store_remove(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
         Some("remote") => match terms.as_slice() {
             [term] => upstream_for(config, store, term).map(|u| println!("{}", u.name)),
@@ -378,6 +380,27 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     }
     for name in store.fetch(&names, false).map_err(|e| e.to_string())? {
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not set");
+    }
+    Ok(())
+}
+
+fn store_remove(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+    if terms.is_empty() {
+        return Err("Usage: h store remove <term>...".into());
+    }
+    if !store.exists() {
+        return Err(format!("No store at {}", store.path.display()));
+    }
+    let mut names = Vec::new();
+    for term in terms {
+        let name = upstream_in_store(config, store, term)?;
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    for name in names {
+        store.remove_remote(&name).map_err(|e| e.to_string())?;
+        eprintln!("removed {name}");
     }
     Ok(())
 }

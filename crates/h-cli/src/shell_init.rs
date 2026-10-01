@@ -16,7 +16,7 @@ pub const DEFAULT_CODE_ROOT: &str = "~/src";
 /// The subcommands of `h store`. Only these send `h store` to the store commands, so a project
 /// named `store` can still be jumped to with `h store`.
 pub const STORE_COMMANDS: &[&str] =
-    &["init", "add", "fetch", "list", "path", "remote", "show", "worktree", "maintain"];
+    &["init", "add", "remove", "fetch", "list", "path", "remote", "show", "worktree", "maintain"];
 
 /// Options accepted by `h-shell-init`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,7 +215,7 @@ mod tests {
             out,
             r#"h() {
   case "$1:$2" in
-    store:init|store:add|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
+    store:init|store:add|store:remove|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" "$@"
       return
       ;;
@@ -243,7 +243,7 @@ mod tests {
             out,
             r#"j() {
   case "$1:$2" in
-    store:init|store:add|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
+    store:init|store:add|store:remove|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" --store "/store" "$@" -- -c user.name="Me Too"
       return
       ;;

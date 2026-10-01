@@ -144,6 +144,42 @@ impl Store {
         Ok(true)
     }
 
+    /// Remove upstream `name`: its configuration, and its branches, tags and HEAD, all in one
+    /// transaction. The refs of upstreams whose names extend it are left alone, and an outer
+    /// upstream it nested stays nested. Its objects stay too, since clones borrow them.
+    ///
+    /// `git remote remove` would keep the tags, which are not remote-tracking refs, so the refs
+    /// are deleted here.
+    pub fn remove_remote(&self, name: &str) -> Result<(), GitError> {
+        let dir = self.dir();
+        let prefix = self.prefix(name)?;
+        let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, name)).collect();
+        let namespaces = [format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/")];
+        let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
+        args.extend(namespaces.iter().cloned());
+        let mut refs: Vec<String> = git::output(dir, &args)?.lines().map(String::from).collect();
+        // A HEAD whose branch is gone is a broken ref, which for-each-ref leaves out.
+        let head = format!("refs/remotes/{prefix}/HEAD");
+        if !refs.contains(&head) && git::output(dir, &["symbolic-ref", "--quiet", &head]).is_ok() {
+            refs.push(head);
+        }
+        let inner_ref = |refname: &str| {
+            inner.iter().any(|r| {
+                refname.starts_with(&format!("refs/remotes/{r}/"))
+                    || refname.starts_with(&format!("refs/tags/{r}/"))
+            })
+        };
+        let input: String = refs
+            .iter()
+            .filter(|refname| !inner_ref(refname))
+            .map(|refname| format!("delete {refname}\n"))
+            .collect();
+        if !input.is_empty() {
+            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+        }
+        git::run(dir, &["config", "--remove-section", &format!("remote.{name}")])
+    }
+
     /// Have each fetch of upstream `name` point `<name>/HEAD` at its default branch, even when
     /// that changes, as git leaves an existing HEAD alone by default. A nested upstream's HEAD is
     /// left to [`Store::set_head`]: git would look for the default branch directly under

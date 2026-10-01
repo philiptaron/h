@@ -340,6 +340,64 @@ fn heads_follow_a_renamed_default_branch() {
 }
 
 #[test]
+fn remove_forgets_an_upstream_and_only_its_refs() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    let sub = sb.tmp.path().join("src/sub");
+    assert!(sb.git(&sb.src).args(["tag", "v1.0"]).status().unwrap().success());
+    assert!(sb.git(&sub).args(["tag", "s1"]).status().unwrap().success());
+    sb.ok(&["add", PROJ_URL, sub_url]);
+    let outer = run(sb.git(&sb.src).args(["rev-parse", "HEAD"])).stdout.trim().to_string();
+
+    // Removing the inner upstream leaves the outer one's refs where they are, nested.
+    let out = sb.ok(&["remove", "sub"]);
+    assert_eq!(out.stderr, format!("removed {PROJ}/sub\n"));
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}\n"));
+    assert_eq!(
+        refs(&sb),
+        format!(
+            "refs/remotes/{PROJ}/-/HEAD refs/remotes/{PROJ}/-/main\n\
+             refs/remotes/{PROJ}/-/main \n\
+             refs/tags/{PROJ}/-/v1.0 \n"
+        )
+    );
+    assert_eq!(sb.store_config(&format!("remote.{PROJ}/sub.url")), "");
+    assert_eq!(sb.ok(&["show", "proj", "v1.0:README"]).stdout, "hello\n");
+
+    // Removing the outer one leaves the inner one's refs alone, and every object stays.
+    sb.ok(&["add", sub_url]);
+    sb.ok(&["remove", PROJ_URL]);
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}/sub\n"));
+    assert_eq!(
+        refs(&sb),
+        format!(
+            "refs/remotes/{PROJ}/sub/HEAD refs/remotes/{PROJ}/sub/main\n\
+             refs/remotes/{PROJ}/sub/main \n\
+             refs/tags/{PROJ}/sub/s1 \n"
+        )
+    );
+    let object = run(sb.git(&sb.store).args(["cat-file", "-e", &outer]));
+    assert_eq!(object.code, Some(0), "{object:?}");
+
+    // A HEAD whose branch is gone goes too.
+    let other = sb.tmp.path().join("other");
+    make_git_repo(&other);
+    rewrite_url(sb.root(), "https://example.org/x/other.git", &other);
+    sb.ok(&["add", "https://example.org/x/other.git"]);
+    let branch = "refs/remotes/example.org/x/other/main";
+    assert!(sb.git(&sb.store).args(["update-ref", "-d", branch]).status().unwrap().success());
+    sb.ok(&["remove", "other"]);
+    let head =
+        run(sb.git(&sb.store).args(["symbolic-ref", "refs/remotes/example.org/x/other/HEAD"]));
+    assert_ne!(head.code, Some(0), "{head:?}");
+
+    let out = sb.h(&["remove", PROJ_URL]);
+    assert_eq!((out.code, out.stderr), (Some(1), format!("{PROJ_URL} is not in the store\n")));
+    let out = sb.h(&["remove"]);
+    assert_eq!((out.code, out.stderr), (Some(1), "Usage: h store remove <term>...\n".into()));
+}
+
+#[test]
 fn add_accepts_file_urls() {
     let sb = Sandbox::new();
     // Git rejects remote names with a segment starting with `.`, so the store escapes them.

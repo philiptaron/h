@@ -61,7 +61,8 @@ named by the path `h` would clone it to (with any part git cannot use in a ref e
 `<name>/HEAD` at the upstream's current default branch. An upstream whose name
 another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps its
 refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
-the inner one moves the outer one's refs over. The store is never pushed
+the inner one moves the outer one's refs over, and they stay there if the inner one is
+removed again. The store is never pushed
 to and never pruned, and clones made with a store configured borrow its objects through
 `git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits. A
 clone only tells the server about the store history it shares, its own upstream's and a fork's
@@ -77,6 +78,7 @@ submodules uses only that, as git does.
 h store init                                  # create it
 h store add NixOS/nixpkgs torvalds/linux      # add upstreams and fetch them
 h store add https://gitlab.gnome.org/GNOME/gdm.git
+h store remove gdm                            # forget an upstream and its refs; objects stay
 h store fetch                                 # fetch everything (run this from a timer)
 h store list                                  # the upstreams' names
 h store show nixpkgs master:lib/default.nix   # a file, straight from the store

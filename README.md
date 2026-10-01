@@ -3,7 +3,7 @@
 Fast shell navigation for projects organized as `~/code/<domain>/<path>`, and a shared object
 store that keeps the upstream history of big projects in one place.
 
-Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Queries the GitHub API to get the canonical casing of `user/repo`.
+Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Asks the GitHub API for the canonical casing of `user/repo` before cloning.
 
 ## Setup
 
@@ -24,7 +24,7 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 ## Usage
 
 - `h <name>` - search for project matching `<name>` up to 3 levels deep
-- `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>` or clone it (queries GitHub API for correct casing)
+- `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>`, found in any casing, or clone it (asking the GitHub API first for the canonical casing, and whether the repository is a fork)
 - `h <url>` - cd to `~/code/<domain>/<path>` or clone it
 - `h <term> [clone options]` - extra options go to `git clone`; `--container` clones into
   `<dir>/.bare` with a `.git` file beside it and no working tree, for projects worked on only

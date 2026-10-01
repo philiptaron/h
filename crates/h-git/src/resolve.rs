@@ -27,6 +27,16 @@ pub enum ParseError {
     NotFound,
 }
 
+/// Which decides the casing of a GitHub repository's `user/repo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Casing {
+    /// The directory the repository already has under the code root, in any casing. GitHub is
+    /// asked only when there is none, that is, only before cloning.
+    Local,
+    /// GitHub, always: the store names upstreams by their canonical casing.
+    GitHub,
+}
+
 /// Where a term leads: a directory, plus the URL to clone it from if it does not exist yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolution {
@@ -154,13 +164,46 @@ fn concat_path(root: &Path, parts: &[&str]) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes))
 }
 
+/// The names under `dir` that are directories spelled like `name` in any casing, sorted.
+fn case_variants(dir: &Path, name: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|entry| entry.eq_ignore_ascii_case(name) && dir.join(entry).is_dir())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The owner and name of the directory GitHub repository `user/repo` already has under
+/// `code_root`, in any casing, since GitHub ignores case: the one spelled exactly as given when
+/// it exists, and otherwise the first in sorted order (which puts capitals first, as in the
+/// `NixOS/nixpkgs` an earlier lookup would have chosen over a typed `nixos/nixpkgs`).
+pub fn find_github_dir(code_root: &Path, user: &str, repo: &str) -> Option<(String, String)> {
+    let host = concat_path(code_root, &["github.com"]);
+    let found: Vec<(String, String)> = case_variants(&host, user)
+        .into_iter()
+        .flat_map(|owner| {
+            let names = case_variants(&host.join(&owner), repo);
+            names.into_iter().map(move |name| (owner.clone(), name))
+        })
+        .collect();
+    let exact = found.iter().position(|(owner, name)| owner == user && name == repo);
+    found.into_iter().nth(exact.unwrap_or(0))
+}
+
 /// Resolve `term` against `code_root`.
 ///
-/// `lookup` is consulted for GitHub repositories to fix up the casing of `user/repo`.
-/// On failure, returns the message to show the user.
+/// `lookup` is consulted for GitHub repositories to fix up the casing of `user/repo`: always
+/// with [`Casing::GitHub`], and with [`Casing::Local`] only when the repository has no directory
+/// in any casing yet. Either way an existing directory for the resulting name, in any casing, is
+/// where it leads. On failure, returns the message to show the user.
 pub fn resolve(
     code_root: &Path,
     term: &str,
+    casing: Casing,
     lookup: impl FnOnce(&str, &str) -> Option<RepoInfo>,
 ) -> Result<Resolution, String> {
     let not_found = || format!("{term} not found");
@@ -171,12 +214,23 @@ pub fn resolve(
 
     match target {
         Target::GitHub { user, repo } => {
-            let (user, repo, parent) = match lookup(&user, &repo) {
-                Some(info) => (info.owner, info.name, info.parent),
-                None => (user, repo, None),
+            let existing = match casing {
+                Casing::Local => find_github_dir(code_root, &user, &repo),
+                Casing::GitHub => None,
             };
+            let (user, repo, parent) = match existing {
+                Some((user, repo)) => (user, repo, None),
+                None => match lookup(&user, &repo) {
+                    Some(info) => (info.owner, info.name, info.parent),
+                    None => (user, repo, None),
+                },
+            };
+            // A checkout of the resulting name wins in any casing too: with Casing::GitHub, or
+            // when GitHub gives a renamed repository's new name.
+            let (owner, name) =
+                find_github_dir(code_root, &user, &repo).unwrap_or((user.clone(), repo.clone()));
             Ok(Resolution {
-                path: concat_path(code_root, &["github.com", &user, &repo]),
+                path: concat_path(code_root, &["github.com", &owner, &name]),
                 clone_url: Some(format!("https://github.com/{user}/{repo}.git")),
                 remote: Some(remote_name("github.com", &format!("{user}/{repo}"))),
                 upstream_url: parent.map(|parent| format!("https://github.com/{parent}.git")),
@@ -284,7 +338,7 @@ mod tests {
     #[test]
     fn resolves_github_with_lookup() {
         let root = Path::new("/code");
-        let res = resolve(root, "zimbatm/H", |user, repo| {
+        let res = resolve(root, "zimbatm/H", Casing::Local, |user, repo| {
             assert_eq!((user, repo), ("zimbatm", "H"));
             Some(RepoInfo { owner: "ZimBatm".into(), name: "h".into(), parent: None })
         });
@@ -301,7 +355,7 @@ mod tests {
 
     #[test]
     fn resolves_github_without_lookup() {
-        let res = resolve(Path::new("/code"), "git@github.com:a/b.git", |_, _| None);
+        let res = resolve(Path::new("/code"), "git@github.com:a/b.git", Casing::Local, |_, _| None);
         assert_eq!(
             res,
             Ok(Resolution {
@@ -314,8 +368,55 @@ mod tests {
     }
 
     #[test]
+    fn checkouts_in_any_casing_win_without_a_lookup() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("github.com/NixOS/nixpkgs")).unwrap();
+        let res = resolve(tmp.path(), "nixos/NIXPKGS", Casing::Local, |_, _| panic!("no lookup"));
+        assert_eq!(
+            res,
+            Ok(Resolution {
+                path: tmp.path().join("github.com/NixOS/nixpkgs"),
+                clone_url: Some("https://github.com/NixOS/nixpkgs.git".into()),
+                remote: Some("github.com/NixOS/nixpkgs".into()),
+                upstream_url: None,
+            })
+        );
+
+        // The store always asks GitHub, and still finds the checkout.
+        let res = resolve(tmp.path(), "nixos/nixpkgs", Casing::GitHub, |_, _| {
+            Some(RepoInfo { owner: "NixOS".into(), name: "nixpkgs".into(), parent: None })
+        });
+        assert_eq!(res.unwrap().path, tmp.path().join("github.com/NixOS/nixpkgs"));
+
+        // A repository GitHub has renamed is found under its new name, in any casing.
+        let res = resolve(tmp.path(), "old/name", Casing::Local, |_, _| {
+            Some(RepoInfo { owner: "nixos".into(), name: "nixpkgs".into(), parent: None })
+        });
+        assert_eq!(res.unwrap().path, tmp.path().join("github.com/NixOS/nixpkgs"));
+    }
+
+    #[test]
+    fn exact_casing_wins_then_sorted_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("github.com/nixos/nixpkgs")).unwrap();
+        fs::create_dir_all(root.join("github.com/NixOS/nixpkgs")).unwrap();
+        if fs::read_dir(root.join("github.com")).unwrap().count() < 2 {
+            return; // a case-insensitive filesystem cannot hold both
+        }
+        fs::create_dir_all(root.join("github.com/Nixos/Nixpkgs")).unwrap();
+        fs::write(root.join("github.com/NixOS/NIXPKGS"), "a file, not a checkout").unwrap();
+        let found = |user, repo| find_github_dir(root, user, repo);
+        assert_eq!(found("nixos", "nixpkgs"), Some(("nixos".into(), "nixpkgs".into())));
+        assert_eq!(found("Nixos", "Nixpkgs"), Some(("Nixos".into(), "Nixpkgs".into())));
+        assert_eq!(found("NIXOS", "nixpkgs"), Some(("NixOS".into(), "nixpkgs".into())));
+        assert_eq!(found("nixos", "other"), None);
+        assert_eq!(find_github_dir(Path::new("/nonexistent/h-root"), "a", "b"), None);
+    }
+
+    #[test]
     fn resolves_forks_with_their_upstream() {
-        let res = resolve(Path::new("/code"), "me/nixpkgs", |_, _| {
+        let res = resolve(Path::new("/code"), "me/nixpkgs", Casing::Local, |_, _| {
             Some(RepoInfo {
                 owner: "me".into(),
                 name: "nixpkgs".into(),
@@ -327,17 +428,25 @@ mod tests {
 
     #[test]
     fn remote_names_have_no_empty_segments() {
-        let res = resolve(Path::new("/code"), "file:///srv/git/proj.git", |_, _| None).unwrap();
+        let res =
+            resolve(Path::new("/code"), "file:///srv/git/proj.git", Casing::Local, |_, _| None)
+                .unwrap();
         assert_eq!(res.remote, Some("srv/git/proj".into()));
-        let res = resolve(Path::new("/code"), "https://host//a/b/", |_, _| None).unwrap();
+        let res =
+            resolve(Path::new("/code"), "https://host//a/b/", Casing::Local, |_, _| None).unwrap();
         assert_eq!(res.remote, Some("host/a/b".into()));
     }
 
     #[test]
     fn remote_names_are_valid_in_refs() {
-        let res = resolve(Path::new("/code"), "file:///home/me/.local/x.lock.git", |_, _| None);
+        let res = resolve(
+            Path::new("/code"),
+            "file:///home/me/.local/x.lock.git",
+            Casing::Local,
+            |_, _| None,
+        );
         assert_eq!(res.unwrap().remote, Some("home/me/_.local/x.lock_".into()));
-        let res = resolve(Path::new("/code"), "owner/.github", |_, _| None);
+        let res = resolve(Path::new("/code"), "owner/.github", Casing::Local, |_, _| None);
         assert_eq!(res.unwrap().remote, Some("github.com/owner/_.github".into()));
         for (segment, escaped) in [
             ("plain-name_1.2", "plain-name_1.2"),
@@ -365,7 +474,7 @@ mod tests {
     #[test]
     fn resolves_remote_and_strips_git() {
         let url = "https://gitlab.com/group/project.git";
-        let res = resolve(Path::new("/code"), url, |_, _| panic!("not GitHub"));
+        let res = resolve(Path::new("/code"), url, Casing::Local, |_, _| panic!("not GitHub"));
         assert_eq!(
             res,
             Ok(Resolution {
@@ -382,7 +491,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("example.com/owner/proj");
         fs::create_dir_all(&project).unwrap();
-        let res = resolve(tmp.path(), "proj", |_, _| panic!("not GitHub"));
+        let res = resolve(tmp.path(), "proj", Casing::Local, |_, _| panic!("not GitHub"));
         let remote = Some("example.com/owner/proj".into());
         assert_eq!(
             res,
@@ -395,7 +504,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("example.com/bare.git");
         fs::create_dir_all(&project).unwrap();
-        let res = resolve(tmp.path(), "bare.git", |_, _| None);
+        let res = resolve(tmp.path(), "bare.git", Casing::Local, |_, _| None);
         let remote = Some("example.com/bare.git".into());
         assert_eq!(
             res,
@@ -406,9 +515,18 @@ mod tests {
     #[test]
     fn reports_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(resolve(tmp.path(), "nope", |_, _| None), Err("nope not found".into()));
-        assert_eq!(resolve(tmp.path(), "a b", |_, _| None), Err("Unknown pattern for a b".into()));
-        assert_eq!(resolve(tmp.path(), "git@host", |_, _| None), Err("git@host not found".into()));
+        assert_eq!(
+            resolve(tmp.path(), "nope", Casing::Local, |_, _| None),
+            Err("nope not found".into())
+        );
+        assert_eq!(
+            resolve(tmp.path(), "a b", Casing::Local, |_, _| None),
+            Err("Unknown pattern for a b".into())
+        );
+        assert_eq!(
+            resolve(tmp.path(), "git@host", Casing::Local, |_, _| None),
+            Err("git@host not found".into())
+        );
     }
 
     #[test]

@@ -162,7 +162,7 @@ fn resolve_never_clones() {
 }
 
 #[test]
-fn github_shorthand_uses_canonical_casing() {
+fn existing_checkouts_are_found_in_any_casing_without_github() {
     let tmp = tempfile::tempdir().unwrap();
     mkdirs(tmp.path(), &["github.com/ZimBatm/H"]);
     let api = MockGitHub::start(&[(
@@ -170,38 +170,53 @@ fn github_shorthand_uses_canonical_casing() {
         200,
         r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#,
     )]);
-    let out = run(command(H)
-        .current_dir(tmp.path())
-        .env("H_GITHUB_API", &api.url)
-        .arg("--root")
-        .arg(tmp.path())
-        .args(["go", "zimbatm/h"]));
-    assert_resolved(&out, &tmp.path().join("github.com/ZimBatm/H"));
-
-    let requests = api.requests();
-    assert_eq!(requests.len(), 1);
-    let head = requests[0].to_ascii_lowercase();
-    assert!(head.starts_with("get /repos/zimbatm/h http/1.1\r\n"), "{head}");
-    assert!(head.contains("user-agent: h-cli\r\n"), "{head}");
-    assert!(head.contains("accept: application/vnd.github.v3+json\r\n"), "{head}");
+    let h = |args: &[&str]| {
+        run(command(H)
+            .current_dir(tmp.path())
+            .env("H_GITHUB_API", &api.url)
+            .arg("--root")
+            .arg(tmp.path())
+            .args(args))
+    };
+    let want = tmp.path().join("github.com/ZimBatm/H");
+    assert_resolved(&h(&["go", "zimbatm/h"]), &want);
+    assert_resolved(&h(&["resolve", "https://github.com/ZIMBATM/h"]), &want);
+    // `resolve` never asks GitHub, not even for a repository that has no checkout.
+    let out = h(&["resolve", "zimbatm/other"]);
+    assert_eq!((out.code, out.stderr.as_str()), (Some(1), "zimbatm/other not found\n"));
+    assert_eq!(api.requests(), Vec::<String>::new());
 }
 
 #[test]
-fn github_lookup_failure_keeps_given_casing() {
+fn failed_lookups_do_not_clone_a_second_casing() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/zimbatm/h"]);
-    let api = MockGitHub::start(&[("/repos/zimbatm/h", 500, "{}")]);
-    let out = run(command(H)
-        .current_dir(tmp.path())
-        .env("H_GITHUB_API", &api.url)
-        .arg("--root")
-        .arg(tmp.path())
-        .args(["go", "zimbatm/h"]));
-    assert_resolved(&out, &tmp.path().join("github.com/zimbatm/h"));
-    assert_eq!(api.requests().len(), 1);
+    let root = tmp.path().join("code");
+    mkdirs(&root, &["github.com/NixOS/nixpkgs"]);
+    let git = FakeGit::install(tmp.path());
+    let api =
+        MockGitHub::start(&[("/repos/nixos/nixpkgs", 500, "{}"), ("/repos/zimbatm/h", 500, "{}")]);
+    let go = |term: &str| {
+        let mut cmd = command(H);
+        git.apply(&mut cmd);
+        run(cmd
+            .current_dir(tmp.path())
+            .env("H_GITHUB_API", &api.url)
+            .arg("--root")
+            .arg(&root)
+            .args(["go", term]))
+    };
+    assert_resolved(&go("nixos/nixpkgs"), &root.join("github.com/NixOS/nixpkgs"));
+    assert_eq!(git.args(), None);
+    assert_eq!(api.requests().len(), 0);
 
-    // An unreachable API behaves the same.
-    assert_resolved(&go(tmp.path(), "zimbatm/h"), &tmp.path().join("github.com/zimbatm/h"));
+    // With no checkout, a failed lookup clones with the casing given.
+    let path = root.join("github.com/zimbatm/h");
+    assert_resolved(&go("zimbatm/h"), &path);
+    assert_eq!(
+        git.args().unwrap(),
+        ["clone", "--recursive", "--", "https://github.com/zimbatm/h.git", path.to_str().unwrap()]
+    );
+    assert_eq!(api.requests().len(), 1);
 }
 
 #[test]
@@ -268,6 +283,13 @@ fn clones_missing_github_repos() {
             path.to_str().unwrap()
         ]]
     );
+
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    let head = requests[0].to_ascii_lowercase();
+    assert!(head.starts_with("get /repos/zimbatm/h http/1.1\r\n"), "{head}");
+    assert!(head.contains("user-agent: h-cli\r\n"), "{head}");
+    assert!(head.contains("accept: application/vnd.github.v3+json\r\n"), "{head}");
 }
 
 #[test]

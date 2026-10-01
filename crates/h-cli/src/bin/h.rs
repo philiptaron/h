@@ -13,7 +13,9 @@ use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
 use h_git::github;
-use h_git::resolve::{Resolution, Target, escape_segment, parse_term, remote_name, resolve};
+use h_git::resolve::{
+    Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
+};
 use h_git::store::{FetchReport, Store};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -135,10 +137,11 @@ fn utf8(arg: &OsStr) -> Result<&str, String> {
     arg.to_str().ok_or_else(|| format!("Unknown pattern for {}", arg.to_string_lossy()))
 }
 
-/// Resolve `term` against the code root, asking GitHub for the canonical casing.
-fn resolve_term(config: &Config, term: &str) -> Result<Resolution, String> {
+/// Resolve `term` against the code root, asking GitHub for the canonical casing when `casing`
+/// calls for it.
+fn resolve_term(config: &Config, term: &str, casing: Casing) -> Result<Resolution, String> {
     let api = github::api_base();
-    resolve(&config.root, term, |user, repo| github::fetch_repo_info(&api, user, repo))
+    resolve(&config.root, term, casing, |user, repo| github::fetch_repo_info(&api, user, repo))
 }
 
 /// `h go <term> [clone options] [--container]`: print the directory, cloning if needed.
@@ -158,7 +161,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     let container = args[1..].iter().any(|a| a == "--container");
     let extra: Vec<OsString> = args[1..].iter().filter(|a| *a != "--container").cloned().collect();
 
-    let resolution = match resolve_term(config, term) {
+    let resolution = match resolve_term(config, term, Casing::Local) {
         Ok(resolution) => resolution,
         Err(msg) => return fail_with_cwd(&msg),
     };
@@ -223,7 +226,8 @@ fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         Ok(term) => term,
         Err(msg) => return fail(&msg),
     };
-    match resolve_term(config, term) {
+    // Only existing checkouts are printed, and those are found in any casing without GitHub.
+    match resolve(&config.root, term, Casing::Local, |_, _| None) {
         Ok(resolution) if resolution.path.is_dir() => {
             print_path(&resolution.path);
             ExitCode::SUCCESS
@@ -279,7 +283,7 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
             }
         };
     }
-    let resolution = resolve_term(config, term)?;
+    let resolution = resolve_term(config, term, Casing::GitHub)?;
     match (resolution.remote, resolution.clone_url) {
         (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None }),
         (Some(name), url @ Some(_)) => Ok(Upstream { name, url }),

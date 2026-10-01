@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use h::up::find_project_root;
-use h::util::{fail_with_cwd, print_path};
+use h_git::up::find_project_root;
+use h_git::util::{fail_with_cwd, print_path};
 
 fn main() -> ExitCode {
     if let Some(arg) = std::env::args_os().nth(1)

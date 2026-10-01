@@ -5,11 +5,11 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use h::shell::{
+use h_git::shell::{
     CODE_ROOT_ENV, Command, DEFAULT_CODE_ROOT, H_USAGE, Shell, parse_h_init_args, render_h_init,
     sibling_exe,
 };
-use h::util::{expand_tilde, fail};
+use h_git::util::{expand_tilde, fail};
 
 fn main() -> ExitCode {
     let opts = match parse_h_init_args(std::env::args_os().skip(1)) {

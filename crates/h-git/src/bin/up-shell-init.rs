@@ -4,8 +4,8 @@
 
 use std::process::ExitCode;
 
-use h::shell::{Command, UP_USAGE, parse_up_init_args, render_up_init, sibling_exe};
-use h::util::fail;
+use h_git::shell::{Command, UP_USAGE, parse_up_init_args, render_up_init, sibling_exe};
+use h_git::util::fail;
 
 fn main() -> ExitCode {
     let cd = match parse_up_init_args(std::env::args_os().skip(1)) {

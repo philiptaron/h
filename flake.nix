@@ -22,14 +22,13 @@
         }:
         rustPlatform.buildRustPackage {
           pname = "h";
-          version = (lib.importTOML ./Cargo.toml).package.version;
+          version = (lib.importTOML ./Cargo.toml).workspace.package.version;
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
-              ./src
-              ./tests
+              ./crates
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;

@@ -553,6 +553,42 @@ fn fetch_updates_everything_or_the_named_upstreams() {
 }
 
 #[test]
+fn fetch_brings_in_everything_it_can_and_names_what_failed() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    let sub = sb.tmp.path().join("src/sub");
+    // A second nested pair, whose outer upstream's HEAD must still be updated.
+    let (top_url, top_in_url) =
+        ("https://example.org/x/top.git", "https://example.org/x/top/in.git");
+    let top = sb.tmp.path().join("src/top");
+    for (dir, url) in [(&top, top_url), (&sb.tmp.path().join("src/top-in"), top_in_url)] {
+        make_git_repo(dir);
+        rewrite_url(sb.root(), url, dir);
+    }
+    sb.ok(&["add", PROJ_URL, sub_url, top_url, top_in_url]);
+
+    // One nested outer upstream goes away, so neither it nor its HEAD can be read; the other
+    // upstreams move on.
+    fs::rename(&sb.src, sb.tmp.path().join("gone")).unwrap();
+    fs::write(sub.join("second"), "new\n").unwrap();
+    for args in [&["add", "second"][..], &["commit", "-q", "-m", "second"]] {
+        assert!(sb.git(&sub).args(args).status().unwrap().success());
+    }
+    assert!(sb.git(&top).args(["branch", "-m", "main", "trunk"]).status().unwrap().success());
+
+    for quiet in [&["-q"][..], &[]] {
+        let out = sb.h(&[&["fetch"][..], quiet].concat());
+        assert_eq!(out.code, Some(1), "{out:?}");
+        assert!(out.stderr.contains(&format!("could not fetch '{PROJ}'")), "{out:?}");
+        assert!(out.stderr.contains(&format!("could not update {PROJ}/-/HEAD: ")), "{out:?}");
+    }
+    assert_eq!(sb.ok(&["show", "sub", "main:second"]).stdout, "new\n");
+    let head =
+        run(sb.git(&sb.store).args(["symbolic-ref", "refs/remotes/example.org/x/top/-/HEAD"]));
+    assert_eq!(head.stdout, "refs/remotes/example.org/x/top/-/trunk\n");
+}
+
+#[test]
 fn worktrees_are_detached_checkouts_from_the_store() {
     let sb = Sandbox::new();
     sb.ok(&["add", PROJ_URL]);

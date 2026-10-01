@@ -14,7 +14,7 @@ use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
 use h_git::github;
 use h_git::resolve::{Resolution, Target, escape_segment, parse_term, remote_name, resolve};
-use h_git::store::Store;
+use h_git::store::{FetchReport, Store};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -378,10 +378,11 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
         }
         names.push(upstream.name);
     }
-    for name in store.fetch(&names, false).map_err(|e| e.to_string())? {
+    let report = store.fetch(&names, false).map_err(|e| e.to_string())?;
+    for name in &report.headless {
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not set");
     }
-    Ok(())
+    fetch_result(report)
 }
 
 fn store_remove(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
@@ -414,10 +415,22 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
     for term in terms.iter().filter(|t| **t != "-q" && **t != "--quiet") {
         names.push(upstream_in_store(config, store, term)?);
     }
-    for name in store.fetch(&names, quiet).map_err(|e| e.to_string())? {
-        if !quiet {
-            eprintln!("{name} has no default branch, so {name}/-/HEAD is not updated");
-        }
+    let report = store.fetch(&names, quiet).map_err(|e| e.to_string())?;
+    for name in report.headless.iter().filter(|_| !quiet) {
+        eprintln!("{name} has no default branch, so {name}/-/HEAD is not updated");
     }
-    Ok(())
+    fetch_result(report)
+}
+
+/// Fail when a fetch did not do everything, after naming the upstreams whose HEAD it could not
+/// update. Git has already named the upstreams it could not fetch.
+fn fetch_result(report: FetchReport) -> Result<(), String> {
+    for (name, err) in &report.heads_failed {
+        eprintln!("could not update {name}/-/HEAD: {err}");
+    }
+    match report.failed {
+        Some(err) => Err(err.to_string()),
+        None if report.heads_failed.is_empty() => Ok(()),
+        None => Err("some upstreams' HEADs could not be updated".into()),
+    }
 }

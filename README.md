@@ -88,6 +88,10 @@ h store worktree nixpkgs staging              # a detached checkout in a tempora
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
 
+`h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
+accessible) keeps none of the others from being fetched. Git names each one that failed, and
+the fetch then exits nonzero, so a timer running it shows the failure.
+
 Terms given to `store` commands match upstreams already in the store first, so a name as
 `h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and
 `nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub.

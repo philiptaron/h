@@ -55,6 +55,17 @@ pub fn maintenance_tasks(schedule: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// What [`Store::fetch`] could not do; it did everything else.
+#[derive(Debug, Default)]
+pub struct FetchReport {
+    /// How fetching failed, for one upstream or more. Git names each one as it fails.
+    pub failed: Option<GitError>,
+    /// The nested upstreams whose `<name>/-/HEAD` could not be updated, and why.
+    pub heads_failed: Vec<(String, GitError)>,
+    /// The nested upstreams with no default branch, whose `<name>/-/HEAD` is left as it was.
+    pub headless: Vec<String>,
+}
+
 /// A store on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Store {
@@ -280,12 +291,13 @@ impl Store {
     }
 
     /// Fetch the named upstreams, or all of them when `names` is empty, then point the
-    /// `<name>/-/HEAD` of each nested one at its default branch. Returns the nested upstreams
-    /// with no default branch to point at, whose HEAD is left as it was.
+    /// `<name>/-/HEAD` of each nested one at its default branch. This is best-effort: an
+    /// upstream that cannot be fetched, or whose HEAD cannot be read, keeps none of the others
+    /// from being brought up to date, and the report says what failed.
     ///
     /// Tags are never pruned, even in stores made before [`STORE_CONFIG`] said so: git passes
     /// `--no-prune-tags` on to the fetch of each upstream.
-    pub fn fetch(&self, names: &[String], quiet: bool) -> Result<Vec<String>, GitError> {
+    pub fn fetch(&self, names: &[String], quiet: bool) -> Result<FetchReport, GitError> {
         let mut args = vec!["fetch", "--prune", "--no-prune-tags", "--no-write-fetch-head"];
         if quiet {
             args.push("--quiet");
@@ -296,15 +308,18 @@ impl Store {
             args.push("--multiple");
             args.extend(names.iter().map(String::as_str));
         }
-        git::run(self.dir(), &args)?;
+        // Git fetches every upstream it can, names those it cannot, and then fails.
+        let mut report =
+            FetchReport { failed: git::run(self.dir(), &args).err(), ..Default::default() };
         let fetched = if names.is_empty() { self.remotes()? } else { names.to_vec() };
-        let mut headless = Vec::new();
         for name in fetched {
-            if self.is_nested(&name)? && !self.set_head(&name)? {
-                headless.push(name);
+            match self.is_nested(&name).and_then(|nested| Ok(nested && !self.set_head(&name)?)) {
+                Ok(true) => report.headless.push(name),
+                Ok(false) => {}
+                Err(err) => report.heads_failed.push((name, err)),
             }
         }
-        Ok(headless)
+        Ok(report)
     }
 
     /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or

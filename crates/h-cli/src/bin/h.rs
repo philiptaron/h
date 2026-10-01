@@ -13,7 +13,7 @@ use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo};
 use h_git::github;
-use h_git::resolve::{Resolution, Target, parse_term, resolve};
+use h_git::resolve::{Resolution, Target, escape_segment, parse_term, remote_name, resolve};
 use h_git::store::Store;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -221,7 +221,7 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
     let existing = store.remotes().map_err(|e| e.to_string())?;
     let target = parse_term(term).map_err(|_| format!("Unknown pattern for {term}"))?;
     let candidate = match &target {
-        Target::GitHub { user, repo } => Some(format!("github.com/{user}/{repo}")),
+        Target::GitHub { user, repo } => Some(remote_name("github.com", &format!("{user}/{repo}"))),
         Target::Remote { .. } | Target::Name(_) => None,
     };
     if let Some(candidate) = candidate
@@ -230,6 +230,7 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
         return Ok(Upstream { name: name.clone(), url: None });
     }
     if let Target::Name(name) = &target {
+        let name = &escape_segment(name);
         let case_sensitive = name.bytes().any(|b| b.is_ascii_uppercase());
         let matches: Vec<&String> = existing
             .iter()

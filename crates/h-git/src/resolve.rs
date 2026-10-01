@@ -98,11 +98,37 @@ fn strip_git_suffix(s: &str) -> &str {
 }
 
 /// The store's name for the repository at `host` and `path`: the two joined by `/`, without
-/// empty segments, which git rejects in remote names (`file:///abs/path` has an empty host).
-fn remote_name(host: &str, path: &str) -> String {
+/// empty segments (`file:///abs/path` has an empty host) and with each segment escaped as
+/// [`escape_segment`] does, since git rejects remote names that are not valid in a ref.
+pub fn remote_name(host: &str, path: &str) -> String {
     let segments: Vec<&str> =
         std::iter::once(host).chain(path.split('/')).filter(|s| !s.is_empty()).collect();
-    strip_git_suffix(&segments.join("/")).to_string()
+    escape_name(strip_git_suffix(&segments.join("/")))
+}
+
+/// `name` without empty segments, and with each segment escaped as [`escape_segment`] does.
+fn escape_name(name: &str) -> String {
+    let segments: Vec<String> =
+        name.split('/').filter(|s| !s.is_empty()).map(escape_segment).collect();
+    segments.join("/")
+}
+
+/// One segment of a store name, made valid in a ref: characters git forbids become `_`, `..`
+/// and `@{` are broken up, and a segment starting with `.` (as `~/.local` does) or ending with
+/// `.` or `.lock` gets a `_` added at that end.
+pub fn escape_segment(segment: &str) -> String {
+    let mut out: String = segment
+        .chars()
+        .map(|c| if c.is_ascii_control() || " ~^:?*[\\".contains(c) { '_' } else { c })
+        .collect();
+    out = out.replace("..", "._").replace("@{", "@_");
+    if out.starts_with('.') {
+        out.insert(0, '_');
+    }
+    if out.ends_with('.') || out.ends_with(".lock") {
+        out.push('_');
+    }
+    out
 }
 
 /// Strip a trailing `.git` from a path, provided something precedes it.
@@ -148,7 +174,7 @@ pub fn resolve(
             Ok(Resolution {
                 path: concat_path(code_root, &["github.com", &user, &repo]),
                 clone_url: Some(format!("https://github.com/{user}/{repo}.git")),
-                remote: Some(format!("github.com/{user}/{repo}")),
+                remote: Some(remote_name("github.com", &format!("{user}/{repo}"))),
                 upstream_url: parent.map(|parent| format!("https://github.com/{parent}.git")),
             })
         }
@@ -161,7 +187,7 @@ pub fn resolve(
         Target::Name(name) => {
             let path = search(code_root, &name).ok_or_else(not_found)?;
             let remote =
-                path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(String::from);
+                path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(escape_name);
             Ok(Resolution { path, clone_url: None, remote, upstream_url: None })
         }
     }
@@ -301,6 +327,33 @@ mod tests {
         assert_eq!(res.remote, Some("srv/git/proj".into()));
         let res = resolve(Path::new("/code"), "https://host//a/b/", |_, _| None).unwrap();
         assert_eq!(res.remote, Some("host/a/b".into()));
+    }
+
+    #[test]
+    fn remote_names_are_valid_in_refs() {
+        let res = resolve(Path::new("/code"), "file:///home/me/.local/x.lock.git", |_, _| None);
+        assert_eq!(res.unwrap().remote, Some("home/me/_.local/x.lock_".into()));
+        let res = resolve(Path::new("/code"), "owner/.github", |_, _| None);
+        assert_eq!(res.unwrap().remote, Some("github.com/owner/_.github".into()));
+        for (segment, escaped) in [
+            ("plain-name_1.2", "plain-name_1.2"),
+            (".hidden", "_.hidden"),
+            ("trailing.", "trailing._"),
+            ("a..b", "a._b"),
+            ("a...b", "a._.b"),
+            ("x@{y}", "x@_y}"),
+            ("~me", "_me"),
+            ("sp ace:col?*[\\", "sp_ace_col____"),
+        ] {
+            assert_eq!(escape_segment(segment), escaped, "{segment}");
+            let refname = format!("refs/remotes/host/{escaped}/main");
+            let ok = std::process::Command::new("git")
+                .args(["check-ref-format", &refname])
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{refname}");
+        }
     }
 
     #[test]

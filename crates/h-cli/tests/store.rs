@@ -140,14 +140,15 @@ fn add_names_upstreams_by_path_and_namespaces_their_tags() {
 #[test]
 fn add_accepts_file_urls() {
     let sb = Sandbox::new();
-    // Git rejects remote names with a segment starting with `.`, as temporary directories do.
-    let dir = tempfile::Builder::new().prefix("h-store-").tempdir().unwrap();
-    let src = dir.path().join("proj");
+    // Git rejects remote names with a segment starting with `.`, so the store escapes them.
+    let dir = tempfile::Builder::new().prefix(".h-store-").tempdir().unwrap();
+    let src = dir.path().join(".proj");
     make_git_repo(&src);
     sb.ok(&["add", &format!("file://{}", src.display())]);
     let name = sb.ok(&["list"]).stdout;
-    assert_eq!(name, format!("{}\n", src.strip_prefix("/").unwrap().display()));
-    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+    let dir_name = dir.path().file_name().unwrap().to_str().unwrap();
+    assert!(name.ends_with(&format!("/_{dir_name}/_.proj\n")), "{name}");
+    assert_eq!(sb.ok(&["show", ".proj", "main:README"]).stdout, "hello\n");
 }
 
 #[test]

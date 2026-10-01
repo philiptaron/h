@@ -41,7 +41,8 @@ clone.
 ## The object store
 
 A store is one bare repository holding many unrelated upstream repositories as remotes, each
-named by the path `h` would clone it to. Branches live under `refs/remotes/<name>/` and tags
+named by the path `h` would clone it to (with any part git cannot use in a ref escaped, so
+`.local` becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags
 under `refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
 `github.com/torvalds/linux/v6.12` both resolve and nothing collides. The store is never pushed
 to and never pruned, and clones made with a store configured borrow its objects through

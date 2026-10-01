@@ -242,7 +242,10 @@ struct Upstream {
 /// lookup, and finding a bare project name among the upstreams' last path segments. A name as
 /// `h store list` prints it is taken as it is.
 fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, String> {
-    let existing = store.remotes().map_err(|e| e.to_string())?;
+    let existing = match store.exists() {
+        true => store.remotes().map_err(|e| e.to_string())?,
+        false => Vec::new(),
+    };
     if existing.iter().any(|r| r == term) {
         return Ok(Upstream { name: term.to_string(), url: None });
     }
@@ -362,27 +365,60 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     if terms.is_empty() {
         return Err("Usage: h store add <term>...".into());
     }
+    // Every term is checked before anything changes.
+    let mut upstreams: Vec<Upstream> = Vec::new();
+    for term in terms {
+        let upstream = upstream_for(config, store, term)?;
+        if !upstreams.iter().any(|u| u.name == upstream.name) {
+            upstreams.push(upstream);
+        }
+    }
     if !store.exists() {
         store.init(&config.git_opts).map_err(|e| e.to_string())?;
     }
-    let mut names = Vec::new();
-    for term in terms {
-        let upstream = upstream_for(config, store, term)?;
-        match &upstream.url {
-            Some(url) => match store.add_remote(&upstream.name, url) {
-                Ok(true) => eprintln!("added {}", upstream.name),
-                Ok(false) => eprintln!("{} is already in the store", upstream.name),
-                Err(e) => return Err(e.to_string()),
-            },
-            None => eprintln!("{} is already in the store", upstream.name),
+    let mut added = Vec::new();
+    for Upstream { name, url } in &upstreams {
+        let Some(url) = url else {
+            eprintln!("{name} is already in the store");
+            continue;
+        };
+        match store.add_remote(name, url) {
+            Ok(true) => {
+                eprintln!("added {name}");
+                added.push(name.clone());
+            }
+            Ok(false) => eprintln!("{name} is already in the store"),
+            Err(e) => {
+                remove_again(store, &added, "since adding the rest failed");
+                return Err(e.to_string());
+            }
         }
-        names.push(upstream.name);
     }
-    let report = store.fetch(&names, false).map_err(|e| e.to_string())?;
+    let names: Vec<String> = upstreams.into_iter().map(|u| u.name).collect();
+    let mut report = store.fetch(&names, false).map_err(|e| e.to_string())?;
+    // An upstream that has nothing after a failed fetch was the one, or one of those, that
+    // failed: it goes again, so the store never holds an upstream that was never fetched.
+    if report.failed.is_some() {
+        let unfetched: Vec<String> =
+            added.into_iter().filter(|name| !store.has_refs(name).unwrap_or(true)).collect();
+        remove_again(store, &unfetched, "since it could not be fetched");
+        report.headless.retain(|name| !unfetched.contains(name));
+        report.heads_failed.retain(|(name, _)| !unfetched.contains(name));
+    }
     for name in &report.headless {
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not set");
     }
     fetch_result(report)
+}
+
+/// Take the upstreams `store add` just added out of the store again, saying so and `why`.
+fn remove_again(store: &Store, names: &[String], why: &str) {
+    for name in names {
+        match store.remove_remote(name) {
+            Ok(()) => eprintln!("removed {name} again, {why}"),
+            Err(e) => eprintln!("could not remove {name} again: {e}"),
+        }
+    }
 }
 
 fn store_remove(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {

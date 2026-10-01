@@ -208,6 +208,14 @@ impl Store {
         Ok(configured.lines().any(|r| r == nested_heads))
     }
 
+    /// Whether upstream `name` has any branch or tag, as one that was ever fetched does.
+    pub fn has_refs(&self, name: &str) -> Result<bool, GitError> {
+        let prefix = self.prefix(name)?;
+        let (branches, tags) = (format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/"));
+        let args = ["for-each-ref", "--count=1", "--format=x", &branches, &tags];
+        Ok(!git::output(self.dir(), &args)?.is_empty())
+    }
+
     /// What `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
     fn prefix(&self, name: &str) -> Result<String, GitError> {
         Ok(if self.is_nested(name)? { format!("{name}/-") } else { name.to_string() })

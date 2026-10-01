@@ -90,7 +90,9 @@ h store maintain daily                        # commit-graph, incremental repack
 
 `h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
 accessible) keeps none of the others from being fetched. Git names each one that failed, and
-the fetch then exits nonzero, so a timer running it shows the failure.
+the fetch then exits nonzero, so a timer running it shows the failure. `h store add` checks
+every term before it changes anything, and takes an upstream it added out again when its first
+fetch fails, so the store never holds one that was never fetched.
 
 Terms given to `store` commands match upstreams already in the store first, so a name as
 `h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and

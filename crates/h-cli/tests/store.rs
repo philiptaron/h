@@ -340,6 +340,42 @@ fn heads_follow_a_renamed_default_branch() {
 }
 
 #[test]
+fn add_checks_every_term_first_and_takes_back_what_it_cannot_fetch() {
+    let sb = Sandbox::new();
+    // A bad term changes nothing, not even by creating the store.
+    let out = sb.h(&["add", PROJ_URL, "nope"]);
+    assert_eq!((out.code, out.stderr), (Some(1), "nope is not in the store\n".into()));
+    assert!(!sb.store.exists());
+
+    // An upstream whose first fetch fails is taken out again; the others stay, fetched.
+    let typo = "https://example.com/owner/typo.git";
+    rewrite_url(sb.root(), typo, &sb.tmp.path().join("missing"));
+    let out = sb.h(&["add", PROJ_URL, typo]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    let removed = "removed example.com/owner/typo again, since it could not be fetched\n";
+    assert!(out.stderr.contains(removed), "{out:?}");
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}\n"));
+    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+
+    // An upstream already in the store is left alone when another fails beside it.
+    let out = sb.h(&["add", "proj", typo]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert!(out.stderr.contains(&format!("{PROJ} is already in the store\n")), "{out:?}");
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}\n"));
+    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+
+    // An inner upstream that fails leaves the outer one nested, and whole.
+    let inner = "https://example.com/owner/proj/missing.git";
+    rewrite_url(sb.root(), inner, &sb.tmp.path().join("missing"));
+    let out = sb.h(&["add", inner]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}\n"));
+    assert!(!out.stderr.contains("/-/HEAD"), "nothing about the removed one's HEAD: {out:?}");
+    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+    assert!(refs(&sb).contains(&format!("refs/remotes/{PROJ}/-/main")), "{}", refs(&sb));
+}
+
+#[test]
 fn remove_forgets_an_upstream_and_only_its_refs() {
     let sb = Sandbox::new();
     let sub_url = add_sub_source(&sb);

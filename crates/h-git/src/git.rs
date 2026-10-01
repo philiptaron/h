@@ -63,7 +63,7 @@ fn stderr_as_stdout() -> Stdio {
 /// rev-parse --local-env-vars`, less the configuration given with `git -c`
 /// (`GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`), which git too keeps when it runs a command
 /// in another repository.
-const LOCAL_REPO_ENV: &[&str] = &[
+pub const LOCAL_REPO_ENV: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_OBJECT_DIRECTORY",

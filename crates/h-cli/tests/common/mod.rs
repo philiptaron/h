@@ -15,11 +15,18 @@ use std::thread;
 /// An API address where nothing listens, so GitHub lookups fail fast without touching the network.
 pub const UNREACHABLE_API: &str = "http://127.0.0.1:1";
 
-/// A command with an environment insulated from the user's: no proxies, no direnv, no real GitHub.
+/// A command with an environment insulated from the user's: no proxies, no direnv, no real
+/// GitHub, no code root or store from the user's shell, and none of the variables that tie git
+/// to a repository, as a hook or `git rebase --exec` would have them, `git -c` settings included.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
+    let git_config = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
+    for var in h_git::git::LOCAL_REPO_ENV.iter().chain(&git_config) {
+        cmd.env_remove(var);
+    }
     for var in [
         "H_CODE_ROOT",
+        "H_STORE",
         "DIRENV_DIR",
         "http_proxy",
         "https_proxy",

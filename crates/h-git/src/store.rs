@@ -234,7 +234,7 @@ impl Store {
     }
 
     /// What `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
-    fn prefix(&self, name: &str) -> Result<String, GitError> {
+    pub fn prefix(&self, name: &str) -> Result<String, GitError> {
         Ok(if self.is_nested(name)? { format!("{name}/-") } else { name.to_string() })
     }
 

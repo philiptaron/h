@@ -15,6 +15,7 @@ use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
 use h_git::git::config_pairs;
 use h_git::github;
 use h_git::hook;
+use h_git::ingest;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
 };
@@ -42,6 +43,9 @@ Commands:
   store worktree <term> <ref> [DIR]
                               clone the upstream from the store into DIR (default: a temporary
                               directory) and check <ref> out there
+  store ingest [DIR]          put the checkout at DIR (default: here) under the store: its upstreams
+                              and its submodules' in the store, missing submodules cloned, and its
+                              objects borrowed from the store instead of kept
   store maintain [hourly|daily|weekly]
                               run the store's maintenance tasks (default: daily)
   hook worktree-create        Claude Code's WorktreeCreate hook: read its JSON on stdin, add a
@@ -356,6 +360,10 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
             }
             _ => Err("Usage: h store worktree <term> <ref> [DIR]".into()),
         },
+        Some("ingest") => match rest {
+            [] | [_] => store_ingest(config, store, rest.first().map(|dir| absolute(dir))),
+            _ => Err("Usage: h store ingest [DIR]".into()),
+        },
         Some("maintain") => match terms.as_slice() {
             [] => store.maintain("daily").map_err(|e| e.to_string()),
             [schedule] => store.maintain(schedule).map_err(|e| e.to_string()),
@@ -471,6 +479,47 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not updated");
     }
     fetch_result(report)
+}
+
+/// `h store ingest [DIR]`: put the checkout at `dir`, or the current directory, under the store
+/// it already borrows from, or else under `store`, creating it if needed.
+///
+/// The git options are the identity for `store`, so a checkout that borrows from another store,
+/// as a clone made with another identity's shell function does, uses its own identity instead.
+fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<(), String> {
+    let dir = match dir {
+        Some(dir) => dir,
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let target = ingest::store_for(&dir, Some(store)).unwrap_or_else(|| store.clone());
+    let identity = if target == *store {
+        config_pairs(&config.git_opts)
+    } else {
+        eprintln!("{} borrows from the store at {}", dir.display(), target.path.display());
+        Vec::new()
+    };
+    if !target.exists() {
+        target.init(&config.git_opts).map_err(|e| e.to_string())?;
+    }
+    let report = ingest::ingest(&target, &dir, &identity, ingest::Scope::Everything)
+        .map_err(|e| e.to_string())?;
+    ingest_result(report)
+}
+
+/// Say what an ingest added to the store and could not do, and fail when it did not do everything.
+fn ingest_result(report: ingest::Report) -> Result<(), String> {
+    for name in &report.added {
+        eprintln!("added {name}");
+    }
+    for name in &report.removed_again {
+        eprintln!("removed {name} again, since it could not be fetched");
+    }
+    for failure in &report.failures {
+        eprintln!("{failure}");
+    }
+    let complete = report.failures.is_empty();
+    fetch_result(report.fetch)?;
+    if complete { Ok(()) } else { Err("the checkout is not wholly under the store".into()) }
 }
 
 /// Fail when a fetch did not do everything, after naming the upstreams whose HEAD it could not

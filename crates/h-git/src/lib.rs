@@ -6,6 +6,7 @@ pub mod clone;
 pub mod git;
 pub mod github;
 pub mod hook;
+pub mod ingest;
 pub mod resolve;
 pub mod search;
 pub mod store;

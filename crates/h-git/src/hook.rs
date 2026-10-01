@@ -84,7 +84,7 @@ fn slug(name: &str) -> (String, String) {
 }
 
 /// The output of `git` in `dir`, trimmed, or `None` when it fails.
-fn query(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn query(dir: &Path, args: &[&str]) -> Option<String> {
     let out = git::output(Some(dir), args).ok()?;
     Some(out.trim().to_string()).filter(|out| !out.is_empty())
 }
@@ -96,7 +96,7 @@ fn commit(dir: &Path, rev: &str) -> Option<String> {
 
 /// The repository `dir` belongs to: its common git directory, which is the main repository's
 /// even from inside one of its worktrees.
-fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
+pub(crate) fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
     query(dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .map(PathBuf::from)
         .ok_or_else(|| GitError::Invalid(format!("{} is not in a git repository", dir.display())))
@@ -104,7 +104,7 @@ fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
 
 /// The directory that holds the repository whose common git directory is `common`: the clone
 /// for `<clone>/.git`, the container for `<container>/.bare`, and a bare repository itself.
-fn repository_root(common: &Path) -> PathBuf {
+pub(crate) fn repository_root(common: &Path) -> PathBuf {
     let parent = common.parent().unwrap_or(common);
     match common.file_name().and_then(|name| name.to_str()) {
         Some(".git") => parent.to_path_buf(),
@@ -115,7 +115,7 @@ fn repository_root(common: &Path) -> PathBuf {
 
 /// The store the repository at `common` borrows objects from: the one its
 /// `objects/info/alternates` names, which is the store the clone was made with, else `fallback`.
-fn borrowed_store(common: &Path, fallback: Option<&Store>) -> Option<Store> {
+pub(crate) fn borrowed_store(common: &Path, fallback: Option<&Store>) -> Option<Store> {
     let objects = common.join("objects");
     let alternates = std::fs::read_to_string(objects.join("info/alternates")).unwrap_or_default();
     let named = alternates
@@ -133,7 +133,7 @@ fn borrowed_store(common: &Path, fallback: Option<&Store>) -> Option<Store> {
 
 /// The remotes that matter for a base: `upstream`, for a fork, and the clone's own (`origin`, or
 /// its only other remote).
-fn remotes(root: &Path) -> (Option<String>, Option<String>) {
+pub(crate) fn remotes(root: &Path) -> (Option<String>, Option<String>) {
     let all: Vec<String> =
         query(root, &["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let upstream = all.iter().find(|r| *r == "upstream").cloned();

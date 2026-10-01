@@ -81,12 +81,11 @@ commits. A clone only tells the server about the store history it shares, its ow
 fork's parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does
 not make every clone and fetch list all of their commits first. Their submodules borrow from it too:
 `h` clones them itself, with `git submodule update --init --recursive --reference <store>`, since
-git would look for them in the store's `modules/` directory. Only the first clone does this; for a
-submodule added later, pass `--reference "$H_STORE"` to `git submodule update` yourself. A clone
-given its own `--reference` with submodules uses only that, as git does. A store keeps its refs in a
-reftable, where names that differ only in case coexist even on macOS and pruning one ref does not
-rewrite the rest, so anything that reads the store's refs, including the git of a clone that borrows
-from it, needs git 2.45 or later.
+git would look for them in the store's `modules/` directory. For a submodule added later, run `h
+store ingest` (below). A clone given its own `--reference` with submodules uses only that, as git
+does. A store keeps its refs in a reftable, where names that differ only in case coexist even on
+macOS and pruning one ref does not rewrite the rest, so anything that reads the store's refs,
+including the git of a clone that borrows from it, needs git 2.45 or later.
 
 ```bash
 h store init                                  # create it
@@ -99,8 +98,22 @@ h store show nixpkgs master:lib/default.nix   # a file, straight from the store
 h store show torvalds/linux v6.12             # a commit
 h store show nixpkgs 1f0e2d3:flake.nix         # commit hashes work too
 h store worktree nixpkgs staging              # a cheap clone at staging, in a temporary directory
+h store ingest ~/code/github.com/me/project   # put a checkout and its submodules under the store
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
+
+`h store ingest [DIR]` (by default, the checkout here) puts a checkout under the store, as if it had
+been cloned with the store in the first place: a clone made before the store, or one whose
+submodules a pull has changed. Its remote and, for a fork, its upstream, become upstreams in the
+store, and so does every submodule's repository, at every level. Submodules not yet cloned are
+cloned, borrowing from the store. The checkout and each submodule then borrow the store's objects
+and give up their own copies of them (`git repack -a -d -l --cruft`, so nothing the store lacks is
+lost, reachable or not). An upstream new to the store is fetched from the checkout first, its
+remote-tracking branches and tags but never its local branches, so its history is not downloaded
+again; the fetch from its URL that follows brings only what changed. A shallow or partial clone is
+not fetched from and keeps its objects. A checkout that borrows from another store already, as one
+made with another identity's `h` function does, is ingested into that one, with its own identity.
+Like `h store fetch`, it does what it can and names what it could not.
 
 `h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
 accessible) keeps none of the others from being fetched. Git names each one that failed, and

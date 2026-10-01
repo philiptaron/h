@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 h-core = { path = "crates/h-core" }
 h-git = { path = "crates/h-git" }
+libc = "0.2.189"
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }

@@ -266,3 +266,26 @@ fn maintain_runs_only_non_destructive_tasks() {
     let out = sb.h(&["maintain", "monthly"]);
     assert_eq!(out.code, Some(1));
 }
+
+#[test]
+fn clones_borrow_objects_from_the_store() {
+    let sb = Sandbox::new();
+    sb.ok(&["add", PROJ_URL]);
+    let root = sb.tmp.path().join("code");
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.root());
+    let out = run(cmd
+        .current_dir(sb.root())
+        .arg("--root")
+        .arg(&root)
+        .arg("--store")
+        .arg(&sb.store)
+        .args(["go", PROJ_URL]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let clone = root.join(PROJ);
+    assert_eq!(fs::read_to_string(clone.join("README")).unwrap(), "hello\n");
+    let alternates = fs::read_to_string(clone.join(".git/objects/info/alternates")).unwrap();
+    assert_eq!(alternates.trim_end(), sb.store.join("objects").to_str().unwrap());
+    let objects = run(sb.git(&clone).args(["count-objects", "-v"])).stdout;
+    assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
+}

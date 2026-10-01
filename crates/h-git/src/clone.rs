@@ -1,8 +1,9 @@
-//! Cloning repositories with `git`: optionally laying the clone out as a bare repository plus
-//! worktrees, and wiring up a fork's upstream so it can be pulled from but never pushed to.
+//! Cloning repositories with `git`: optionally borrowing objects from a store, laying the clone
+//! out as a bare repository plus worktrees, and wiring up a fork's upstream so it can be pulled
+//! from but never pushed to.
 
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
 use crate::git::{self, GitError, config_pairs, non_config_opts};
@@ -22,6 +23,8 @@ pub struct CloneRequest<'a> {
     pub git_opts: &'a [OsString],
     /// Options the user gave for this clone.
     pub extra: &'a [OsString],
+    /// An object store to borrow objects from, when it exists.
+    pub reference: Option<&'a Path>,
     /// Lay the clone out as `<path>/.bare` plus a `.git` file, with no working tree, so that all
     /// work happens in worktrees under `<path>`.
     pub container: bool,
@@ -44,11 +47,16 @@ fn decides_submodules(opts: &[OsString]) -> bool {
 
 /// Arguments to pass to `git` for a plain (non-container) clone.
 ///
-/// Submodules are cloned too unless an option says otherwise.
+/// Submodules are cloned too unless an option says otherwise, and objects are borrowed from the
+/// reference store when there is one.
 pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["clone".into()];
     if !decides_submodules(req.git_opts) && !decides_submodules(req.extra) {
         args.push("--recursive".into());
+    }
+    if let Some(reference) = req.reference {
+        args.push("--reference-if-able".into());
+        args.push(reference.into());
     }
     args.extend(req.git_opts.iter().cloned());
     args.extend(req.extra.iter().cloned());
@@ -101,6 +109,12 @@ fn clone_container(req: &CloneRequest) -> Result<(), GitError> {
     for (key, value) in config_pairs(&opts) {
         git::run(Some(&bare), &[OsString::from("config"), key, value])?;
     }
+    if let Some(reference) = req.reference.filter(|r| r.join("objects").is_dir()) {
+        let alternates = bare.join("objects/info/alternates");
+        let mut line = reference.join("objects").into_os_string().into_vec();
+        line.push(b'\n');
+        std::fs::write(&alternates, line).map_err(GitError::Spawn)?;
+    }
     git::run(Some(&bare), &["remote", "add", "origin", req.url])?;
     let mut fetch: Vec<OsString> = vec!["fetch".into()];
     fetch.extend(non_config_opts(req.extra));
@@ -140,6 +154,7 @@ mod tests {
             path: Path::new("/code/x/y"),
             git_opts,
             extra,
+            reference: None,
             container: false,
             upstream_url: None,
         }
@@ -179,5 +194,23 @@ mod tests {
             let args = git_clone_args(&request(&[], &extra));
             assert_eq!(strings(args), ["clone", opt, "--", "https://x/y.git", "/code/x/y"]);
         }
+    }
+
+    #[test]
+    fn borrows_from_the_reference_store() {
+        let mut req = request(&[], &[]);
+        req.reference = Some(Path::new("/store"));
+        assert_eq!(
+            strings(git_clone_args(&req)),
+            [
+                "clone",
+                "--recursive",
+                "--reference-if-able",
+                "/store",
+                "--",
+                "https://x/y.git",
+                "/code/x/y"
+            ]
+        );
     }
 }

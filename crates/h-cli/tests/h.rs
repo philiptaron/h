@@ -376,6 +376,53 @@ fn bare_clones_are_not_recursive() {
 }
 
 #[test]
+fn clones_borrow_from_an_existing_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = tmp.path().join("store");
+    let init = git_command(tmp.path()).args(["init", "-q", "--bare"]).arg(&store).status().unwrap();
+    assert!(init.success());
+    let git = FakeGit::install(tmp.path());
+    let url = "https://example.com/proj";
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let out = run(cmd
+        .current_dir(tmp.path())
+        .arg("--root")
+        .arg(tmp.path())
+        .arg("--store")
+        .arg(&store)
+        .args(["go", url]));
+    let path = tmp.path().join("example.com/proj");
+    assert_resolved(&out, &path);
+    assert_eq!(
+        git.args().unwrap(),
+        [
+            "clone",
+            "--recursive",
+            "--reference-if-able",
+            store.to_str().unwrap(),
+            "--",
+            url,
+            path.to_str().unwrap()
+        ]
+    );
+
+    // A store that does not exist yet is simply not used.
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let out = run(cmd
+        .current_dir(tmp.path())
+        .arg("--root")
+        .arg(tmp.path().join("other"))
+        .env("H_STORE", tmp.path().join("missing"))
+        .args(["go", url]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let args = git.args().unwrap();
+    assert_eq!(args[..2], ["clone", "--recursive"]);
+    assert!(!args.contains(&"--reference-if-able".to_string()), "{args:?}");
+}
+
+#[test]
 fn does_not_clone_existing_directories() {
     let tmp = tempfile::tempdir().unwrap();
     mkdirs(tmp.path(), &["example.com/proj"]);

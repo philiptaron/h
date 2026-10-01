@@ -162,11 +162,13 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
         return fail_with_cwd(&format!("{term} not found"));
     };
 
+    let store = config.store.as_ref().filter(|s| s.exists());
     let request = CloneRequest {
         url,
         path: &resolution.path,
         git_opts: &config.git_opts,
         extra: &extra,
+        reference: store.map(|s| s.path.as_path()),
         container,
         upstream_url: resolution.upstream_url.as_deref(),
     };

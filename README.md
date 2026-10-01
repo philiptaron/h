@@ -29,11 +29,9 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
   `<dir>/.bare` with a `.git` file beside it and no working tree, for projects worked on only
   through `git worktree add`
 
-Clones recurse into submodules unless an option says otherwise.
-
-When GitHub says the repository is a fork, the clone gets an `upstream` remote that can be
-fetched but not pushed to (its push URL is `no_push`) and `origin`, the fork, becomes the default
-push target.
+Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
+is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push
+URL is `no_push`) and `origin`, the fork, becomes the default push target.
 
 ## The object store
 
@@ -41,7 +39,8 @@ A store is one bare repository holding many unrelated upstream repositories as r
 named by the path `h` would clone it to. Branches live under `refs/remotes/<name>/` and tags
 under `refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
 `github.com/torvalds/linux/v6.12` both resolve and nothing collides. The store is never pushed
-to and never pruned.
+to and never pruned, and clones made with a store configured borrow its objects through
+`git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits.
 
 ```bash
 h store init                                  # create it

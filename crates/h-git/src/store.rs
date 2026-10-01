@@ -91,7 +91,11 @@ impl Store {
     /// reapplies the configuration.
     ///
     /// The store holds SHA-1 objects whatever the default for new repositories is, since a
-    /// repository holds a single object format and nearly every upstream is SHA-1.
+    /// repository holds a single object format and nearly every upstream is SHA-1. Its refs are
+    /// kept in a reftable (git 2.45), which suits a store of many upstreams' refs: names that
+    /// differ only in case (`gitlab.com/GNOME/x` beside `gitlab.com/gnome/y`) coexist on macOS,
+    /// pruning a ref does not rewrite every other one, and moving many refs at once, as nesting an
+    /// upstream does, is atomic.
     pub fn init(&self, git_opts: &[OsString]) -> Result<(), GitError> {
         if !self.exists() {
             if let Some(parent) = self.path.parent() {
@@ -102,6 +106,7 @@ impl Store {
                 "--bare".into(),
                 "--quiet".into(),
                 "--object-format=sha1".into(),
+                "--ref-format=reftable".into(),
                 self.path.clone().into(),
             ];
             git::run(None, &args)?;

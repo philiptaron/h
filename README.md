@@ -53,26 +53,26 @@ and its worktrees can be moved together; the first such worktree turns on the
 
 ## The object store
 
-A store is one bare repository holding many unrelated upstream repositories as remotes, each
-named by the path `h` would clone it to (with any part git cannot use in a ref escaped, so
-`.local` becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags under
-`refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
-`github.com/torvalds/linux/v6.12` both resolve and nothing collides, and every fetch points
-`<name>/HEAD` at the upstream's current default branch. An upstream whose name
-another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps its
-refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
-the inner one moves the outer one's refs over, and they stay there if the inner one is
-removed again. The store is never pushed
-to and never pruned, and clones made with a store configured borrow its objects through
-`git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits. A
-clone only tells the server about the store history it shares, its own upstream's and a fork's
-parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does not
-make every clone and fetch list all of their commits first.
-Their submodules borrow from it too: `h` clones them itself, with `git submodule update --init
---recursive --reference <store>`, since git would look for them in the store's `modules/`
-directory. Only the first clone does this; for a submodule added later, pass `--reference
-"$H_STORE"` to `git submodule update` yourself. A clone given its own `--reference` with
-submodules uses only that, as git does.
+A store is one bare repository holding many unrelated upstream repositories as remotes, each named
+by the path `h` would clone it to (with any part git cannot use in a ref escaped, so `.local`
+becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags under `refs/tags/<name>/`,
+so `github.com/NixOS/nixpkgs/master` and `github.com/torvalds/linux/v6.12` both resolve and nothing
+collides, and every fetch points `<name>/HEAD` at the upstream's current default branch. An upstream
+whose name another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps
+its refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
+the inner one moves the outer one's refs over, and they stay there if the inner one is removed
+again. The store is never pushed to and never pruned, and clones made with a store configured borrow
+its objects through `git clone --reference-if-able`, so a clone of a fork costs only the fork's own
+commits. A clone only tells the server about the store history it shares, its own upstream's and a
+fork's parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does
+not make every clone and fetch list all of their commits first. Their submodules borrow from it too:
+`h` clones them itself, with `git submodule update --init --recursive --reference <store>`, since
+git would look for them in the store's `modules/` directory. Only the first clone does this; for a
+submodule added later, pass `--reference "$H_STORE"` to `git submodule update` yourself. A clone
+given its own `--reference` with submodules uses only that, as git does. A store keeps its refs in a
+reftable, where names that differ only in case coexist even on macOS and pruning one ref does not
+rewrite the rest, so anything that reads the store's refs, including the git of a clone that borrows
+from it, needs git 2.45 or later.
 
 ```bash
 h store init                                  # create it

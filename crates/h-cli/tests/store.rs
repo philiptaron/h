@@ -92,6 +92,8 @@ fn init_creates_a_bare_store_that_never_prunes() {
     assert_eq!(sb.store_config("maintenance.gc.enabled"), "false");
     assert_eq!(sb.store_config("maintenance.prefetch.enabled"), "false");
     assert_eq!(sb.store_config("credential.username"), "me");
+    let format = run(sb.git(&sb.store).args(["rev-parse", "--show-ref-format"]));
+    assert_eq!(format.stdout, "reftable\n");
     assert_eq!(sb.ok(&["path"]).stdout, format!("{}\n", sb.store.display()));
     assert_eq!(sb.ok(&["list"]).stdout, "");
 

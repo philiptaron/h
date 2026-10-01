@@ -418,6 +418,27 @@ fn names_from_the_list_are_terms() {
 }
 
 #[test]
+fn upstreams_not_in_the_store_are_named_as_such() {
+    let sb = Sandbox::new();
+    sb.ok(&["add", PROJ_URL]);
+    let other = "https://example.com/owner/other.git";
+    let dir = sb.tmp.path().join("wt");
+    for args in [
+        &["show", other, "main"][..],
+        &["worktree", other, "main", dir.to_str().unwrap()],
+        &["fetch", other],
+        &["fetch", "-q", "proj", other],
+    ] {
+        let out = sb.h(args);
+        assert_eq!(out.code, Some(1), "{args:?}: {out:?}");
+        assert_eq!(out.stderr, format!("{other} is not in the store\n"), "{args:?}");
+    }
+    assert!(!dir.exists());
+    // `remote` says what the name would be, in the store or not.
+    assert_eq!(sb.ok(&["remote", other]).stdout, "example.com/owner/other\n");
+}
+
+#[test]
 fn show_prints_files_and_commits_from_the_store() {
     let sb = Sandbox::new();
     sb.ok(&["add", PROJ_URL]);

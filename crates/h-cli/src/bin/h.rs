@@ -31,7 +31,7 @@ Commands:
                               fetch every upstream in the store, or only the named ones
   store list                  list the upstreams in the store
   store path                  print the store directory
-  store remote <term>         print the store's name for an upstream
+  store remote <term>         print the store's name for an upstream, in the store yet or not
   store show <term> <ref>[:<path>]
                               show a commit, or a file at a commit, from the store
   store worktree <term> <ref> [DIR]
@@ -231,7 +231,7 @@ fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
     }
 }
 
-/// An upstream in the store: its remote name and, when known, the URL to add it from.
+/// An upstream: its remote name and, when it is not in the store yet, the URL to add it from.
 struct Upstream {
     name: String,
     url: Option<String>,
@@ -276,8 +276,17 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
     }
     let resolution = resolve_term(config, term)?;
     match (resolution.remote, resolution.clone_url) {
+        (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None }),
         (Some(name), url @ Some(_)) => Ok(Upstream { name, url }),
         _ => Err(format!("{term} cannot be added to the store")),
+    }
+}
+
+/// The name of the upstream `term` names, which must be in the store.
+fn upstream_in_store(config: &Config, store: &Store, term: &str) -> Result<String, String> {
+    match upstream_for(config, store, term)? {
+        Upstream { name, url: None } => Ok(name),
+        Upstream { url: Some(_), .. } => Err(format!("{term} is not in the store")),
     }
 }
 
@@ -311,16 +320,16 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
             _ => Err("Usage: h store remote <term>".into()),
         },
         Some("show") => match terms.as_slice() {
-            [term, spec] => upstream_for(config, store, term)
-                .and_then(|u| store.show(&u.name, spec).map_err(|e| e.to_string())),
+            [term, spec] => upstream_in_store(config, store, term)
+                .and_then(|name| store.show(&name, spec).map_err(|e| e.to_string())),
             _ => Err("Usage: h store show <term> <ref>[:<path>]".into()),
         },
         Some("worktree") => match terms.as_slice() {
             [term, reference] | [term, reference, _] => {
                 let dir = rest.get(2).map(|d| absolute(d));
-                upstream_for(config, store, term).and_then(|u| {
+                upstream_in_store(config, store, term).and_then(|name| {
                     store
-                        .worktree(&u.name, reference, dir)
+                        .worktree(&name, reference, dir)
                         .map(|dir| print_path(&dir))
                         .map_err(|e| e.to_string())
                 })
@@ -380,7 +389,7 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
     let quiet = terms.iter().any(|t| *t == "-q" || *t == "--quiet");
     let mut names = Vec::new();
     for term in terms.iter().filter(|t| **t != "-q" && **t != "--quiet") {
-        names.push(upstream_for(config, store, term)?.name);
+        names.push(upstream_in_store(config, store, term)?);
     }
     for name in store.fetch(&names, quiet).map_err(|e| e.to_string())? {
         if !quiet {

@@ -181,6 +181,8 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
             bare.clone().into(),
         ],
     )?;
+    // Worktrees link to the container by relative paths, so the whole can be moved (git 2.48).
+    git::run(Some(&bare), &["config", "worktree.useRelativePaths", "true"])?;
     for (key, value) in config {
         git::run(Some(&bare), &[OsString::from("config"), key, value])?;
     }

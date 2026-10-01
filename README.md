@@ -43,7 +43,10 @@ and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a 
 the default branch. Like `git clone`, it takes the remote's object format (SHA-1 or SHA-256)
 rather than the default for new repositories. A remote with no default branch, such as an
 empty one, cannot be cloned this way. Only clone options that `git fetch` shares are accepted;
-`--no-tags` keeps later fetches from bringing tags too, as it does for `git clone`.
+`--no-tags` keeps later fetches from bringing tags too, as it does for `git clone`. Worktrees
+added to a container link to it by relative paths (`worktree.useRelativePaths`), so a container
+and its worktrees can be moved together; the first such worktree turns on the
+`extensions.relativeWorktrees` repository extension, which git before 2.48 cannot read.
 
 ## The object store
 

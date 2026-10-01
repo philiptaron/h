@@ -617,6 +617,38 @@ fn container_clones_take_the_remote_object_format() {
 }
 
 #[test]
+fn container_clones_can_be_moved_with_their_worktrees() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    make_git_repo(&src);
+    let root = tmp.path().join("code");
+    let url = "https://example.com/owner/proj.git";
+    rewrite_url(tmp.path(), url, &src);
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, tmp.path());
+    let out =
+        run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args(["go", url, "--container"]));
+    let path = root.join("example.com/owner/proj");
+    assert_resolved(&out, &path);
+    let git = |dir: &Path, args: &[&str]| {
+        let out = run(git_command(tmp.path()).arg("-C").arg(dir).args(args));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout.trim().to_string()
+    };
+    git(&path, &["worktree", "add", "--quiet", "feature"]);
+    let link = fs::read_to_string(path.join("feature/.git")).unwrap();
+    assert_eq!(link, "gitdir: ../.bare/worktrees/feature\n");
+
+    let moved = tmp.path().join("elsewhere");
+    fs::rename(&path, &moved).unwrap();
+    assert_eq!(git(&moved.join("feature"), &["rev-parse", "--abbrev-ref", "HEAD"]), "feature");
+    assert_eq!(git(&moved.join("feature"), &["status", "--porcelain"]), "");
+    let list = git(&moved, &["worktree", "list", "--porcelain"]);
+    assert!(list.contains(&format!("worktree {}\n", moved.join("feature").display())), "{list}");
+    assert!(!list.contains("prunable"), "{list}");
+}
+
+#[test]
 fn container_clones_keep_no_tags_for_later_fetches() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");

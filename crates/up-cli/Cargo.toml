@@ -1,0 +1,13 @@
+[package]
+name = "up-cli"
+description = "up: jump to the root of the project containing the current directory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+h-git.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

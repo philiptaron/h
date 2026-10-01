@@ -33,6 +33,12 @@ eval "$(up-shell-init [--pushd])"
 
 ## Development
 
+The code is a Cargo workspace:
+
+- `crates/h-git` - core library: resolving names, `user/repo` and URLs, GitHub lookups, cloning
+- `crates/h-cli` - the `h` and `h-shell-init` binaries
+- `crates/up-cli` - the `up` and `up-shell-init` binaries
+
 ```bash
 nix develop     # cargo, clippy, rustfmt, plus git, bash and zsh for the tests
 cargo test      # unit tests, plus end-to-end tests that run the shell functions in bash and zsh

@@ -9,5 +9,4 @@ pub mod github;
 pub mod resolve;
 pub mod search;
 pub mod shell;
-pub mod up;
 pub mod util;

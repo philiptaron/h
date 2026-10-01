@@ -74,7 +74,7 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
     }
     let result = if req.container { clone_container(req) } else { clone_plain(req) };
     let result = result.and_then(|()| match req.upstream_url {
-        Some(url) => add_upstream(&git_dir(req), url),
+        Some(url) => add_upstream(&git_dir(req), url, &history_opts(req.extra)),
         None => Ok(()),
     });
     match result {
@@ -120,6 +120,25 @@ fn container_fetch_opts(extra: &[OsString]) -> Result<Vec<OsString>, GitError> {
         }
     }
     Ok(out)
+}
+
+/// The options among a clone's `extra` that limit how much history is fetched, so that the
+/// upstream of a shallow or partial clone is fetched the same way instead of in full.
+fn history_opts(extra: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut iter = non_config_opts(extra).into_iter();
+    while let Some(opt) = iter.next() {
+        let text = opt.to_string_lossy();
+        match text.split_once('=') {
+            Some((name, _)) if FETCH_OPTIONS.contains(&name) => out.push(opt),
+            None if FETCH_OPTIONS.contains(&&*text) => {
+                out.push(opt);
+                out.extend(iter.next());
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Create `<path>/.bare` by fetching into a fresh bare repository, then point `<path>/.git` at
@@ -169,14 +188,18 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
 }
 
 /// Add `url` as the `upstream` remote of the repository at `dir`, fetchable but not pushable,
-/// and make `origin` the default push target.
-pub fn add_upstream(dir: &Path, url: &str) -> Result<(), GitError> {
+/// and make `origin` the default push target. `fetch_opts` (such as `--depth 1`) are passed to
+/// the first fetch.
+pub fn add_upstream(dir: &Path, url: &str, fetch_opts: &[OsString]) -> Result<(), GitError> {
     let dir = Some(dir);
     git::run(dir, &["remote", "add", "upstream", url])?;
     git::run(dir, &["config", "remote.upstream.pushurl", NO_PUSH])?;
     git::run(dir, &["config", "remote.upstream.tagOpt", "--no-tags"])?;
     git::run(dir, &["config", "remote.pushDefault", "origin"])?;
-    git::run(dir, &["fetch", "--quiet", "upstream"])
+    let mut fetch: Vec<OsString> = vec!["fetch".into(), "--quiet".into()];
+    fetch.extend(fetch_opts.iter().cloned());
+    fetch.push("upstream".into());
+    git::run(dir, &fetch)
 }
 
 #[cfg(test)]
@@ -254,6 +277,26 @@ mod tests {
             let err = container_fetch_opts(&opts(&[bad])).unwrap_err();
             assert_eq!(err.to_string(), msg);
         }
+    }
+
+    #[test]
+    fn upstreams_are_fetched_with_the_same_history_limits() {
+        let extra = opts(&[
+            "-c",
+            "a.b=c",
+            "--branch",
+            "dev",
+            "--depth",
+            "1",
+            "--filter=blob:none",
+            "--shallow-since=2020-01-01",
+            "-q",
+        ]);
+        assert_eq!(
+            history_opts(&extra),
+            opts(&["--depth", "1", "--filter=blob:none", "--shallow-since=2020-01-01"])
+        );
+        assert_eq!(history_opts(&opts(&["--recursive"])), opts(&[]));
     }
 
     #[test]

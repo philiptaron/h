@@ -309,6 +309,32 @@ fn forks_get_an_unpushable_upstream() {
 }
 
 #[test]
+fn shallow_forks_fetch_a_shallow_upstream() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("code");
+    let git = FakeGit::install(tmp.path());
+    let api = MockGitHub::start(&[(
+        "/repos/me/nixpkgs",
+        200,
+        r#"{"name": "nixpkgs", "owner": {"login": "me"}, "fork": true,
+            "parent": {"full_name": "NixOS/nixpkgs"}}"#,
+    )]);
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let out = run(cmd
+        .current_dir(tmp.path())
+        .env("H_GITHUB_API", &api.url)
+        .arg("--root")
+        .arg(&root)
+        .args(["go", "me/nixpkgs", "--depth", "1", "--branch", "dev"]));
+
+    let path = root.join("github.com/me/nixpkgs");
+    assert_resolved(&out, &path);
+    let fetch = ["-C", path.to_str().unwrap(), "fetch", "--quiet", "--depth", "1", "upstream"];
+    assert_eq!(git.args().unwrap(), fetch);
+}
+
+#[test]
 fn clones_other_urls_verbatim() {
     let tmp = tempfile::tempdir().unwrap();
     let git = FakeGit::install(tmp.path());

@@ -34,7 +34,9 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 
 Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
 is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push
-URL is `no_push`) and `origin`, the fork, becomes the default push target.
+URL is `no_push`) and `origin`, the fork, becomes the default push target. The upstream is
+fetched with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as the
+clone.
 
 ## The object store
 

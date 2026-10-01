@@ -1,7 +1,4 @@
-//! The shell that will run the generated functions, how they change directory, and the binary
-//! they call.
-
-use std::path::{Path, PathBuf};
+//! The shell that will run the generated functions, and how they change directory.
 
 /// The shell that will evaluate the generated code, which decides the completion code emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,24 +42,9 @@ impl CdCommand {
     }
 }
 
-/// The path of the executable `name` that sits next to the running executable.
-pub fn sibling_exe(name: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_else(|_| {
-        let argv0 = PathBuf::from(std::env::args_os().next().unwrap_or_default());
-        if argv0.is_absolute() {
-            argv0
-        } else {
-            let pwd = std::env::var_os("PWD").unwrap_or_else(|| ".".into());
-            Path::new(&pwd).join(argv0)
-        }
-    });
-    exe.with_file_name(name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
 
     #[test]
     fn detects_shell_from_comm() {
@@ -70,12 +52,5 @@ mod tests {
         assert_eq!(Shell::from_comm("zsh\n"), Shell::Zsh);
         assert_eq!(Shell::from_comm("fish\n"), Shell::Unknown);
         assert_eq!(Shell::from_comm(""), Shell::Unknown);
-    }
-
-    #[test]
-    fn sibling_exe_replaces_file_name() {
-        let up = sibling_exe("up");
-        assert_eq!(up.file_name(), Some(OsStr::new("up")));
-        assert_eq!(up.parent(), std::env::current_exe().unwrap().parent());
     }
 }

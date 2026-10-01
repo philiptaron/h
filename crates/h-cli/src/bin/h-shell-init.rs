@@ -9,9 +9,10 @@ use h_cli::shell_init::{
     CODE_ROOT_ENV, DEFAULT_CODE_ROOT, H_USAGE, parse_h_init_args, render_h_init,
 };
 use h_core::args::Command;
+use h_core::exe;
 use h_core::output::fail;
 use h_core::path::expand_tilde;
-use h_core::shell::{Shell, sibling_exe};
+use h_core::shell::Shell;
 
 fn main() -> ExitCode {
     let opts = match parse_h_init_args(std::env::args_os().skip(1)) {
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
     let Some(code_root) = code_root.to_str() else {
         return fail(&format!("Code root is not valid UTF-8: {}", code_root.display()));
     };
-    let exe = sibling_exe("h");
+    let exe = exe::sibling("h");
     let Some(exe) = exe.to_str() else {
         return fail(&format!("Path to h is not valid UTF-8: {}", exe.display()));
     };

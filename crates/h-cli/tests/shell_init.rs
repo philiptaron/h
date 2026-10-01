@@ -49,9 +49,20 @@ fn h_init_rejects_unknown_options() {
 fn h_init_points_at_sibling_h() {
     let out = run(command(H_SHELL_INIT).arg("/code"));
     assert_eq!(out.code, Some(0));
-    assert!(out.stdout.contains(&format!("command {H} --resolve \"/code\" \"$@\"")), "{out:?}");
+    let h = canonical(Path::new(H));
+    assert!(out.stdout.contains(&format!("command {h} --resolve \"/code\" \"$@\"")), "{out:?}");
     // Not run from bash or zsh, so no completion.
     assert!(!out.stdout.contains("complete"), "{out:?}");
+}
+
+#[test]
+fn h_init_from_path_calls_h_by_absolute_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin_dir = Path::new(H_SHELL_INIT).parent().unwrap();
+    let path = std::env::join_paths([bin_dir.to_path_buf()]).unwrap();
+    let out = run(command("h-shell-init").current_dir(tmp.path()).env("PATH", path).arg("/code"));
+    let h = canonical(Path::new(H));
+    assert!(out.stdout.contains(&format!("command {h} --resolve")), "{out:?}");
 }
 
 #[test]

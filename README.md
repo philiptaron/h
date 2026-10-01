@@ -121,6 +121,43 @@ h --store ~/.cache/git/me store fetch --quiet
 h --root ~/code resolve nixpkgs
 ```
 
+## Claude Code worktrees
+
+Claude Code gives agents with `isolation: "worktree"`, and `claude --worktree`, a git worktree of
+their own, by default branched from `origin/<default branch>`, which for a fork is the fork's
+own branch, usually behind. `h hook worktree-create` and `h hook worktree-remove` replace that
+through Claude Code's WorktreeCreate and WorktreeRemove hooks, reading the hook's JSON on stdin:
+
+- **worktree-create** adds the worktree to the clone the session is in (the main clone even from
+  one of its worktrees, and the container for a container clone) at
+  `<clone>/.claude/worktrees/<name>`, on the branch `worktree-<name>`, the same names Claude Code
+  uses itself, and prints its path. The branch starts from the store's copy of the upstream's
+  default branch, a fork's parent's or else the clone's own, as of the last `h store fetch`,
+  so it is fresh without touching the network. The store is the one the clone borrows objects
+  from, whatever `--store` or `$H_STORE` say, so each identity's clones use their own store.
+  Without it, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD. A worktree
+  that is already there is handed back, and a branch left by a removed one is checked out again.
+- **worktree-remove** commits whatever is uncommitted in the worktree, untracked files included,
+  to its branch (with hooks and signing off for that commit), gives a detached HEAD with commits
+  of its own a branch, and only then removes the worktree. Branches are never deleted. It leaves
+  alone, and fails, anything that is not the top of a worktree, and a worktree that is locked or
+  holds work git cannot commit, such as a repository inside it.
+
+Run the `h` binary itself, not the shell function, from Claude Code's `settings.json`:
+
+```json
+{
+  "hooks": {
+    "WorktreeCreate": [
+      { "hooks": [{ "type": "command", "command": "/path/to/bin/h hook worktree-create" }] }
+    ],
+    "WorktreeRemove": [
+      { "hooks": [{ "type": "command", "command": "/path/to/bin/h hook worktree-remove" }] }
+    ]
+  }
+}
+```
+
 ## up
 
 Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).

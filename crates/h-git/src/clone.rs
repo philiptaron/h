@@ -26,6 +26,10 @@ pub struct CloneRequest<'a> {
     pub extra: &'a [OsString],
     /// An object store to borrow objects from, when it exists.
     pub reference: Option<&'a Path>,
+    /// The upstreams in the store that share history with this clone (its own and, for a fork,
+    /// its parent's). Only their refs are offered to the server as history the clone already
+    /// has, instead of every ref in the store.
+    pub reference_names: &'a [String],
     /// Lay the clone out as `<path>/.bare` plus a `.git` file, with no working tree, so that all
     /// work happens in worktrees under `<path>`.
     pub container: bool,
@@ -58,6 +62,10 @@ pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     if let Some(reference) = req.reference {
         args.push("--reference-if-able".into());
         args.push(reference.into());
+        if let Some(prefixes) = alternate_refs_prefixes(req.reference_names) {
+            args.push("-c".into());
+            args.push(format!("core.alternateRefsPrefixes={prefixes}").into());
+        }
     }
     args.extend(req.git_opts.iter().cloned());
     args.extend(req.extra.iter().cloned());
@@ -65,6 +73,20 @@ pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     args.push(req.url.into());
     args.push(req.path.into());
     args
+}
+
+/// The `core.alternateRefsPrefixes` that limits the refs a clone borrowing from the store
+/// negotiates with to those of the store upstreams `names`, or `None` when there are none.
+///
+/// Fetching treats every ref of an alternate as history it already has and sends the server
+/// all of it until the server recognizes a commit, so a clone of something unrelated to the
+/// store would otherwise send every commit in the store first.
+fn alternate_refs_prefixes(names: &[String]) -> Option<String> {
+    let prefixes: Vec<String> = names
+        .iter()
+        .flat_map(|name| [format!("refs/remotes/{name}/"), format!("refs/tags/{name}/")])
+        .collect();
+    (!prefixes.is_empty()).then(|| prefixes.join(" "))
 }
 
 /// Clone as `req` asks, creating parent directories. Returns git's exit status, 0 on success.
@@ -215,6 +237,9 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         let mut line = reference.join("objects").into_os_string().into_vec();
         line.push(b'\n');
         std::fs::write(&alternates, line).map_err(GitError::Spawn)?;
+        if let Some(prefixes) = alternate_refs_prefixes(req.reference_names) {
+            git::run(Some(&bare), &["config", "core.alternateRefsPrefixes", &prefixes])?;
+        }
     }
     let mut remote_add = vec!["remote", "add"];
     // As with `git clone --no-tags`, later fetches leave tags alone too.
@@ -396,6 +421,7 @@ mod tests {
             git_opts,
             extra,
             reference: None,
+            reference_names: &[],
             container: false,
             upstream_url: None,
         }
@@ -522,6 +548,21 @@ mod tests {
                 "--",
                 "https://x/y.git",
                 "/code/x/y"
+            ]
+        );
+
+        // Only the refs of the upstreams that share the clone's history are negotiated with.
+        let names = ["x/y".to_string(), "x/parent".to_string()];
+        req.reference_names = &names;
+        let args = strings(git_clone_args(&req));
+        assert_eq!(
+            args[2..6],
+            [
+                "--reference-if-able",
+                "/store",
+                "-c",
+                "core.alternateRefsPrefixes=refs/remotes/x/y/ refs/tags/x/y/ \
+                 refs/remotes/x/parent/ refs/tags/x/parent/"
             ]
         );
     }

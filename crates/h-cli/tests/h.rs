@@ -511,6 +511,8 @@ fn clones_borrow_from_an_existing_store() {
             "--recursive",
             "--reference-if-able",
             store.to_str().unwrap(),
+            "-c",
+            "core.alternateRefsPrefixes=refs/remotes/example.com/proj/ refs/tags/example.com/proj/",
             "--",
             url,
             path.to_str().unwrap()

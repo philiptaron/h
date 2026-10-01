@@ -63,7 +63,10 @@ another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/su
 refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
 the inner one moves the outer one's refs over. The store is never pushed
 to and never pruned, and clones made with a store configured borrow its objects through
-`git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits.
+`git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits. A
+clone only tells the server about the store history it shares, its own upstream's and a fork's
+parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does not
+make every clone and fetch list all of their commits first.
 
 ```bash
 h store init                                  # create it

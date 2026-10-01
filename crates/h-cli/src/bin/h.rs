@@ -170,12 +170,14 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     };
 
     let store = config.store.as_ref().filter(|s| s.exists());
+    let reference_names = store.map(|s| shared_upstreams(s, &resolution)).unwrap_or_default();
     let request = CloneRequest {
         url,
         path: &resolution.path,
         git_opts: &config.git_opts,
         extra: &extra,
         reference: store.map(|s| s.path.as_path()),
+        reference_names: &reference_names,
         container,
         upstream_url: resolution.upstream_url.as_deref(),
     };
@@ -189,6 +191,25 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
             ExitCode::from(code)
         }
     }
+}
+
+/// The store's names for the upstreams a clone of `resolution` shares history with: its own and,
+/// for a fork, its parent's. Each is spelled as the store spells it when the store has it
+/// (GitHub names ignore case), and as it would be added otherwise.
+fn shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> {
+    let existing = store.remotes().unwrap_or_default();
+    let parent = resolution.upstream_url.as_deref().and_then(|url| match parse_term(url) {
+        Ok(Target::GitHub { user, repo }) => {
+            Some(remote_name("github.com", &format!("{user}/{repo}")))
+        }
+        _ => None,
+    });
+    let in_store = |name: String| {
+        let exact = existing.iter().find(|r| **r == name);
+        let found = exact.or_else(|| existing.iter().find(|r| r.eq_ignore_ascii_case(&name)));
+        found.cloned().unwrap_or(name)
+    };
+    resolution.remote.clone().into_iter().chain(parent).map(in_store).collect()
 }
 
 /// `h resolve <term>`: print the directory, or fail when it does not exist.

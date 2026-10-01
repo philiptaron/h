@@ -8,7 +8,7 @@ mod common;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use common::*;
 
@@ -546,4 +546,104 @@ fn clones_borrow_objects_from_the_store() {
     assert_eq!(alternates.trim_end(), sb.store.join("objects").to_str().unwrap());
     let objects = run(sb.git(&clone).args(["count-objects", "-v"])).stdout;
     assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
+}
+
+/// Publish a bare repository of `commits` commits, unrelated to any other, at `url`.
+fn publish_history(sb: &Sandbox, url: &str, commits: usize) {
+    let dir = sb.tmp.path().join("src/history.git");
+    let out = run(git_command(sb.root()).args(["init", "-q", "--bare", "-b", "main"]).arg(&dir));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let mut stream = String::new();
+    for i in 0..commits {
+        let (time, content) = (1_500_000_000 + i * 60, i.to_string());
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter T <t@e> {time} +0000\ndata 1\nc\n\
+             M 644 inline f\ndata {}\n{content}\n",
+            content.len()
+        ));
+    }
+    let mut import =
+        sb.git(&dir).args(["fast-import", "--quiet"]).stdin(Stdio::piped()).spawn().unwrap();
+    import.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    rewrite_url(sb.root(), url, &dir);
+}
+
+/// How many commits a client offered the server as ones it has, in a `GIT_TRACE_PACKET` log.
+fn haves(trace: &Path) -> usize {
+    let log = fs::read_to_string(trace).unwrap_or_default();
+    log.lines().filter(|line| line.contains("> have ")).count()
+}
+
+#[test]
+fn clones_offer_only_the_history_they_share_with_the_store() {
+    let sb = Sandbox::new();
+    let history = "https://example.com/other/history.git";
+    publish_history(&sb, history, 300);
+    sb.ok(&["add", history]);
+
+    // Nothing in the store is related to PROJ, so a clone of it offers none of the store's 300
+    // commits to the server.
+    for (name, extra) in [("plain", &[][..]), ("container", &["--container"][..])] {
+        let root = sb.tmp.path().join(name);
+        let trace = sb.tmp.path().join(format!("{name}.trace"));
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        let out = run(cmd
+            .current_dir(sb.root())
+            .env("GIT_TRACE_PACKET", &trace)
+            .arg("--root")
+            .arg(&root)
+            .arg("--store")
+            .arg(&sb.store)
+            .args(["go", PROJ_URL])
+            .args(extra));
+        assert_eq!(out.code, Some(0), "{name}: {out:?}");
+        assert_eq!(haves(&trace), 0, "{name}");
+        let prefixes = run(sb.git(&root.join(PROJ)).args(["config", "core.alternateRefsPrefixes"]));
+        assert_eq!(prefixes.stdout, format!("refs/remotes/{PROJ}/ refs/tags/{PROJ}/\n"), "{name}");
+    }
+}
+
+#[test]
+fn forks_offer_their_parents_history_from_the_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fork = Fork::publish(tmp.path(), &["dev"]);
+    // The store spells the parent's owner its own way; GitHub names ignore case.
+    let parent = "https://github.com/UP/proj.git";
+    let key = format!("url.file://{}.insteadOf", fork.upstream.display());
+    let out = run(git_command(tmp.path()).args(["config", "--global", "--add", &key, parent]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let (root, store, trace) =
+        (tmp.path().join("code"), tmp.path().join("store"), tmp.path().join("trace"));
+    let h = |args: &[&str]| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        run(cmd
+            .current_dir(tmp.path())
+            .env("H_GITHUB_API", &fork.api.url)
+            .env("GIT_TRACE_PACKET", &trace)
+            .arg("--root")
+            .arg(&root)
+            .arg("--store")
+            .arg(&store)
+            .args(args))
+    };
+    let out = h(&["store", "add", parent]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    fs::remove_file(&trace).unwrap();
+
+    let out = h(&["go", "me/proj"]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let clone = root.join("github.com/me/proj");
+    let git = |args: &[&str]| run(git_command(tmp.path()).arg("-C").arg(&clone).args(args)).stdout;
+    assert_eq!(
+        git(&["config", "core.alternateRefsPrefixes"]),
+        "refs/remotes/github.com/me/proj/ refs/tags/github.com/me/proj/ \
+         refs/remotes/github.com/UP/proj/ refs/tags/github.com/UP/proj/\n"
+    );
+    assert!(haves(&trace) > 0, "the parent's commits are offered");
+    // So only the fork's own commit is downloaded; the rest is borrowed from the store.
+    let objects = git(&["count-objects", "-v"]);
+    assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 1\n"), "{objects}");
 }

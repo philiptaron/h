@@ -1,21 +1,33 @@
 //! Finding the root of the project that contains a directory.
 
 use std::ffi::OsStr;
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// Whether `dir` looks like the root of a project.
 ///
-/// A project root contains a `.git` or `.hg` directory, or an `.envrc` or `Gemfile` file, or is
-/// the directory direnv has loaded (`DIRENV_DIR` holds that directory prefixed with `-`).
+/// A project root contains a `.git` directory or gitfile (as worktrees, submodules and container
+/// clones have), an `.hg` directory, or an `.envrc` or `Gemfile` file, or is the directory direnv
+/// has loaded (`DIRENV_DIR` holds that directory prefixed with `-`).
 pub fn is_project_root(dir: &Path, direnv_dir: Option<&OsStr>) -> bool {
-    dir.join(".git").is_dir()
+    let git = dir.join(".git");
+    git.is_dir()
+        || is_gitfile(&git)
         || dir.join(".hg").is_dir()
         || dir.join(".envrc").is_file()
         || dir.join("Gemfile").is_file()
         || direnv_dir
             .and_then(|d| d.as_bytes().strip_prefix(b"-"))
             .is_some_and(|d| Path::new(OsStr::from_bytes(d)) == dir)
+}
+
+/// Whether `path` is a gitfile: a file starting `gitdir: `, which is how git itself tells one
+/// from any other file named `.git`.
+fn is_gitfile(path: &Path) -> bool {
+    let mut start = [0u8; 8];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut start)).is_ok()
+        && &start == b"gitdir: "
 }
 
 /// Find the project root to move to from `cwd`.
@@ -53,21 +65,23 @@ mod tests {
     fn detects_markers() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        for dir in ["git", "hg", "envrc", "gemfile", "none", "gitfile", "envrcdir"] {
+        for dir in ["git", "hg", "envrc", "gemfile", "none", "gitfile", "otherfile", "envrcdir"] {
             fs::create_dir(root.join(dir)).unwrap();
         }
         fs::create_dir(root.join("git/.git")).unwrap();
         fs::create_dir(root.join("hg/.hg")).unwrap();
         fs::write(root.join("envrc/.envrc"), "").unwrap();
         fs::write(root.join("gemfile/Gemfile"), "").unwrap();
-        // Git worktrees and submodules have a `.git` file, which is not a project root marker.
-        fs::write(root.join("gitfile/.git"), "gitdir: ../x").unwrap();
+        // Worktrees, submodules and container clones have a gitfile in place of a directory.
+        fs::write(root.join("gitfile/.git"), "gitdir: ../x\n").unwrap();
+        // Any other file named `.git` is not one.
+        fs::write(root.join("otherfile/.git"), "not a gitfile\n").unwrap();
         fs::create_dir(root.join("envrcdir/.envrc")).unwrap();
 
-        for dir in ["git", "hg", "envrc", "gemfile"] {
+        for dir in ["git", "hg", "envrc", "gemfile", "gitfile"] {
             assert!(is_project_root(&root.join(dir), None), "{dir}");
         }
-        for dir in ["none", "gitfile", "envrcdir"] {
+        for dir in ["none", "otherfile", "envrcdir"] {
             assert!(!is_project_root(&root.join(dir), None), "{dir}");
         }
     }
@@ -102,6 +116,30 @@ mod tests {
         let tmp = project_tree();
         let cwd = tmp.path().join("outer/inner");
         assert_eq!(find_project_root(&cwd, None, None), tmp.path().join("outer"));
+    }
+
+    #[test]
+    fn climbs_through_submodules_worktrees_and_containers() {
+        // A container clone, a worktree of it, and a submodule inside the worktree, each with
+        // a gitfile as git writes them.
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("p");
+        let worktree = container.join("topic");
+        let submodule = worktree.join("vendor/lib");
+        let deep = submodule.join("src/deep");
+        fs::create_dir_all(container.join(".bare/worktrees/topic/modules/lib")).unwrap();
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(container.join(".git"), "gitdir: ./.bare\n").unwrap();
+        let admin = container.join(".bare/worktrees/topic");
+        fs::write(worktree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        fs::write(submodule.join(".git"), "gitdir: ../../../.bare/worktrees/topic/modules/lib\n")
+            .unwrap();
+
+        let mut cwd = deep;
+        for want in [&submodule, &worktree, &container, &container] {
+            cwd = find_project_root(&cwd, None, None);
+            assert_eq!(&cwd, want);
+        }
     }
 
     #[test]

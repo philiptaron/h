@@ -96,6 +96,7 @@ h --root ~/code resolve nixpkgs
 ## up
 
 Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).
+A `.git` file counts too, so worktrees, submodules and container clones are roots of their own.
 
 ```bash
 eval "$(up-shell-init [--pushd])"

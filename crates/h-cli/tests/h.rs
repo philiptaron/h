@@ -529,3 +529,36 @@ fn container_clones_are_bare_with_a_git_file() {
     git(&["worktree", "add", "--quiet", "feature", "origin/main"]);
     assert_eq!(fs::read_to_string(path.join("feature/README")).unwrap(), "hello\n");
 }
+
+#[test]
+fn failed_container_clones_leave_nothing_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("code");
+    let url = "https://example.com/owner/proj.git";
+    rewrite_url(tmp.path(), url, &tmp.path().join("missing"));
+    let path = root.join("example.com/owner/proj");
+
+    for extra in [&[][..], &["--branch", "dev"]] {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        let out = run(cmd
+            .current_dir(tmp.path())
+            .arg("--root")
+            .arg(&root)
+            .args(["go", url, "--container"])
+            .args(extra));
+        assert_ne!(out.code, Some(0), "{out:?}");
+        assert_eq!(out.stdout, format!("{}\n", canonical(tmp.path())));
+        assert!(!path.exists(), "{extra:?}: {out:?}");
+    }
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, tmp.path());
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args([
+        "go",
+        url,
+        "--container",
+        "--branch",
+        "dev",
+    ]));
+    assert_eq!(out.stderr, "--branch cannot be used with --container\n");
+}

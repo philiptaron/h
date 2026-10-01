@@ -95,10 +95,50 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
     git::run(None, &git_clone_args(req))
 }
 
+/// Clone options that mean the same to `git fetch`, so a container clone can pass them on.
+const FETCH_FLAGS: &[&str] = &["-q", "--quiet", "-v", "--verbose", "--progress", "--no-tags"];
+const FETCH_OPTIONS: &[&str] = &["--depth", "--shallow-since", "--shallow-exclude", "--filter"];
+
+/// The `git fetch` arguments for the clone options `extra` of a container clone, or an error
+/// naming the first one that `git fetch` does not share.
+fn container_fetch_opts(extra: &[OsString]) -> Result<Vec<OsString>, GitError> {
+    let opts = non_config_opts(extra);
+    let mut out = Vec::new();
+    let mut iter = opts.into_iter();
+    while let Some(opt) = iter.next() {
+        let text = opt.to_string_lossy();
+        let name = text.split_once('=').map_or(&*text, |(name, _)| name);
+        if FETCH_FLAGS.contains(&&*text) || (FETCH_OPTIONS.contains(&name) && name != text) {
+            out.push(opt);
+        } else if FETCH_OPTIONS.contains(&name) {
+            let Some(value) = iter.next() else {
+                return Err(GitError::Invalid(format!("{text} needs a value")));
+            };
+            out.extend([opt, value]);
+        } else {
+            return Err(GitError::Invalid(format!("{text} cannot be used with --container")));
+        }
+    }
+    Ok(out)
+}
+
 /// Create `<path>/.bare` by fetching into a fresh bare repository, then point `<path>/.git` at
 /// it. Unlike `git clone --bare`, the result has `origin` with ordinary remote-tracking branches,
 /// so worktrees are added from `origin/<branch>` and local branches are only ever the user's.
+///
+/// A failure removes `<path>` again, as `git clone` does, so that a later `h` does not mistake
+/// the remains for a finished clone.
 fn clone_container(req: &CloneRequest) -> Result<(), GitError> {
+    let fetch_opts = container_fetch_opts(req.extra)?;
+    let existed = req.path.exists();
+    let result = fill_container(req, fetch_opts);
+    if result.is_err() && !existed {
+        let _ = std::fs::remove_dir_all(req.path);
+    }
+    result
+}
+
+fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), GitError> {
     let bare = req.path.join(BARE_DIR);
     git::run(
         None,
@@ -117,7 +157,7 @@ fn clone_container(req: &CloneRequest) -> Result<(), GitError> {
     }
     git::run(Some(&bare), &["remote", "add", "origin", req.url])?;
     let mut fetch: Vec<OsString> = vec!["fetch".into()];
-    fetch.extend(non_config_opts(req.extra));
+    fetch.extend(fetch_opts);
     fetch.push("origin".into());
     git::run(Some(&bare), &fetch)?;
     git::run(Some(&bare), &["remote", "set-head", "origin", "--auto"])?;
@@ -193,6 +233,23 @@ mod tests {
             let extra = opts(&[opt]);
             let args = git_clone_args(&request(&[], &extra));
             assert_eq!(strings(args), ["clone", opt, "--", "https://x/y.git", "/code/x/y"]);
+        }
+    }
+
+    #[test]
+    fn container_clones_pass_only_fetch_options_on() {
+        let extra = opts(&["-c", "a.b=c", "--depth", "1", "--filter=blob:none", "-q"]);
+        assert_eq!(
+            container_fetch_opts(&extra).unwrap(),
+            opts(&["--depth", "1", "--filter=blob:none", "-q"])
+        );
+        for (bad, msg) in [
+            ("--branch", "--branch cannot be used with --container"),
+            ("--origin=up", "--origin=up cannot be used with --container"),
+            ("--depth", "--depth needs a value"),
+        ] {
+            let err = container_fetch_opts(&opts(&[bad])).unwrap_err();
+            assert_eq!(err.to_string(), msg);
         }
     }
 

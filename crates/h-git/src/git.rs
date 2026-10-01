@@ -17,6 +17,8 @@ pub enum GitError {
     Spawn(std::io::Error),
     /// `git` ran and failed with this exit code.
     Failed { args: Vec<OsString>, code: u8 },
+    /// The request made no sense, so `git` was not run.
+    Invalid(String),
 }
 
 impl GitError {
@@ -25,6 +27,7 @@ impl GitError {
         match self {
             GitError::Spawn(_) => 127,
             GitError::Failed { code, .. } => *code,
+            GitError::Invalid(_) => 1,
         }
     }
 }
@@ -37,6 +40,7 @@ impl fmt::Display for GitError {
                 let shown: Vec<String> = args.iter().map(|a| a.to_string_lossy().into()).collect();
                 write!(f, "git {} failed with status {code}", shown.join(" "))
             }
+            GitError::Invalid(msg) => f.write_str(msg),
         }
     }
 }

@@ -33,6 +33,10 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // must not reach the store.
     ("fetch.pruneTags", "false"),
     ("fetch.parallel", "4"),
+    // Parallel fetches each append to the reftable, one at a time under a lock that git waits
+    // only 100ms for by default, so on a slow disk an upstream's fetch could fail just for having
+    // waited its turn.
+    ("reftable.lockTimeout", "10000"),
     // Every upstream's commits are offered to every fetch, and git offers all of them until the
     // server recognizes one, which an unrelated upstream never does. Skipping offers a few.
     ("fetch.negotiationAlgorithm", "skipping"),

@@ -873,8 +873,12 @@ fn clones_offer_only_the_history_they_share_with_the_store() {
     sb.ok(&["add", history]);
 
     // Nothing in the store is related to PROJ, so a clone of it offers none of the store's 300
-    // commits to the server.
-    for (name, extra) in [("plain", &[][..]), ("container", &["--container"][..])] {
+    // commits to the server. (A partial clone is not put in the store first, so it fetches PROJ
+    // itself; a whole one would borrow all of it and negotiate nothing.)
+    for (name, extra) in [
+        ("plain", &["--filter=blob:none"][..]),
+        ("container", &["--container", "--filter=blob:none"][..]),
+    ] {
         let root = sb.tmp.path().join(name);
         let trace = sb.tmp.path().join(format!("{name}.trace"));
         let mut cmd = command(H);
@@ -932,8 +936,11 @@ fn forks_offer_their_parents_history_from_the_store() {
         "refs/remotes/github.com/me/proj/ refs/tags/github.com/me/proj/ \
          refs/remotes/github.com/UP/proj/ refs/tags/github.com/UP/proj/\n"
     );
+    // The fork goes into the store first, whose fetch offers the server the parent's commits, so
+    // only the fork's own commit is downloaded, into the store, and the clone borrows it all.
     assert!(haves(&trace) > 0, "the parent's commits are offered");
-    // So only the fork's own commit is downloaded; the rest is borrowed from the store.
+    let listed = h(&["store", "list"]).stdout;
+    assert_eq!(listed, "github.com/UP/proj\ngithub.com/me/proj\n");
     let objects = git(&["count-objects", "-v"]);
-    assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 1\n"), "{objects}");
+    assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
 }

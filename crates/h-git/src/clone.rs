@@ -247,6 +247,12 @@ fn history_opts(extra: &[OsString]) -> Vec<OsString> {
     out
 }
 
+/// Whether the clone options `extra` limit how much history the clone gets, by depth, date or
+/// filter, as a shallow or partial clone does.
+pub fn limits_history(extra: &[OsString]) -> bool {
+    !history_opts(extra).is_empty()
+}
+
 /// The clone options that limit history by depth, and so imply `--single-branch`.
 const DEEPEN_OPTIONS: &[&str] = &["--depth", "--shallow-since", "--shallow-exclude"];
 

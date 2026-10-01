@@ -748,26 +748,37 @@ fn clones_borrow_from_an_existing_store() {
         .args(["go", url]));
     let path = tmp.path().join("example.com/proj");
     assert_resolved(&out, &path);
-    // The store's upstreams are listed to scope negotiation, and submodules would be cloned
-    // after the superproject, so that they borrow from the store too; this one has none.
+    // The repository goes into the store first and is fetched there, so that the clone borrows
+    // it all. Submodules would be cloned after the superproject, so that they borrow from the
+    // store too; this one has none.
     let (store, path) = (store.to_str().unwrap(), path.to_str().unwrap());
+    let invocations = git.invocations();
+    let fetch = [
+        "-C",
+        store,
+        "fetch",
+        "--prune",
+        "--no-prune-tags",
+        "--no-write-fetch-head",
+        "--multiple",
+        "example.com/proj",
+    ];
+    let fetched = invocations.iter().position(|args| *args == fetch);
+    assert!(fetched.is_some(), "{invocations:?}");
     assert_eq!(
-        git.invocations(),
-        [
-            vec!["-C", store, "remote"],
-            vec![
-                "clone",
-                "--reference-if-able",
-                store,
-                "-c",
-                "core.alternateRefsPrefixes=refs/remotes/example.com/proj/ refs/tags/example.com/proj/",
-                "-c",
-                "submodule.active=.",
-                "--no-recurse-submodules",
-                "--",
-                url,
-                path
-            ],
+        invocations.last().unwrap(),
+        &[
+            "clone",
+            "--reference-if-able",
+            store,
+            "-c",
+            "core.alternateRefsPrefixes=refs/remotes/example.com/proj/ refs/tags/example.com/proj/",
+            "-c",
+            "submodule.active=.",
+            "--no-recurse-submodules",
+            "--",
+            url,
+            path
         ]
     );
 

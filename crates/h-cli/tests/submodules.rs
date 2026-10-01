@@ -353,6 +353,74 @@ fn a_fork_copy_in_the_store_is_taken_without_asking_for_it() {
 }
 
 #[test]
+fn clones_go_into_the_store_and_are_downloaded_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let init = sb.h(true, &["store", "init"]);
+    assert_eq!(init.code, Some(0), "{init:?}");
+    // Every pack any repository serves is written down with where it was served from.
+    let (hook, served) = (sb.tmp.path().join("pack-hook"), sb.tmp.path().join("served"));
+    fs::write(&hook, format!("#!/bin/sh\npwd >> '{}'\nexec \"$@\"\n", served.display())).unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    set_global(&sb, "uploadpack.packObjectsHook", hook.to_str().unwrap());
+    let out = sb.h(true, &["go", &url("app")]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_eq!(out.stdout, format!("{}\n", sb.app().display()));
+
+    // Everything is in the store, and the clone and its submodules keep none of it themselves.
+    let mut listed: Vec<String> =
+        sb.ok(true, &["store", "list"]).stdout.lines().map(String::from).collect();
+    listed.sort();
+    assert_eq!(listed, ["app", "deep", "lib", "other"].map(|n| format!("example.com/o/{n}")));
+    let app = sb.app();
+    for dir in [app.clone(), app.join("lib"), app.join("lib/deep"), app.join("other")] {
+        assert!(sb.borrows_everything(&dir), "{dir:?}");
+    }
+    // Each published repository serves one pack: app's goes into the store before the clone,
+    // which then borrows it all, and each submodule's into its clone, from which the store takes
+    // it, so fetching the submodules into the store from their URLs brings nothing more.
+    let served = fs::read_to_string(&served).unwrap();
+    let src = sb.tmp.path().join("src");
+    let mut published: Vec<&str> = served.lines().filter(|dir| dir.contains("/src/")).collect();
+    published.sort();
+    let want: Vec<String> = ["app", "deep", "lib", "other"]
+        .map(|name| src.join(name).join(".git").canonicalize().unwrap().display().to_string())
+        .into();
+    assert_eq!(published, want, "{served}");
+}
+
+#[test]
+fn worktrees_made_by_the_hook_get_their_submodules_from_the_store() {
+    use std::io::Write;
+    let sb = Sandbox::new();
+    sb.ok(true, &["store", "init"]);
+    sb.ok(true, &["go", &url("app")]);
+    let app = sb.app();
+    let input = format!(r#"{{"name": "agent-x", "cwd": "{}"}}"#, app.display());
+    let mut cmd = sb.h_command(true, UNREACHABLE_API);
+    let mut child = cmd
+        .args(["hook", "worktree-create"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let worktree = app.join(".claude/worktrees/agent-x");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{}\n", worktree.display()));
+
+    assert_eq!(fs::read_to_string(worktree.join("lib/deep/README")).unwrap(), "deep\n");
+    assert_eq!(fs::read_to_string(worktree.join("other/README")).unwrap(), "other\n");
+    let modules = app.join(".git/worktrees/agent-x/modules");
+    assert_eq!(sb.alternates(&modules.join("lib")), store_objects(&sb));
+    for dir in [worktree.join("lib"), worktree.join("lib/deep"), worktree.join("other")] {
+        assert!(sb.borrows_everything(&dir), "{dir:?}");
+    }
+}
+
+#[test]
 fn submodules_get_the_identity_the_clone_is_made_with() {
     let sb = Sandbox::new();
     // A submodule behind HTTP authentication, whose clone asks the credential helpers, and a
@@ -463,9 +531,11 @@ fn haves(sb: &Sandbox, args: &[&str]) -> usize {
 fn submodule_clones_do_not_offer_the_whole_store() {
     let sb = Sandbox::new();
     sb.fill_store();
-    // History unrelated to app, all of it newer than the submodules' own commits.
+    // History unrelated to app, all of it newer than the submodules' own commits. App is in the
+    // store too, as every clone made with it puts it there, so the superproject's own clone
+    // negotiates the same either way.
     publish_history(&sb, "big", 1000);
-    sb.ok(true, &["store", "add", &url("big")]);
+    sb.ok(true, &["store", "add", &url("big"), &url("app")]);
     // A submodule the store has all of is not negotiated at all; one that moved on since the
     // store last fetched it is.
     sb.git(&sb.src("lib"), &["commit", "-q", "--allow-empty", "-m", "newer"]);
@@ -480,14 +550,18 @@ fn submodule_clones_do_not_offer_the_whole_store() {
     let skipping = submodule_haves();
     assert!(skipping < 100, "{skipping}");
     assert!(sb.borrows_everything(&sb.app().join("lib/deep")));
-    let lib = sb.git(&sb.app().join("lib"), &["count-objects", "-v"]);
-    assert!(
-        lib.contains("count: 0\n") && lib.contains("in-pack: 1\n"),
-        "only the new commit: {lib}"
-    );
+    // Lib's new commit was downloaded into the submodule, then went into the store with the rest
+    // of lib, so the submodule keeps nothing itself.
+    assert!(sb.borrows_everything(&sb.app().join("lib")));
+    let newer = sb.git(&sb.src("lib"), &["rev-parse", "HEAD"]);
+    assert_eq!(sb.git(&sb.store, &["rev-parse", "example.com/o/lib/main"]).trim(), newer.trim());
 
-    // A negotiator the user chose is left alone.
+    // A negotiator the user chose is left alone. The clone above put lib's new commit in the
+    // store, so lib moves on again first.
     set_global(&sb, "fetch.negotiationAlgorithm", "consecutive");
+    sb.git(&sb.src("lib"), &["commit", "-q", "--allow-empty", "-m", "newer still"]);
+    sb.git(&sb.src("app/lib"), &["pull", "-q"]);
+    sb.git(&sb.src("app"), &["commit", "-qam", "lib moved on again"]);
     let consecutive = submodule_haves();
     assert!(consecutive >= 1000, "the newer, unrelated commits come first: {consecutive}");
 }

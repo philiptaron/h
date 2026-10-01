@@ -24,11 +24,15 @@ use crate::submodules::{self, config_args, negotiation_args};
 /// What [`ingest`] covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// The repository itself, its upstreams and objects, and its working tree's submodules.
+    /// The repository itself, its upstreams and objects, and its working tree's submodules,
+    /// cloning those that are missing: `h store ingest`.
     Everything,
-    /// Only the submodules of the working tree, as for a worktree of a repository whose own
-    /// history is already in the store.
+    /// The working tree's submodules, cloning those that are missing, as for a new worktree of
+    /// a repository whose own history is in the store already.
     Submodules,
+    /// The submodules that are checked out, and no others, as for a new clone, whose options
+    /// decided which submodules it has.
+    CheckedOut,
 }
 
 /// What [`ingest`] did, and what it could not do; it did everything else.
@@ -43,15 +47,6 @@ pub struct Report {
     pub fetch: FetchReport,
     /// Everything else that failed, said for people.
     pub failures: Vec<String>,
-}
-
-impl Report {
-    /// Whether everything was done.
-    pub fn complete(&self) -> bool {
-        self.failures.is_empty()
-            && self.fetch.failed.is_none()
-            && self.fetch.heads_failed.is_empty()
-    }
 }
 
 /// One remote of a repository, as an upstream in the store.
@@ -118,7 +113,10 @@ pub fn ingest(
         repos.push(repository(&root, &common));
     }
     if let Some(worktree) = query(dir, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) {
-        if let Err(err) = clone_missing(store, &worktree, &identity, fork_urls(&root).as_ref()) {
+        let fork = fork_urls(&root);
+        if scope != Scope::CheckedOut
+            && let Err(err) = clone_missing(store, &worktree, &identity, fork.as_ref())
+        {
             report.failures.push(format!("could not clone every submodule: {err}"));
         }
         repos.extend(submodule_repos(&worktree));
@@ -153,13 +151,7 @@ pub fn ingest(
     if !names.is_empty() {
         report.fetch = store.fetch(&names, true)?;
     }
-    for name in std::mem::take(&mut report.added) {
-        if store.has_refs(&name).unwrap_or(true) {
-            report.added.push(name);
-        } else if store.remove_remote(&name).is_ok() {
-            report.removed_again.push(name);
-        }
-    }
+    take_back_unfetched(store, &mut report);
 
     // Borrowing, then giving up what the store has.
     for repo in &repos {
@@ -181,6 +173,73 @@ pub fn ingest(
         }
     }
     Ok(report)
+}
+
+/// Put the repositories at `urls` in the store if they are not there, and bring them up to date
+/// there, so that a clone of them made next borrows nearly everything instead of downloading it.
+/// One that cannot be fetched is taken out of the store again, and the clone simply gets less
+/// from the store.
+pub fn prefetch(store: &Store, urls: &[&str]) -> Report {
+    let mut report = Report::default();
+    let mut names = Vec::new();
+    for url in urls {
+        let Some((name, url)) = store_upstream(url) else {
+            continue;
+        };
+        let source = Source { name, url, remote: String::new(), tags: false };
+        match upstream(store, &source, &mut report.added) {
+            Ok(name) if !names.contains(&name) => names.push(name),
+            Ok(_) => {}
+            Err(err) => report.failures.push(format!("could not add {}: {err}", source.name)),
+        }
+    }
+    if !names.is_empty() {
+        match store.fetch(&names, false) {
+            Ok(fetched) => report.fetch = fetched,
+            Err(err) => report.failures.push(err.to_string()),
+        }
+    }
+    take_back_unfetched(store, &mut report);
+    report
+}
+
+/// Take the upstreams `report` added out of the store again when nothing was fetched for them,
+/// so that the store never holds an upstream it has no history of.
+fn take_back_unfetched(store: &Store, report: &mut Report) {
+    for name in std::mem::take(&mut report.added) {
+        if store.has_refs(&name).unwrap_or(true) {
+            report.added.push(name);
+        } else if store.remove_remote(&name).is_ok() {
+            report.removed_again.push(name);
+        }
+    }
+}
+
+impl Report {
+    /// Whether everything was done.
+    pub fn complete(&self) -> bool {
+        self.problems().is_empty()
+    }
+
+    /// What went wrong, one line each, for people: upstreams taken out again, failed fetches,
+    /// and everything else.
+    pub fn problems(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .removed_again
+            .iter()
+            .map(|name| {
+                format!("removed {name} from the store again, since it could not be fetched")
+            })
+            .collect();
+        if let Some(err) = &self.fetch.failed {
+            lines.push(format!("fetching into the store failed: {err}"));
+        }
+        for (name, err) in &self.fetch.heads_failed {
+            lines.push(format!("could not update {name}/-/HEAD: {err}"));
+        }
+        lines.extend(self.failures.iter().cloned());
+        lines
+    }
 }
 
 fn display(repo: &Repo) -> String {

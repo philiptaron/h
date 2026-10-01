@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::clone::BARE_DIR;
 use crate::git::{self, GitError};
+use crate::ingest;
 use crate::resolve::{Target, parse_term, remote_name};
 use crate::store::Store;
 
@@ -230,13 +231,37 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
-    if commit(&root, &format!("refs/heads/{branch}")).is_some() {
+    let created = if commit(&root, &format!("refs/heads/{branch}")).is_some() {
         git::run(Some(&root), &["worktree", "add", "--quiet", &target, &branch])?;
-        return Ok(Created { path, branch, base: "its existing branch".into() });
+        Created { path, branch, base: "its existing branch".into() }
+    } else {
+        let (start, from) = base(&root, &common, fallback)?;
+        git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])?;
+        Created { path, branch, base: from }
+    };
+    clone_submodules(&created.path, &common, fallback);
+    Ok(created)
+}
+
+/// Clone the submodules of the new worktree at `path` from the store the repository (whose
+/// common git directory is `common`) borrows from, putting those it lacks there too, so that an
+/// agent gets a tree it can build. The worktree is usable without them, so what fails is only
+/// said on stderr; stdout stays the worktree's path alone.
+fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
+    if !path.join(".gitmodules").is_file() {
+        return;
     }
-    let (start, from) = base(&root, &common, fallback)?;
-    git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])?;
-    Ok(Created { path, branch, base: from })
+    let Some(store) = borrowed_store(common, fallback) else {
+        return;
+    };
+    match ingest::ingest(&store, path, &[], ingest::Scope::Submodules) {
+        Ok(report) => {
+            for line in report.problems() {
+                eprintln!("warning: {line}");
+            }
+        }
+        Err(err) => eprintln!("warning: could not clone the submodules from the store: {err}"),
+    }
 }
 
 /// What `git status` reports in the worktree at `path`, untracked files and changes inside

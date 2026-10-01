@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
-use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
+use h_git::clone::{CloneRequest, clone_repo, limits_history, refresh_container_head};
 use h_git::git::config_pairs;
 use h_git::github;
 use h_git::hook;
@@ -20,6 +20,7 @@ use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
 };
 use h_git::store::{FetchReport, Store};
+use h_git::submodules::SubmoduleOptions;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -189,6 +190,18 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     };
 
     let store = config.store.as_ref().filter(|s| s.exists());
+    // A clone with all of its history goes into the store first, and then borrows it all; one
+    // limited to some history, as asked, does not bring the rest of it into the store.
+    let ingests = store.filter(|_| !limits_history(&extra));
+    if let Some(store) = ingests {
+        let mut urls = vec![url.as_str()];
+        urls.extend(resolution.upstream_url.as_deref());
+        let report = ingest::prefetch(store, &urls);
+        for name in &report.added {
+            eprintln!("added {name} to the store");
+        }
+        warn_about(&report, "the clone downloads what the store could not get");
+    }
     let reference_names = store.map(|s| shared_upstreams(s, &resolution)).unwrap_or_default();
     let request = CloneRequest {
         url,
@@ -202,6 +215,25 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     };
     match clone_repo(&request) {
         0 => {
+            // The submodules it cloned that the store did not have are put there too. The clone
+            // is whole and usable either way, so what fails here is only warned about.
+            let own_references = SubmoduleOptions::parse(&extra);
+            let own_references = own_references.references || own_references.dissociate;
+            let has_submodules = resolution.path.join(".gitmodules").is_file();
+            if let Some(store) = ingests.filter(|_| has_submodules && !container && !own_references)
+            {
+                let identity = config_pairs(&config.git_opts);
+                let scope = ingest::Scope::CheckedOut;
+                match ingest::ingest(store, &resolution.path, &identity, scope) {
+                    Ok(report) => {
+                        for name in &report.added {
+                            eprintln!("added {name} to the store");
+                        }
+                        warn_about(&report, "the clone keeps those objects itself");
+                    }
+                    Err(err) => eprintln!("could not put the submodules under the store: {err}"),
+                }
+            }
             print_path(&resolution.path);
             ExitCode::SUCCESS
         }
@@ -209,6 +241,18 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
             print_cwd();
             ExitCode::from(code)
         }
+    }
+}
+
+/// Warn about what an ingest that came along with something else could not do, and what that
+/// means (`consequence`), when it did not do everything.
+fn warn_about(report: &ingest::Report, consequence: &str) {
+    let problems = report.problems();
+    for line in &problems {
+        eprintln!("warning: {line}");
+    }
+    if !problems.is_empty() {
+        eprintln!("warning: {consequence}");
     }
 }
 

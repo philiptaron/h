@@ -81,11 +81,17 @@ commits. A clone only tells the server about the store history it shares, its ow
 fork's parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does
 not make every clone and fetch list all of their commits first. Their submodules borrow from it too:
 `h` clones them itself, with `git submodule update --init --recursive --reference <store>`, since
-git would look for them in the store's `modules/` directory. For a submodule added later, run `h
-store ingest` (below). A clone given its own `--reference` with submodules uses only that, as git
-does. A store keeps its refs in a reftable, where names that differ only in case coexist even on
-macOS and pruning one ref does not rewrite the rest, so anything that reads the store's refs,
-including the git of a clone that borrows from it, needs git 2.45 or later.
+git would look for them in the store's `modules/` directory. A clone with all of its history goes
+into the store itself first: its upstream, and a fork's parent, are added to the store and fetched
+there, and the clone then borrows everything. Afterwards, the submodules it cloned that the store
+lacked are put there too, from the clone itself, so nothing is downloaded twice; what fails there is
+only warned about, since the clone is whole either way. A clone limited by `--depth`,
+`--shallow-since`, `--shallow-exclude` or `--filter` does not bring its history into the store. For
+a submodule added later, run `h store ingest` (below). A clone given its own `--reference` with
+submodules uses only that, as git does. A store keeps its refs in a reftable, where names that
+differ only in case coexist even on macOS and pruning one ref does not rewrite the rest, so anything
+that reads the store's refs, including the git of a clone that borrows from it, needs git 2.45 or
+later.
 
 ```bash
 h store init                                  # create it
@@ -158,6 +164,9 @@ through Claude Code's WorktreeCreate and WorktreeRemove hooks, reading the hook'
   from, whatever `--store` or `$H_STORE` say, so each identity's clones use their own store.
   Without it, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD. A worktree
   that is already there is handed back, and a branch left by a removed one is checked out again.
+  The new worktree's submodules are cloned from that store, at every level, and those it lacks
+  are put there, as `h store ingest` does, so the agent gets a tree it can build; what cannot be
+  done there is only warned about, since the worktree is usable without it.
 - **worktree-remove** commits whatever is uncommitted in the worktree, untracked files included,
   to its branch (with hooks and signing off for that commit), gives a detached HEAD with commits
   of its own a branch, and only then removes the worktree. Branches are never deleted. It leaves

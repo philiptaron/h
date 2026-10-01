@@ -101,6 +101,23 @@ fn init_creates_a_bare_store_that_never_prunes() {
 }
 
 #[test]
+fn stores_hold_sha1_objects_whatever_the_default() {
+    let sb = Sandbox::new();
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.root());
+    let out = run(cmd
+        .current_dir(sb.root())
+        .env("GIT_DEFAULT_HASH", "sha256")
+        .arg("--store")
+        .arg(&sb.store)
+        .args(["store", "add", PROJ_URL]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let format = run(sb.git(&sb.store).args(["rev-parse", "--show-object-format"]));
+    assert_eq!(format.stdout, "sha1\n");
+    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+}
+
+#[test]
 fn add_names_upstreams_by_path_and_namespaces_their_tags() {
     let sb = Sandbox::new();
     assert!(sb.git(&sb.src).args(["tag", "v1.0"]).status().unwrap().success());

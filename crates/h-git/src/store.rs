@@ -78,13 +78,21 @@ impl Store {
     /// Create the store, applying [`STORE_CONFIG`] and the `-c key=value` pairs in `git_opts`
     /// (the credentials to fetch private repositories with). Creating an existing store only
     /// reapplies the configuration.
+    ///
+    /// The store holds SHA-1 objects whatever the default for new repositories is, since a
+    /// repository holds a single object format and nearly every upstream is SHA-1.
     pub fn init(&self, git_opts: &[OsString]) -> Result<(), GitError> {
         if !self.exists() {
             if let Some(parent) = self.path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let args: Vec<OsString> =
-                vec!["init".into(), "--bare".into(), "--quiet".into(), self.path.clone().into()];
+            let args: Vec<OsString> = vec![
+                "init".into(),
+                "--bare".into(),
+                "--quiet".into(),
+                "--object-format=sha1".into(),
+                self.path.clone().into(),
+            ];
             git::run(None, &args)?;
         }
         for (key, value) in STORE_CONFIG {

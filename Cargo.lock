@@ -107,6 +107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "h-cli"
+version = "0.1.0"
+dependencies = [
+ "h-git",
+ "tempfile",
+]
+
+[[package]]
 name = "h-git"
 version = "0.1.0"
 dependencies = [

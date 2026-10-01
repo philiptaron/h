@@ -1,4 +1,4 @@
-//! Tests for `h-shell-init` and `up-shell-init`, including running their output in real shells.
+//! Tests for `h-shell-init`, including running its output in real shells.
 
 mod common;
 
@@ -6,6 +6,23 @@ use std::path::Path;
 use std::process::Command;
 
 use common::*;
+
+const H: &str = env!("CARGO_BIN_EXE_h");
+const H_SHELL_INIT: &str = env!("CARGO_BIN_EXE_h-shell-init");
+
+/// A bash with the binaries under test available as variables.
+fn bash(root: &Path, script: &str) -> Command {
+    let mut cmd = common::bash(root, script);
+    cmd.env("H", H).env("H_SHELL_INIT", H_SHELL_INIT);
+    cmd
+}
+
+/// A zsh with the binaries under test available as variables.
+fn zsh(root: &Path, script: &str) -> Command {
+    let mut cmd = common::zsh(root, script);
+    cmd.env("H", H).env("H_SHELL_INIT", H_SHELL_INIT);
+    cmd
+}
 
 #[test]
 fn h_init_help() {
@@ -47,51 +64,6 @@ fn h_init_code_root_defaults() {
 
     let out = run(command(H_SHELL_INIT).env("H_CODE_ROOT", "/env").arg("/arg"));
     assert!(out.stdout.contains("--resolve \"/arg\""), "{out:?}");
-}
-
-#[test]
-fn up_init_output() {
-    let out = run(command(UP_SHELL_INIT));
-    assert_eq!(out.code, Some(0));
-    assert_eq!(
-        out.stdout,
-        format!(
-            "up() {{\n  _up_dir=$(command {UP} \"$@\")\n  if [ $? = 0 ]; then\n    \
-             [ \"$_up_dir\" != \"$PWD\" ] && cd \"$_up_dir\"\n  fi\n}}\n"
-        )
-    );
-}
-
-#[test]
-fn up_init_help_and_errors() {
-    let out = run(command(UP_SHELL_INIT).arg("--help"));
-    assert_eq!(
-        (out.code, out.stdout.as_str()),
-        (Some(0), "Usage: eval \"$(up-shell-init [--pushd])\"\n")
-    );
-    let out = run(command(UP_SHELL_INIT).arg("--bogus"));
-    assert_eq!((out.code, out.stderr.as_str()), (Some(1), "Unknown option: --bogus\n"));
-}
-
-/// A shell command running `script`, with the binaries and `root` available as variables.
-fn shell(program: &str, args: &[&str], root: &Path, script: &str) -> Command {
-    let mut cmd = command(program);
-    cmd.args(args)
-        .arg(script)
-        .current_dir(root)
-        .env("HOME", root)
-        .env("ROOT", root)
-        .env("H_SHELL_INIT", H_SHELL_INIT)
-        .env("UP_SHELL_INIT", UP_SHELL_INIT);
-    cmd
-}
-
-fn bash(root: &Path, script: &str) -> Command {
-    shell("bash", &["--norc", "--noprofile", "-c"], root, script)
-}
-
-fn zsh(root: &Path, script: &str) -> Command {
-    shell("zsh", &["-f", "-c"], root, script)
 }
 
 fn code_tree() -> tempfile::TempDir {
@@ -178,19 +150,6 @@ fn bash_completion() {
 }
 
 #[test]
-fn bash_up_changes_directory() {
-    let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["proj/.git", "proj/a/b"]);
-    let out = run(bash(
-        tmp.path(),
-        r#"eval "$("$UP_SHELL_INIT")"
-           cd proj/a/b; up; pwd"#,
-    ));
-    assert_eq!(out.stderr, "");
-    assert_eq!(out.stdout, format!("{}\n", tmp.path().join("proj").display()));
-}
-
-#[test]
 fn zsh_h_and_completion() {
     if !have("zsh") {
         eprintln!("zsh not found; skipping");
@@ -212,21 +171,4 @@ fn zsh_h_and_completion() {
             tmp.path().join("gitlab.com/group/deep").display()
         )
     );
-}
-
-#[test]
-fn zsh_up_changes_directory() {
-    if !have("zsh") {
-        eprintln!("zsh not found; skipping");
-        return;
-    }
-    let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["proj/.git", "proj/a/b"]);
-    let out = run(zsh(
-        tmp.path(),
-        r#"eval "$("$UP_SHELL_INIT")"
-           cd proj/a/b; up; pwd"#,
-    ));
-    assert_eq!(out.stderr, "");
-    assert_eq!(out.stdout, format!("{}\n", tmp.path().join("proj").display()));
 }

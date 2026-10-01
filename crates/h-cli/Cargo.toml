@@ -1,0 +1,13 @@
+[package]
+name = "h-cli"
+description = "h: jump to (or clone) projects organized as <code-root>/<domain>/<path>"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+h-git.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

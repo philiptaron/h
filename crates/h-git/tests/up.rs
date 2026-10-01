@@ -6,6 +6,8 @@ use std::path::Path;
 
 use common::*;
 
+const UP: &str = env!("CARGO_BIN_EXE_up");
+
 fn up(cwd: &Path, home: &Path) -> Run {
     run(command(UP).current_dir(cwd).env("PWD", cwd).env("HOME", home))
 }

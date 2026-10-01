@@ -7,6 +7,8 @@ use std::path::Path;
 
 use common::*;
 
+const H: &str = env!("CARGO_BIN_EXE_h");
+
 const USAGE: &str = "Usage: h (<name> | <repo>/<name> | <url>) [git opts]\n";
 
 fn h(cwd: &Path, args: &[&str]) -> Run {

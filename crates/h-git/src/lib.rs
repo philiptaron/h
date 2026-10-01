@@ -1,11 +1,8 @@
-//! Fast shell navigation for projects organized as `<code-root>/<domain>/<path>`.
+//! Core of `h`: fast shell navigation for projects organized as `<code-root>/<domain>/<path>`.
 //!
-//! The crate ships four binaries:
-//!
-//! - `h` resolves a project name, `user/repo`, or URL to a directory, cloning it if needed.
-//! - `h-shell-init` prints the shell function (and completion) that wraps `h`.
-//! - `up` finds the root of the project containing the current directory.
-//! - `up-shell-init` prints the shell function that wraps `up`.
+//! Resolves search terms (project names, `user/repo`, URLs) to directories, looks up canonical
+//! GitHub casing, clones repositories, and holds the pieces shared by the `h-cli` and `up-cli`
+//! binaries.
 
 pub mod clone;
 pub mod github;

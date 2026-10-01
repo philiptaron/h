@@ -561,6 +561,62 @@ fn container_clones_are_bare_with_a_git_file() {
 }
 
 #[test]
+fn container_clones_take_the_remote_object_format() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("code");
+    let sha1 = tmp.path().join("sha1");
+    make_git_repo(&sha1);
+    let sha256 = tmp.path().join("sha256");
+    for args in [
+        &["init", "-q", "-b", "main", "--object-format=sha256"][..],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        fs::create_dir_all(&sha256).unwrap();
+        let status = git_command(tmp.path()).current_dir(&sha256).args(args).status().unwrap();
+        assert!(status.success(), "{args:?}");
+    }
+
+    // A SHA-1 remote cloned where new repositories default to SHA-256, and the reverse.
+    for (name, src, default) in [("a", &sha1, "sha256"), ("b", &sha256, "sha1")] {
+        let url = format!("https://example.com/owner/{name}.git");
+        rewrite_url(tmp.path(), &url, src);
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        let out = run(cmd
+            .current_dir(tmp.path())
+            .env("GIT_DEFAULT_HASH", default)
+            .arg("--root")
+            .arg(&root)
+            .args(["go", &url, "--container"]));
+        let path = root.join("example.com/owner").join(name);
+        assert_resolved(&out, &path);
+        let git = |args: &[&str]| run(git_command(tmp.path()).arg("-C").arg(&path).args(args));
+        let format = git(&["rev-parse", "--show-object-format"]).stdout;
+        let want = if default == "sha1" { "sha256" } else { "sha1" };
+        assert_eq!(format.trim(), want, "{name}");
+        let src_head = run(git_command(tmp.path()).arg("-C").arg(src).args(["rev-parse", "HEAD"]));
+        assert_eq!(git(&["rev-parse", "HEAD"]).stdout, src_head.stdout, "{name}");
+    }
+
+    // An empty remote has no format to take and no branch to start worktrees from.
+    let empty = tmp.path().join("empty");
+    let status = git_command(tmp.path()).args(["init", "-q", "--bare"]).arg(&empty).status();
+    assert!(status.unwrap().success());
+    let url = "https://example.com/owner/empty.git";
+    rewrite_url(tmp.path(), url, &empty);
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, tmp.path());
+    let out =
+        run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args(["go", url, "--container"]));
+    assert_failed_in(
+        &out,
+        tmp.path(),
+        &format!("{url} has no default branch, so it cannot be cloned with --container\n"),
+    );
+    assert!(!root.join("example.com/owner/empty").exists());
+}
+
+#[test]
 fn failed_container_clones_leave_nothing_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("code");

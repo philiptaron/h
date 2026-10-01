@@ -5,6 +5,7 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
+use std::process::Stdio;
 
 use crate::git::{self, GitError, config_pairs, non_config_opts};
 
@@ -146,6 +147,10 @@ fn history_opts(extra: &[OsString]) -> Vec<OsString> {
 /// so worktrees are added from `origin/<branch>` and local branches are only ever the user's.
 /// HEAD is detached at `origin/HEAD`, so a new branch made by `git worktree add <dir>` starts
 /// from the default branch instead of being an orphan of the branch HEAD names but nobody has.
+/// The repository takes the remote's object format, as `git clone` does, rather than the
+/// default for new repositories, so that SHA-1 remotes can be fetched when the default is
+/// SHA-256. A remote whose HEAD names no commit, such as an empty one, is refused: it has no
+/// format to take and no branch to start worktrees from.
 ///
 /// A failure removes `<path>` again, as `git clone` does, so that a later `h` does not mistake
 /// the remains for a finished clone.
@@ -161,13 +166,22 @@ fn clone_container(req: &CloneRequest) -> Result<(), GitError> {
 
 fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), GitError> {
     let bare = req.path.join(BARE_DIR);
-    git::run(
-        None,
-        &[OsString::from("init"), "--bare".into(), "--quiet".into(), bare.clone().into()],
-    )?;
     let mut opts = req.git_opts.to_vec();
     opts.extend(req.extra.iter().cloned());
-    for (key, value) in config_pairs(&opts) {
+    let config = config_pairs(&opts);
+    let head = remote_head(req.url, req.path.parent(), &config)?;
+    let format = format!("--object-format={}", head.object_format()?);
+    git::run(
+        None,
+        &[
+            OsString::from("init"),
+            "--bare".into(),
+            "--quiet".into(),
+            format.into(),
+            bare.clone().into(),
+        ],
+    )?;
+    for (key, value) in config {
         git::run(Some(&bare), &[OsString::from("config"), key, value])?;
     }
     if let Some(reference) = req.reference.filter(|r| r.join("objects").is_dir()) {
@@ -181,10 +195,82 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
     fetch.extend(fetch_opts);
     fetch.push("origin".into());
     git::run(Some(&bare), &fetch)?;
-    git::run(Some(&bare), &["remote", "set-head", "origin", "--auto"])?;
-    git::run(Some(&bare), &["update-ref", "--no-deref", "HEAD", "refs/remotes/origin/HEAD"])?;
+    let start = match &head.branch {
+        Some(branch) => {
+            // Fetching sets origin/HEAD itself since git 2.48; earlier versions do not.
+            let target = format!("refs/remotes/origin/{branch}");
+            git::run(Some(&bare), &["symbolic-ref", "refs/remotes/origin/HEAD", &target])?;
+            "refs/remotes/origin/HEAD"
+        }
+        None => &head.oid,
+    };
+    git::run(Some(&bare), &["update-ref", "--no-deref", "HEAD", start])?;
     std::fs::write(req.path.join(".git"), format!("gitdir: ./{BARE_DIR}\n"))
         .map_err(GitError::Spawn)
+}
+
+/// The remote's HEAD: the commit it names and, when the server says, its branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteHead {
+    oid: String,
+    branch: Option<String>,
+}
+
+impl RemoteHead {
+    /// The object format of the remote, from the length of the commit's name.
+    fn object_format(&self) -> Result<&'static str, GitError> {
+        match self.oid.len() {
+            40 => Ok("sha1"),
+            64 => Ok("sha256"),
+            _ => Err(GitError::Invalid(format!("Unknown object format for {}", self.oid))),
+        }
+    }
+}
+
+/// Ask the remote at `url` for its HEAD with `git ls-remote --symref`, run in `dir` with the
+/// clone's `-c` settings in effect, since they may choose the credentials (as
+/// `credential.username` does). Git's errors go to stderr, so that the user sees why it failed.
+fn remote_head(
+    url: &str,
+    dir: Option<&Path>,
+    config: &[(OsString, OsString)],
+) -> Result<RemoteHead, GitError> {
+    let mut args: Vec<OsString> = Vec::new();
+    for (key, value) in config {
+        let mut setting = key.clone();
+        setting.push("=");
+        setting.push(value);
+        args.extend(["-c".into(), setting]);
+    }
+    args.extend(["ls-remote".into(), "--symref".into(), url.into(), "HEAD".into()]);
+    let out = git::command(dir, &args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(GitError::Spawn)?;
+    if !out.status.success() {
+        return Err(GitError::Failed { args, code: git::exit_code(out.status) });
+    }
+    parse_remote_head(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| {
+        GitError::Invalid(format!(
+            "{url} has no default branch, so it cannot be cloned with --container"
+        ))
+    })
+}
+
+/// Read `git ls-remote --symref <url> HEAD`, which prints `ref: refs/heads/<branch>\tHEAD` and
+/// `<oid>\tHEAD`. `None` when HEAD names no commit, as in an empty repository.
+fn parse_remote_head(out: &str) -> Option<RemoteHead> {
+    let mut oid = None;
+    let mut branch = None;
+    for value in out.lines().filter_map(|line| line.strip_suffix("\tHEAD")) {
+        if let Some(target) = value.strip_prefix("ref: ") {
+            branch = target.strip_prefix("refs/heads/").map(String::from);
+        } else if !value.is_empty() && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+            oid = Some(value.to_string());
+        }
+    }
+    Some(RemoteHead { oid: oid?, branch })
 }
 
 /// Add `url` as the `upstream` remote of the repository at `dir`, fetchable but not pushable,
@@ -277,6 +363,22 @@ mod tests {
             let err = container_fetch_opts(&opts(&[bad])).unwrap_err();
             assert_eq!(err.to_string(), msg);
         }
+    }
+
+    #[test]
+    fn reads_the_remote_head() {
+        let sha1 = "03406f3589baf8a123e89b629c1da6abe360a63e";
+        let head = parse_remote_head(&format!("ref: refs/heads/main\tHEAD\n{sha1}\tHEAD\n"));
+        let head = head.unwrap();
+        assert_eq!(head, RemoteHead { oid: sha1.into(), branch: Some("main".into()) });
+        assert_eq!(head.object_format().unwrap(), "sha1");
+        let sha256 = "0abb7a666d6e37a95a28b984f769f675cdb5ed63fddec81ff5e1c0cc0c45abcf";
+        let head = parse_remote_head(&format!("{sha256}\tHEAD\n")).unwrap();
+        assert_eq!(head.branch, None);
+        assert_eq!(head.object_format().unwrap(), "sha256");
+        // An empty repository, or one whose HEAD names a branch it lacks, prints nothing.
+        assert_eq!(parse_remote_head(""), None);
+        assert_eq!(parse_remote_head("ref: refs/heads/main\tHEAD\n"), None);
     }
 
     #[test]

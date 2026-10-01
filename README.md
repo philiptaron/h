@@ -38,6 +38,12 @@ URL is `no_push`) and `origin`, the fork, becomes the default push target. The u
 fetched with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as the
 clone.
 
+A container clone has `origin` with ordinary remote-tracking branches and no local branches,
+and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from
+the default branch. Like `git clone`, it takes the remote's object format (SHA-1 or SHA-256)
+rather than the default for new repositories. A remote with no default branch, such as an
+empty one, cannot be cloned this way.
+
 ## The object store
 
 A store is one bare repository holding many unrelated upstream repositories as remotes, each

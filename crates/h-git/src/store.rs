@@ -273,14 +273,14 @@ impl Store {
 
     /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or
     /// `<name>/-/<reference>`, when nested) when that names something, and otherwise `reference`
-    /// itself, such as a commit hash.
+    /// itself if it is a commit hash, as `1f0e2d3` and `1f0e2d3~2` are. Any other reference stays
+    /// qualified, so one the upstream lacks fails rather than naming something else in the
+    /// store, as `HEAD` would name the store's own.
     fn revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
         let qualified = format!("{}/{reference}", self.prefix(name)?);
         let object = format!("{qualified}^{{object}}");
-        Ok(match git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]) {
-            Ok(_) => qualified,
-            Err(_) => reference.to_string(),
-        })
+        let found = git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]).is_ok();
+        Ok(if found || !is_object_name(reference) { qualified } else { reference.to_string() })
     }
 
     /// Show `spec` (a `<ref>` or `<ref>:<path>`) of upstream `name`, as `git show` prints it.
@@ -330,6 +330,13 @@ impl Store {
     }
 }
 
+/// Whether `reference` is a full or abbreviated object name, perhaps followed by a suffix such
+/// as `~2` or `^{tree}`.
+fn is_object_name(reference: &str) -> bool {
+    let name = reference.split(['~', '^']).next().unwrap_or(reference);
+    (4..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Whether the name `inner` extends the name `outer` by one or more segments.
 fn extends(inner: &str, outer: &str) -> bool {
     inner.strip_prefix(outer).is_some_and(|rest| rest.starts_with('/'))
@@ -369,6 +376,16 @@ mod tests {
             assert!(!tasks.contains(&"prefetch"), "{schedule}: {tasks:?}");
         }
         assert_eq!(maintenance_tasks("monthly"), None);
+    }
+
+    #[test]
+    fn recognizes_object_names() {
+        for name in ["1f0e2d3", "1F0E2D3", "cafe", "1f0e2d3~2", "1f0e2d3^{tree}", &"a".repeat(40)] {
+            assert!(is_object_name(name), "{name}");
+        }
+        for name in ["HEAD", "main", "abc", "1f0e2d3x", "v1.0", "", "~1", &"a".repeat(65)] {
+            assert!(!is_object_name(name), "{name}");
+        }
     }
 
     #[test]

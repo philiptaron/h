@@ -419,6 +419,25 @@ fn show_prints_files_and_commits_from_the_store() {
 }
 
 #[test]
+fn references_an_upstream_lacks_name_nothing_else_in_the_store() {
+    let sb = Sandbox::new();
+    sb.ok(&["add", PROJ_URL]);
+    // The store's own HEAD and branches, which no upstream's reference should reach.
+    let git = |args: &[&str]| assert!(sb.git(&sb.store).args(args).status().unwrap().success());
+    git(&["update-ref", "refs/heads/stray", &format!("refs/remotes/{PROJ}/main")]);
+    git(&["symbolic-ref", "HEAD", "refs/heads/stray"]);
+    git(&["symbolic-ref", "--delete", &format!("refs/remotes/{PROJ}/HEAD")]);
+    for spec in ["HEAD:README", "stray:README"] {
+        let out = sb.h(&["show", "proj", spec]);
+        assert_ne!(out.code, Some(0), "{spec}: {out:?}");
+        assert!(out.stderr.contains(&format!("{PROJ}/{}", &spec[..spec.len() - 7])), "{out:?}");
+    }
+    // A commit hash with a suffix still names the commit.
+    let hash = run(sb.git(&sb.src).args(["rev-parse", "HEAD"])).stdout.trim().to_string();
+    assert_eq!(sb.ok(&["show", "proj", &format!("{}~0:README", &hash[..7])]).stdout, "hello\n");
+}
+
+#[test]
 fn fetch_updates_everything_or_the_named_upstreams() {
     let sb = Sandbox::new();
     let out = sb.h(&["fetch"]);

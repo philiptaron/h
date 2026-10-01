@@ -14,6 +14,7 @@ use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
 use h_git::git::config_pairs;
 use h_git::github;
+use h_git::hook;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
 };
@@ -43,6 +44,8 @@ Commands:
                               directory) and check <ref> out there
   store maintain [hourly|daily|weekly]
                               run the store's maintenance tasks (default: daily)
+  hook worktree-create        Claude Code's WorktreeCreate hook: read its JSON on stdin, add a
+                              worktree to the session's clone, and print the worktree's path
 
 A term is a project name, <user>/<repo> on GitHub, or a git URL. The code root defaults to
 $H_CODE_ROOT, then ~/src; the store to $H_STORE. Git options after `--` (`-c key=value`) are
@@ -124,6 +127,7 @@ fn main() -> ExitCode {
         Some("go") => go(&config, rest),
         Some("resolve") => resolve_cmd(&config, rest),
         Some("store") => store_cmd(&config, rest),
+        Some("hook") => hook_cmd(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
     }
 }
@@ -477,5 +481,31 @@ fn fetch_result(report: FetchReport) -> Result<(), String> {
         Some(err) => Err(err.to_string()),
         None if report.heads_failed.is_empty() => Ok(()),
         None => Err("some upstreams' HEADs could not be updated".into()),
+    }
+}
+
+/// `h hook <event>`: a Claude Code hook, reading the hook's JSON input on stdin. Failures exit
+/// with 1, never 2, which Claude Code reads as a missing hook script.
+fn hook_cmd(config: &Config, args: &[OsString]) -> ExitCode {
+    const USAGE: &str = "Usage: h hook worktree-create < hook-input.json";
+    let event = match args {
+        [event] => event.to_str(),
+        _ => None,
+    };
+    let Some(event @ "worktree-create") = event else {
+        return fail(USAGE);
+    };
+    let mut input = String::new();
+    if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+        return fail(&format!("h hook {event}: cannot read the hook input: {err}"));
+    }
+    match hook::create(&input, config.store.as_ref()) {
+        Ok(created) => {
+            let path = created.path.display();
+            eprintln!("{path}: on {}, from {}", created.branch, created.base);
+            print_path(&created.path);
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(&format!("h hook {event}: {err}")),
     }
 }

@@ -16,6 +16,8 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::git::{self, GitError};
+use crate::resolve::store_upstream;
+use crate::store::Store;
 
 /// Long clone options that take their value as the next argument when it is not given with `=`.
 const VALUE_OPTIONS: &[&str] = &[
@@ -234,6 +236,144 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
     Ok(())
 }
 
+/// The submodules `.gitmodules` in the checkout at `path` names, as `(name, url)`.
+pub fn gitmodules(path: &Path) -> Vec<(String, String)> {
+    let file = path.join(".gitmodules");
+    if !file.is_file() {
+        return Vec::new();
+    }
+    let args = [OsString::from("config"), "--file".into(), file.into(), "--get-regexp".into()];
+    let args = [&args[..], &[r"^submodule\..*\.url$".into()]].concat();
+    let out = git::output(Some(path), &args).unwrap_or_default();
+    out.lines()
+        .filter_map(|line| {
+            let (key, url) = line.split_once(' ')?;
+            let name = key.strip_prefix("submodule.")?.strip_suffix(".url")?;
+            Some((name.to_string(), url.to_string()))
+        })
+        .collect()
+}
+
+/// Whether `url`, from `.gitmodules`, is relative to the superproject's own remote, as
+/// `../lib.git` is: git resolves those only when they start with `./` or `../`.
+pub fn is_relative(url: &str) -> bool {
+    url.starts_with("./") || url.starts_with("../")
+}
+
+/// Whether git takes `url` for a local path rather than a URL or `host:path`.
+fn is_local_not_ssh(url: &str) -> bool {
+    match (url.find(':'), url.find('/')) {
+        (None, _) => true,
+        (Some(colon), Some(slash)) => slash < colon,
+        (Some(_), None) => false,
+    }
+}
+
+/// Resolve the relative submodule URL `url` against `remote_url`, the URL of the superproject's
+/// remote, as git does (`relative_url` in git's `remote.c`): each `../` takes off the last part
+/// of the remote's URL, so `../lib.git` beside `https://github.com/up/app.git` is
+/// `https://github.com/up/lib.git`, and beside `git@host:up/app.git` is `git@host:up/lib.git`.
+/// `None` where git gives up, when there is nothing left to take off.
+pub fn relative_url(remote_url: &str, url: &str) -> Option<String> {
+    if !is_local_not_ssh(url) || url.starts_with('/') {
+        return Some(url.to_string());
+    }
+    let mut remote = remote_url.strip_suffix('/').unwrap_or(remote_url).to_string();
+    let relative = is_local_not_ssh(&remote) && !remote.starts_with('/');
+    if relative && !remote.starts_with("./") && !remote.starts_with("../") {
+        remote.insert_str(0, "./");
+    }
+    let mut colon = false;
+    let mut rest = url;
+    loop {
+        if let Some(after) = rest.strip_prefix("../") {
+            rest = after;
+            if let Some(i) = remote.rfind('/') {
+                remote.truncate(i);
+            } else if let Some(i) = remote.rfind(':') {
+                remote.truncate(i);
+                colon = true;
+            } else if relative || remote == "." {
+                return None;
+            } else {
+                remote = ".".into();
+            }
+        } else if let Some(after) = rest.strip_prefix("./") {
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    let mut out = format!("{remote}{}{rest}", if colon { ":" } else { "/" });
+    if rest.ends_with('/') {
+        out.pop();
+    }
+    Some(out.strip_prefix("./").map(String::from).unwrap_or(out))
+}
+
+/// Whether a repository answers at `url`, asked once with `git ls-remote` and `identity` in
+/// effect, so that the right credentials are offered. Nothing ever prompts, as with h's GitHub
+/// lookups: a repository that wants credentials no helper has counts as missing.
+fn answers(url: &str, identity: &[(OsString, OsString)]) -> bool {
+    let mut args = config_args(identity);
+    let rest = ["-c", "credential.interactive=false", "ls-remote", "--quiet", url, "HEAD"];
+    args.extend(rest.map(OsString::from));
+    git::command(None, &args)
+        .env("GIT_ASKPASS", "")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// In a fork's checkout at `path`, point each submodule that `.gitmodules` names by a relative
+/// URL at the fork's copy of it when there is one, and otherwise at the upstream's.
+///
+/// Git resolves `../lib.git` against the fork's own remote, at `own_url`, so a fork whose
+/// owner did not fork `lib` too has a submodule that cannot be cloned. Here the fork's copy wins
+/// when `store` already has it, without the network, or when it answers at its URL; otherwise
+/// `lib` comes from beside the upstream, at `upstream_url`. The choice is written as
+/// `submodule.<name>.url` in the superproject's configuration, as `git submodule init` writes
+/// it, before the submodules are cloned. A submodule already cloned, or whose URL was set to
+/// something else, is left alone. Nested submodules resolve against their own superproject,
+/// which is then the copy chosen here. Returns the submodules that come from the upstream.
+pub fn resolve_fork_urls(
+    path: &Path,
+    own_url: &str,
+    upstream_url: &str,
+    store: Option<&Store>,
+    identity: &[(OsString, OsString)],
+) -> Result<Vec<(String, String)>, GitError> {
+    let git_dir = git::output(Some(path), &["rev-parse", "--absolute-git-dir"])?;
+    let modules = Path::new(git_dir.trim()).join("modules");
+    let mut from_upstream = Vec::new();
+    for (name, url) in gitmodules(path).into_iter().filter(|(_, url)| is_relative(url)) {
+        let (Some(fork), Some(upstream)) =
+            (relative_url(own_url, &url), relative_url(upstream_url, &url))
+        else {
+            continue;
+        };
+        let key = format!("submodule.{name}.url");
+        let set = git::output(Some(path), &["config", "--get", &key]).ok();
+        let untouched = set.as_deref().is_none_or(|set| set.trim() == fork);
+        if fork == upstream || modules.join(&name).exists() || !untouched {
+            continue;
+        }
+        let in_store = || {
+            let found = store_upstream(&fork).and_then(|(name, _)| store?.find(&name));
+            found.is_some()
+        };
+        if in_store() || answers(&fork, identity) {
+            git::run(Some(path), &["config", &key, &fork])?;
+        } else {
+            git::run(Some(path), &["config", &key, &upstream])?;
+            from_upstream.push((name, upstream));
+        }
+    }
+    Ok(from_upstream)
+}
+
 /// The `git submodule update` arguments that clone submodules after checkout as `git clone`
 /// does, but borrowing objects from `store` when there is one.
 ///
@@ -365,6 +505,27 @@ mod tests {
                 "--no-single-branch"
             ]
         );
+    }
+
+    #[test]
+    fn resolves_relative_urls_as_git_does() {
+        for (remote, url, want) in [
+            ("https://github.com/up/app.git", "../lib.git", Some("https://github.com/up/lib.git")),
+            ("https://github.com/up/app.git/", "../lib.git", Some("https://github.com/up/lib.git")),
+            ("https://h/a/b.git", "../../c.git", Some("https://h/c.git")),
+            ("https://h/a/b.git", "./c", Some("https://h/a/b.git/c")),
+            ("https://h/a/b.git", "../c/", Some("https://h/a/c")),
+            ("git@github.com:up/app.git", "../lib.git", Some("git@github.com:up/lib.git")),
+            ("git@host:app.git", "../lib.git", Some("git@host:lib.git")),
+            ("/srv/app.git", "../lib.git", Some("/srv/lib.git")),
+            ("srv/app", "../lib", Some("srv/lib")),
+            ("app", "../../lib", None),
+            ("x", "https://other/lib.git", Some("https://other/lib.git")),
+        ] {
+            assert_eq!(relative_url(remote, url).as_deref(), want, "{remote} + {url}");
+        }
+        assert!(is_relative("../lib.git") && is_relative("./lib"));
+        assert!(!is_relative("lib") && !is_relative("https://h/lib") && !is_relative("/lib"));
     }
 
     #[test]

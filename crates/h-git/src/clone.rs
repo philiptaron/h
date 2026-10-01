@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use crate::git::{self, GitError, config_pairs, non_config_opts};
+use crate::store::Store;
 use crate::submodules::{self, SubmoduleOptions};
 
 /// The name of the bare repository inside a container clone.
@@ -170,13 +171,34 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
         Plan { submodules, store, split: true }
             if cloned.is_ok() && has_submodules && submodules.checks_out() =>
         {
-            submodules::update(req.path, *store, submodules, &identity)
+            let resolved = match req.upstream_url {
+                Some(upstream) => fork_submodule_urls(req, upstream, *store, &identity),
+                None => Ok(()),
+            };
+            resolved.and_then(|()| submodules::update(req.path, *store, submodules, &identity))
         }
         _ => Ok(()),
     };
     let identified =
         if has_submodules { submodules::write_identity(req.path, &identity) } else { Ok(()) };
     cloned.and(upstream).and(cloned_submodules).and(identified)
+}
+
+/// Point the relative submodule URLs of the fork cloned as `req` at the fork's copies where it has
+/// them and at the upstream's, at `upstream`, where it does not, saying which come from upstream.
+fn fork_submodule_urls(
+    req: &CloneRequest,
+    upstream: &str,
+    store: Option<&Path>,
+    identity: &[(OsString, OsString)],
+) -> Result<(), GitError> {
+    let store = store.map(Store::new);
+    let from_upstream =
+        submodules::resolve_fork_urls(req.path, req.url, upstream, store.as_ref(), identity)?;
+    for (name, url) in from_upstream {
+        eprintln!("submodule {name}: the fork has no copy of it, so it comes from {url}");
+    }
+    Ok(())
 }
 
 /// Clone options that mean the same to `git fetch`, so a container clone can pass them on.

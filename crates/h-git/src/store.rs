@@ -133,6 +133,16 @@ impl Store {
         Ok(out.lines().map(String::from).collect())
     }
 
+    /// The upstream called `name`, spelled as the store spells it: exactly, or else, on GitHub,
+    /// whose names ignore case, in another casing. `None` when the store has no such upstream.
+    pub fn find(&self, name: &str) -> Option<String> {
+        let existing = self.remotes().ok()?;
+        let exact = existing.iter().find(|r| *r == name);
+        let github = name.starts_with("github.com/");
+        let other_case = || existing.iter().find(|r| github && r.eq_ignore_ascii_case(name));
+        exact.or_else(other_case).cloned()
+    }
+
     /// Add the upstream `name` at `url`, or leave it alone if it is already there.
     ///
     /// An upstream whose name another one extends (`g/proj` beside `g/proj/sub`) is nested: its

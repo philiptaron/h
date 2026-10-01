@@ -41,13 +41,18 @@ down, the lookup goes unanswered and the casing stays as typed. The token only e
 host it is kept for: an API other than `https://api.github.com` (`$H_GITHUB_API`) is asked for its
 own host's credential, never github.com's.
 
-Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
-is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push
-URL is `no_push`) and the fork's remote (`origin`, or whatever `--origin` or
-`clone.defaultRemoteName` calls it) becomes the default push target. The upstream is fetched
-with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as the clone,
-and when the clone has a single branch (`--single-branch`, or any of the first three without
-`--no-single-branch`), so does the upstream: its default branch.
+Clones recurse into submodules unless an option says otherwise, and the identity in the git
+options (`-c credential.username=...`, `user.*`) reaches the submodules' clones and their
+configuration too. When GitHub says the repository is a fork, the clone gets an `upstream` remote
+that can be fetched but not pushed to (its push URL is `no_push`) and the fork's remote
+(`origin`, or whatever `--origin` or `clone.defaultRemoteName` calls it) becomes the default push
+target. The upstream is added before the submodules are cloned, and even when one of them fails.
+It is fetched with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as
+the clone, and when the clone has a single branch (`--single-branch`, or any of the first three
+without `--no-single-branch`), so does the upstream: its default branch. A fork's submodule given
+relative to the project, as `../lib.git` is, comes from the fork's own copy when it has one (found
+in the store, or else asked for once) and otherwise from beside the upstream, where git alone
+would look only beside the fork.
 
 A container clone has `origin` with ordinary remote-tracking branches and no local branches,
 and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from

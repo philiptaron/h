@@ -76,13 +76,18 @@ impl Sandbox {
 
     /// [`Sandbox::h`], with the GitHub API at `api`.
     fn h_api(&self, store: bool, api: &str, args: &[&str]) -> Run {
+        run(self.h_command(store, api).args(args))
+    }
+
+    /// The command [`Sandbox::h_api`] runs, before its arguments.
+    fn h_command(&self, store: bool, api: &str) -> std::process::Command {
         let mut cmd = command(H);
         isolate_git(&mut cmd, self.tmp.path());
         cmd.current_dir(self.tmp.path()).env("H_GITHUB_API", api).arg("--root").arg(&self.root);
         if store {
             cmd.arg("--store").arg(&self.store);
         }
-        run(cmd.args(args))
+        cmd
     }
 
     /// Publish `src/<name>` on GitHub as `up/<name>`, and a fork of it as `me/<name>`, with a
@@ -279,6 +284,72 @@ fn forks_keep_their_upstream_when_a_submodule_fails() {
         assert_eq!(sb.config(&clone, "remote.pushDefault"), "origin");
         fs::remove_dir_all(&sb.root).unwrap();
     }
+}
+
+/// `app3` on GitHub as `up/app3`, with a fork `me/app3`, whose submodule `lib3` is given as
+/// `../lib3.git`: `up/lib3` beside the upstream, and `me/lib3` beside the fork only when
+/// `fork_lib`. Without it, the fork's copy is a local path that does not exist, so asking for
+/// it fails at once, without the network.
+fn publish_relative(sb: &Sandbox, fork_lib: bool) -> MockGitHub {
+    let home = sb.tmp.path();
+    sb.publish("lib3");
+    sb.publish("app3");
+    sb.add_submodule("app3", "lib3", "lib3");
+    repoint_submodule(sb, "app3", "lib3", "../lib3.git");
+    rewrite_url(home, "https://github.com/up/lib3.git", &sb.src("lib3"));
+    let fork = home.join("forks/lib3.git");
+    if fork_lib {
+        let clone =
+            run(git_command(home).args(["clone", "-q", "--bare"]).arg(sb.src("lib3")).arg(&fork));
+        assert_eq!(clone.code, Some(0), "{clone:?}");
+    }
+    rewrite_url(home, "https://github.com/me/lib3.git", &fork);
+    sb.publish_fork("app3")
+}
+
+#[test]
+fn forks_take_relative_submodules_from_the_fork_when_it_has_them() {
+    let sb = Sandbox::new();
+    let api = publish_relative(&sb, true);
+    let out = sb.h_api(false, &api.url, &["go", "me/app3"]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let app = sb.root.join("github.com/me/app3");
+    assert_eq!(sb.config(&app, "submodule.lib3.url"), "https://github.com/me/lib3.git");
+    assert_eq!(fs::read_to_string(app.join("lib3/README")).unwrap(), "lib3\n");
+}
+
+#[test]
+fn forks_take_relative_submodules_from_the_upstream_when_the_fork_lacks_them() {
+    let sb = Sandbox::new();
+    let api = publish_relative(&sb, false);
+    for store in [false, true] {
+        if store {
+            sb.fill_store();
+        }
+        let out = sb.h_api(store, &api.url, &["go", "me/app3"]);
+        assert_eq!(out.code, Some(0), "store {store}: {out:?}");
+        let app = sb.root.join("github.com/me/app3");
+        let upstream = "https://github.com/up/lib3.git";
+        assert_eq!(sb.config(&app, "submodule.lib3.url"), upstream);
+        assert_eq!(sb.config(&app.join("lib3"), "remote.origin.url"), upstream);
+        assert_eq!(fs::read_to_string(app.join("lib3/README")).unwrap(), "lib3\n");
+        assert!(out.stderr.contains(&format!("comes from {upstream}")), "{out:?}");
+        fs::remove_dir_all(&sb.root).unwrap();
+    }
+}
+
+#[test]
+fn a_fork_copy_in_the_store_is_taken_without_asking_for_it() {
+    let sb = Sandbox::new();
+    let api = publish_relative(&sb, true);
+    sb.ok(true, &["store", "add", "https://github.com/me/lib3.git"]);
+    let trace = sb.tmp.path().join("trace");
+    let out = run(sb.h_command(true, &api.url).env("GIT_TRACE", &trace).args(["go", "me/app3"]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let app = sb.root.join("github.com/me/app3");
+    assert_eq!(sb.config(&app, "submodule.lib3.url"), "https://github.com/me/lib3.git");
+    let traced = fs::read_to_string(&trace).unwrap();
+    assert!(!traced.lines().any(|line| line.contains("ls-remote")), "{traced}");
 }
 
 #[test]

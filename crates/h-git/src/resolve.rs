@@ -116,6 +116,21 @@ pub fn remote_name(host: &str, path: &str) -> String {
     escape_name(strip_git_suffix(&segments.join("/")))
 }
 
+/// The store's name for the repository a remote fetches from at `url`, and the URL the store
+/// should fetch it from, as `h store add <url>` would add it: for GitHub, the HTTPS URL of
+/// `<user>/<repo>` whatever form `url` takes. `None` for what is not a repository URL, such as a
+/// local path.
+pub fn store_upstream(url: &str) -> Option<(String, String)> {
+    match parse_term(url).ok()? {
+        Target::GitHub { user, repo } => Some((
+            remote_name("github.com", &format!("{user}/{repo}")),
+            format!("https://github.com/{user}/{repo}.git"),
+        )),
+        Target::Remote { url, host, path } => Some((remote_name(&host, &path), url)),
+        Target::Name(_) => None,
+    }
+}
+
 /// `name` without empty segments, and with each segment escaped as [`escape_segment`] does.
 fn escape_name(name: &str) -> String {
     let segments: Vec<String> =

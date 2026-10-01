@@ -1,9 +1,9 @@
 //! Cloning repositories with `git`.
 
 use std::ffi::OsString;
-use std::os::fd::AsFd;
 use std::path::Path;
-use std::process::{Command, Stdio};
+
+use crate::git;
 
 /// Arguments to pass to `git` to clone `url` into `path`.
 ///
@@ -20,25 +20,17 @@ pub fn git_clone_args(url: &str, path: &Path, extra: &[OsString]) -> Vec<OsStrin
     args
 }
 
-/// Clone `url` into `path`, creating parent directories. Returns git's exit status.
-///
-/// Git's stdout is sent to stderr so that stdout carries only the directory to `cd` into.
+/// Clone `url` into `path`, creating parent directories. Returns git's exit status, 0 on success.
 pub fn clone_repo(url: &str, path: &Path, extra: &[OsString]) -> u8 {
     if let Some(parent) = path.parent() {
         // Any failure here is reported by git itself.
         let _ = std::fs::create_dir_all(parent);
     }
-
-    let stdout = match std::io::stderr().as_fd().try_clone_to_owned() {
-        Ok(fd) => Stdio::from(fd),
-        Err(_) => Stdio::null(),
-    };
-    let status = Command::new("git").args(git_clone_args(url, path, extra)).stdout(stdout).status();
-    match status {
-        Ok(status) => status.code().map_or(1, |code| code as u8),
+    match git::run(None, &git_clone_args(url, path, extra)) {
+        Ok(()) => 0,
         Err(err) => {
-            eprintln!("failed to run git: {err}");
-            127
+            eprintln!("{err}");
+            err.code()
         }
     }
 }

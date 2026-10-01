@@ -120,8 +120,8 @@ fn add_names_upstreams_by_path_and_namespaces_their_tags() {
         refs,
         format!("refs/remotes/{PROJ}/HEAD\nrefs/remotes/{PROJ}/main\nrefs/tags/{PROJ}/v1.0\n")
     );
-    // `<name>/<branch>` and `<name>/<tag>` both resolve.
-    for rev in [format!("{PROJ}/main"), format!("{PROJ}/v1.0")] {
+    // `<name>/<branch>`, `<name>/<tag>` and `<name>` itself all resolve.
+    for rev in [format!("{PROJ}/main"), format!("{PROJ}/v1.0"), PROJ.to_string()] {
         let out = run(sb.git(&sb.store).args(["rev-parse", "--verify", &rev]));
         assert_eq!(out.code, Some(0), "{rev}: {out:?}");
     }
@@ -135,6 +135,79 @@ fn add_names_upstreams_by_path_and_namespaces_their_tags() {
     let push = run(sb.git(&sb.store).args(["push", PROJ, &format!("{PROJ}/main:refs/heads/x")]));
     assert_ne!(push.code, Some(0));
     assert!(push.stderr.contains("no_push"), "{push:?}");
+}
+
+/// A second source repository, published as `<PROJ_URL minus .git>/sub.git`.
+fn add_sub_source(sb: &Sandbox) -> &'static str {
+    let sub = sb.tmp.path().join("src/sub");
+    make_git_repo(&sub);
+    fs::write(sub.join("README"), "sub\n").unwrap();
+    assert!(sb.git(&sub).args(["commit", "-qam", "sub"]).status().unwrap().success());
+    let url = "https://example.com/owner/proj/sub.git";
+    rewrite_url(sb.root(), url, &sub);
+    url
+}
+
+fn refs(sb: &Sandbox) -> String {
+    run(sb.git(&sb.store).args(["for-each-ref", "--format=%(refname) %(symref)"])).stdout
+}
+
+#[test]
+fn adding_a_nested_upstream_nests_the_outer_one() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    assert!(sb.git(&sb.src).args(["tag", "v1.0"]).status().unwrap().success());
+    // A branch of the outer project whose name looks like the inner one's refs.
+    assert!(sb.git(&sb.src).args(["branch", "sub/main"]).status().unwrap().success());
+
+    sb.ok(&["add", PROJ_URL]);
+    assert!(refs(&sb).contains(&format!("refs/remotes/{PROJ}/sub/main")), "natural at first");
+    sb.ok(&["add", sub_url]);
+    assert_eq!(sb.ok(&["list"]).stdout, format!("{PROJ}\n{PROJ}/sub\n"));
+    // The outer upstream's refs moved under `/-/`; the inner one's are where git puts them.
+    assert_eq!(
+        refs(&sb),
+        format!(
+            "refs/remotes/{PROJ}/-/HEAD refs/remotes/{PROJ}/-/main\n\
+             refs/remotes/{PROJ}/-/main \n\
+             refs/remotes/{PROJ}/-/sub/main \n\
+             refs/remotes/{PROJ}/sub/HEAD refs/remotes/{PROJ}/sub/main\n\
+             refs/remotes/{PROJ}/sub/main \n\
+             refs/tags/{PROJ}/-/v1.0 \n"
+        )
+    );
+    assert_eq!(
+        sb.store_config(&format!("remote.{PROJ}.fetch")),
+        format!("+refs/heads/*:refs/remotes/{PROJ}/-/*\n+refs/tags/*:refs/tags/{PROJ}/-/*")
+    );
+    assert_eq!(sb.ok(&["show", PROJ_URL, "sub/main:README"]).stdout, "hello\n");
+    assert_eq!(sb.ok(&["show", PROJ_URL, "v1.0:README"]).stdout, "hello\n");
+    assert_eq!(sb.ok(&["show", "sub", "main:README"]).stdout, "sub\n");
+
+    // Pruning the outer upstream leaves the inner one's refs alone.
+    assert!(sb.git(&sb.src).args(["branch", "-D", "sub/main"]).status().unwrap().success());
+    sb.ok(&["fetch", "-q", PROJ_URL]);
+    assert_eq!(sb.ok(&["show", "sub", "main:README"]).stdout, "sub\n");
+    assert_ne!(sb.h(&["show", PROJ_URL, "sub/main:README"]).code, Some(0));
+}
+
+#[test]
+fn an_outer_upstream_added_later_is_nested_from_the_start() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    sb.ok(&["add", sub_url]);
+    sb.ok(&["add", PROJ_URL]);
+    assert_eq!(
+        refs(&sb),
+        format!(
+            "refs/remotes/{PROJ}/-/HEAD refs/remotes/{PROJ}/-/main\n\
+             refs/remotes/{PROJ}/-/main \n\
+             refs/remotes/{PROJ}/sub/HEAD refs/remotes/{PROJ}/sub/main\n\
+             refs/remotes/{PROJ}/sub/main \n"
+        )
+    );
+    assert_eq!(sb.ok(&["show", "proj", "main:README"]).stdout, "hello\n");
+    assert_eq!(sb.ok(&["show", "sub", "main:README"]).stdout, "sub\n");
 }
 
 #[test]

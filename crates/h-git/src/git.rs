@@ -93,6 +93,24 @@ pub fn output(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<String, 
     }
 }
 
+/// Run `git` with `args`, feeding it `input` on stdin.
+pub fn run_with_input(
+    dir: Option<&Path>,
+    args: &[impl AsRef<OsStr>],
+    input: &[u8],
+) -> Result<(), GitError> {
+    use std::io::Write;
+    let mut child = command(dir, args).stdin(Stdio::piped()).spawn().map_err(GitError::Spawn)?;
+    let written = child.stdin.take().expect("stdin is piped").write_all(input);
+    let status = child.wait().map_err(GitError::Spawn)?;
+    if status.success() {
+        written.map_err(GitError::Spawn)
+    } else {
+        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
+        Err(GitError::Failed { args, code: exit_code(status) })
+    }
+}
+
 /// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
 pub fn passthrough(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
     let mut cmd = Command::new("git");

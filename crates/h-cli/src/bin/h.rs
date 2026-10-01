@@ -341,7 +341,14 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
         }
         names.push(upstream.name);
     }
-    store.fetch(&names, false).map_err(|e| e.to_string())
+    store.fetch(&names, false).map_err(|e| e.to_string())?;
+    for name in &names {
+        let nested = store.is_nested(name).map_err(|e| e.to_string())?;
+        if nested && !store.set_head(name).map_err(|e| e.to_string())? {
+            eprintln!("{name} has no default branch, so {name}/-/HEAD is not set");
+        }
+    }
+    Ok(())
 }
 
 fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {

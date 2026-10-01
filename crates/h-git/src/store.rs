@@ -3,8 +3,11 @@
 //! The store is read-only and kept fresh by fetching. Each upstream is a remote named by the
 //! path `h` would clone it to (`github.com/NixOS/nixpkgs`), with its branches under
 //! `refs/remotes/<name>/` and its tags under `refs/tags/<name>/`, so unrelated projects never
-//! collide and `<name>/<branch>` and `<name>/<tag>` both resolve. Pushing to any remote fails,
-//! and nothing is ever pruned, so clones that borrow objects from the store stay intact.
+//! collide and `<name>/<branch>` and `<name>/<tag>` both resolve. An upstream whose name another
+//! one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, is nested: its
+//! refs live under `<name>/-/` instead, so pruning it never touches the other's refs. No name has
+//! a `-` segment, so the two layouts never overlap. Pushing to any remote fails, and nothing is
+//! ever pruned, so clones that borrow objects from the store stay intact.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -93,17 +96,121 @@ impl Store {
     }
 
     /// Add the upstream `name` at `url`, or leave it alone if it is already there.
+    ///
+    /// An upstream whose name another one extends (`g/proj` beside `g/proj/sub`) is nested: its
+    /// refs move under `<name>/-/`, out of the way of the other's. Adding the inner one nests the
+    /// outer one first. The remote is written into the configuration directly, since `git remote
+    /// add` refuses a name that extends another's.
     pub fn add_remote(&self, name: &str, url: &str) -> Result<bool, GitError> {
-        if self.remotes()?.iter().any(|r| r == name) {
+        let remotes = self.remotes()?;
+        if remotes.iter().any(|r| r == name) {
             return Ok(false);
         }
+        for outer in remotes.iter().filter(|r| extends(name, r)) {
+            if !self.is_nested(outer)? {
+                self.nest(outer, &remotes)?;
+            }
+        }
+        let nested = remotes.iter().any(|r| extends(r, name));
         let dir = self.dir();
-        git::run(dir, &["remote", "add", name, url])?;
-        git::run(dir, &["config", &format!("remote.{name}.pushurl"), NO_PUSH])?;
-        git::run(dir, &["config", &format!("remote.{name}.tagOpt"), "--no-tags"])?;
-        let tags = format!("+refs/tags/*:refs/tags/{name}/*");
-        git::run(dir, &["config", "--add", &format!("remote.{name}.fetch"), &tags])?;
+        let key = |k: &str| format!("remote.{name}.{k}");
+        git::run(dir, &["config", &key("url"), url])?;
+        git::run(dir, &["config", &key("pushurl"), NO_PUSH])?;
+        git::run(dir, &["config", &key("tagOpt"), "--no-tags"])?;
+        for refspec in refspecs(name, nested) {
+            git::run(dir, &["config", "--add", &key("fetch"), &refspec])?;
+        }
         Ok(true)
+    }
+
+    /// Whether upstream `name` keeps its refs under `<name>/-/`.
+    pub fn is_nested(&self, name: &str) -> Result<bool, GitError> {
+        let key = format!("remote.{name}.fetch");
+        let configured = git::output(self.dir(), &["config", "--get-all", &key])?;
+        let [nested_heads, _] = refspecs(name, true);
+        Ok(configured.lines().any(|r| r == nested_heads))
+    }
+
+    /// What `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
+    fn prefix(&self, name: &str) -> Result<String, GitError> {
+        Ok(if self.is_nested(name)? { format!("{name}/-") } else { name.to_string() })
+    }
+
+    /// Point `<name>/-/HEAD` of a nested upstream at the branch the upstream's HEAD names, as
+    /// `git clone` does for `origin/HEAD`. Fetching does this only for refs directly under
+    /// `refs/remotes/<name>/`, so it is done here, once, when the upstream is added. Returns
+    /// whether HEAD was set.
+    pub fn set_head(&self, name: &str) -> Result<bool, GitError> {
+        let out = git::output(self.dir(), &["ls-remote", "--symref", name, "HEAD"])?;
+        let Some(branch) = out
+            .lines()
+            .find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
+        else {
+            return Ok(false);
+        };
+        let target = format!("refs/remotes/{name}/-/{branch}");
+        if git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &target]).is_err() {
+            return Ok(false);
+        }
+        let head = format!("refs/remotes/{name}/-/HEAD");
+        git::run(self.dir(), &["symbolic-ref", &head, &target])?;
+        Ok(true)
+    }
+
+    /// Move the refs of upstream `name` from directly under `refs/remotes/<name>/` and
+    /// `refs/tags/<name>/` to under `<name>/-/`, and fetch it there from now on. The refs of the
+    /// other `remotes` under those directories are left alone. No objects are touched, so nothing
+    /// needs fetching again.
+    fn nest(&self, name: &str, remotes: &[String]) -> Result<(), GitError> {
+        let dir = self.dir();
+        let branches = format!("refs/remotes/{name}/");
+        let tags = format!("refs/tags/{name}/");
+        let inner: Vec<String> = remotes.iter().filter(|r| extends(r, name)).cloned().collect();
+        let format = "--format=%(refname)%00%(objectname)%00%(symref)";
+        let refs = git::output(dir, &["for-each-ref", format, &branches, &tags])?;
+        let mut input = String::new();
+        let mut heads = Vec::new();
+        for line in refs.lines() {
+            let mut fields = line.split('\0');
+            let (Some(refname), Some(oid), Some(symref)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let Some((prefix, rest)) = [&branches, &tags]
+                .into_iter()
+                .find_map(|p| Some((p, refname.strip_prefix(p.as_str())?)))
+            else {
+                continue;
+            };
+            let inner_ref = |r: &String| {
+                refname.starts_with(&format!("refs/remotes/{r}/"))
+                    || refname.starts_with(&format!("refs/tags/{r}/"))
+            };
+            if inner.iter().any(inner_ref) {
+                continue;
+            }
+            if symref.is_empty() {
+                input.push_str(&format!("create {prefix}-/{rest} {oid}\ndelete {refname} {oid}\n"));
+            } else {
+                input.push_str(&format!("delete {refname}\n"));
+                if let Some(target) = symref.strip_prefix(prefix.as_str()) {
+                    heads.push((format!("{prefix}-/{rest}"), format!("{prefix}-/{target}")));
+                }
+            }
+        }
+        if !input.is_empty() {
+            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+        }
+        for (head, target) in heads {
+            git::run(dir, &["symbolic-ref", &head, &target])?;
+        }
+        let key = format!("remote.{name}.fetch");
+        git::run(dir, &["config", "--unset-all", &key])?;
+        for refspec in refspecs(name, true) {
+            git::run(dir, &["config", "--add", &key, &refspec])?;
+        }
+        Ok(())
     }
 
     /// Fetch the named upstreams, or all of them when `names` is empty.
@@ -122,15 +229,16 @@ impl Store {
         }
     }
 
-    /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` when that
-    /// names something, and otherwise `reference` itself, such as a commit hash.
-    fn revision(&self, name: &str, reference: &str) -> String {
-        let qualified = format!("{name}/{reference}");
+    /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or
+    /// `<name>/-/<reference>`, when nested) when that names something, and otherwise `reference`
+    /// itself, such as a commit hash.
+    fn revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
+        let qualified = format!("{}/{reference}", self.prefix(name)?);
         let object = format!("{qualified}^{{object}}");
-        match git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]) {
+        Ok(match git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]) {
             Ok(_) => qualified,
             Err(_) => reference.to_string(),
-        }
+        })
     }
 
     /// Show `spec` (a `<ref>` or `<ref>:<path>`) of upstream `name`, as `git show` prints it.
@@ -139,7 +247,7 @@ impl Store {
             Some(i) if i > 0 => spec.split_at(i),
             _ => (spec, ""),
         };
-        let spec = format!("{}{path}", self.revision(name, reference));
+        let spec = format!("{}{path}", self.revision(name, reference)?);
         git::passthrough(self.dir(), &["show", &spec])
     }
 
@@ -155,7 +263,7 @@ impl Store {
         if let Some(parent) = dir.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let commit = self.revision(name, reference);
+        let commit = self.revision(name, reference)?;
         let args: Vec<OsString> = vec![
             "worktree".into(),
             "add".into(),
@@ -178,6 +286,21 @@ impl Store {
         args.extend(tasks.iter().map(|task| format!("--task={task}")));
         git::run(self.dir(), &args)
     }
+}
+
+/// Whether the name `inner` extends the name `outer` by one or more segments.
+fn extends(inner: &str, outer: &str) -> bool {
+    inner.strip_prefix(outer).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The fetch refspecs of upstream `name`: its branches and tags, directly under `<name>/`, or
+/// under `<name>/-/` when it is nested. No name has a `-` segment, so the two never overlap.
+fn refspecs(name: &str, nested: bool) -> [String; 2] {
+    let sep = if nested { "/-" } else { "" };
+    [
+        format!("+refs/heads/*:refs/remotes/{name}{sep}/*"),
+        format!("+refs/tags/*:refs/tags/{name}{sep}/*"),
+    ]
 }
 
 /// A directory for a throwaway worktree of `name` at `reference`, under the temporary directory.
@@ -204,6 +327,15 @@ mod tests {
             assert!(!tasks.contains(&"prefetch"), "{schedule}: {tasks:?}");
         }
         assert_eq!(maintenance_tasks("monthly"), None);
+    }
+
+    #[test]
+    fn names_extend_by_whole_segments() {
+        assert!(extends("g/proj/sub", "g/proj"));
+        assert!(extends("g/proj/a/b", "g/proj"));
+        assert!(!extends("g/proj2", "g/proj"));
+        assert!(!extends("g/proj", "g/proj"));
+        assert!(!extends("g/proj", "g/proj/sub"));
     }
 
     #[test]

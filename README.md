@@ -42,9 +42,12 @@ clone.
 
 A store is one bare repository holding many unrelated upstream repositories as remotes, each
 named by the path `h` would clone it to (with any part git cannot use in a ref escaped, so
-`.local` becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags
-under `refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
-`github.com/torvalds/linux/v6.12` both resolve and nothing collides. The store is never pushed
+`.local` becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags under
+`refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
+`github.com/torvalds/linux/v6.12` both resolve and nothing collides. An upstream whose name
+another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps its
+refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
+the inner one moves the outer one's refs over. The store is never pushed
 to and never pruned, and clones made with a store configured borrow its objects through
 `git clone --reference-if-able`, so a clone of a fork costs only the fork's own commits.
 

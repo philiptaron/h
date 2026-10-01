@@ -115,8 +115,12 @@ fn escape_name(name: &str) -> String {
 
 /// One segment of a store name, made valid in a ref: characters git forbids become `_`, `..`
 /// and `@{` are broken up, and a segment starting with `.` (as `~/.local` does) or ending with
-/// `.` or `.lock` gets a `_` added at that end.
+/// `.` or `.lock` gets a `_` added at that end. A segment of just `-` becomes `_-`, since the
+/// store uses `/-/` to mark where a name ends and its refs begin.
 pub fn escape_segment(segment: &str) -> String {
+    if segment == "-" {
+        return "_-".into();
+    }
     let mut out: String = segment
         .chars()
         .map(|c| if c.is_ascii_control() || " ~^:?*[\\".contains(c) { '_' } else { c })
@@ -343,6 +347,8 @@ mod tests {
             ("a...b", "a._.b"),
             ("x@{y}", "x@_y}"),
             ("~me", "_me"),
+            ("-", "_-"),
+            ("-x", "-x"),
             ("sp ace:col?*[\\", "sp_ace_col____"),
         ] {
             assert_eq!(escape_segment(segment), escaped, "{segment}");

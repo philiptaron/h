@@ -225,6 +225,44 @@ fn clones_missing_github_repos() {
 }
 
 #[test]
+fn forks_get_an_unpushable_upstream() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("code");
+    let git = FakeGit::install(tmp.path());
+    let api = MockGitHub::start(&[(
+        "/repos/me/nixpkgs",
+        200,
+        r#"{"name": "nixpkgs", "owner": {"login": "me"}, "fork": true,
+            "parent": {"full_name": "NixOS/nixpkgs"}}"#,
+    )]);
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let run = run(cmd
+        .current_dir(tmp.path())
+        .env("H_GITHUB_API", &api.url)
+        .arg("--resolve")
+        .arg(&root)
+        .arg("me/nixpkgs"));
+
+    let path = root.join("github.com/me/nixpkgs");
+    assert_resolved(&run, &path);
+    let path = path.to_str().unwrap();
+    let c = ["-C", path];
+    assert_eq!(
+        git.invocations(),
+        [
+            vec!["clone", "--recursive", "--", "https://github.com/me/nixpkgs.git", path],
+            [&c[..], &["remote", "add", "upstream", "https://github.com/NixOS/nixpkgs.git"]]
+                .concat(),
+            [&c[..], &["config", "remote.upstream.pushurl", "no_push"]].concat(),
+            [&c[..], &["config", "remote.upstream.tagOpt", "--no-tags"]].concat(),
+            [&c[..], &["config", "remote.pushDefault", "origin"]].concat(),
+            [&c[..], &["fetch", "--quiet", "upstream"]].concat(),
+        ]
+    );
+}
+
+#[test]
 fn clones_other_urls_verbatim() {
     let tmp = tempfile::tempdir().unwrap();
     let git = FakeGit::install(tmp.path());

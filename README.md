@@ -25,6 +25,10 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 - `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>` or clone it (queries GitHub API for correct casing)
 - `h <url>` - cd to `~/code/<domain>/<path>` or clone it
 
+When GitHub says the repository is a fork, the clone gets an `upstream` remote that can be
+fetched but not pushed to (its push URL is `no_push`) and `origin`, the fork, becomes the default
+push target.
+
 ## up
 
 Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).

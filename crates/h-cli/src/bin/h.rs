@@ -57,11 +57,11 @@ fn main() -> ExitCode {
         print_path(&resolution.path);
         return ExitCode::SUCCESS;
     }
-    let Some(url) = resolution.clone_url else {
+    let Some(url) = &resolution.clone_url else {
         return fail_with_cwd(&format!("{term} not found"));
     };
 
-    match clone_repo(&url, &resolution.path, &args[4..]) {
+    match clone_repo(url, &resolution.path, &args[4..], resolution.upstream_url.as_deref()) {
         0 => {
             print_path(&resolution.path);
             ExitCode::SUCCESS

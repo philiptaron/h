@@ -16,6 +16,8 @@ pub const API_ENV: &str = "H_GITHUB_API";
 pub struct RepoInfo {
     pub owner: String,
     pub name: String,
+    /// For a fork, the `owner/name` of the repository it was forked from.
+    pub parent: Option<String>,
 }
 
 /// The API base URL, honoring [`API_ENV`].
@@ -45,12 +47,19 @@ pub fn fetch_repo_info(api_base: &str, user: &str, repo: &str) -> Option<RepoInf
     parse_repo_info(&body)
 }
 
-/// Extract `owner.login` and `name` from a GitHub repository JSON document.
+/// Extract `owner.login`, `name` and, for a fork, `parent.full_name` from a GitHub repository
+/// JSON document.
 pub fn parse_repo_info(body: &str) -> Option<RepoInfo> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     let owner = json.get("owner")?.get("login")?.as_str()?;
     let name = json.get("name")?.as_str()?;
-    Some(RepoInfo { owner: owner.to_string(), name: name.to_string() })
+    let parent = json
+        .get("parent")
+        .and_then(|parent| parent.get("full_name"))
+        .and_then(|full_name| full_name.as_str())
+        .filter(|full_name| full_name.contains('/'))
+        .map(String::from);
+    Some(RepoInfo { owner: owner.to_string(), name: name.to_string(), parent })
 }
 
 #[cfg(test)]
@@ -62,8 +71,19 @@ mod tests {
         let body = r#"{"id": 1, "name": "H", "owner": {"login": "ZimBatm", "id": 2}}"#;
         assert_eq!(
             parse_repo_info(body),
-            Some(RepoInfo { owner: "ZimBatm".into(), name: "H".into() })
+            Some(RepoInfo { owner: "ZimBatm".into(), name: "H".into(), parent: None })
         );
+    }
+
+    #[test]
+    fn parses_fork_parent() {
+        let body = r#"{"name": "nixpkgs", "owner": {"login": "me"}, "fork": true,
+                       "parent": {"full_name": "NixOS/nixpkgs", "owner": {"login": "NixOS"}}}"#;
+        assert_eq!(parse_repo_info(body).unwrap().parent, Some("NixOS/nixpkgs".into()));
+        let body = r#"{"name": "h", "owner": {"login": "me"}, "parent": {"full_name": "bad"}}"#;
+        assert_eq!(parse_repo_info(body).unwrap().parent, None);
+        let body = r#"{"name": "h", "owner": {"login": "me"}, "parent": null}"#;
+        assert_eq!(parse_repo_info(body).unwrap().parent, None);
     }
 
     #[test]

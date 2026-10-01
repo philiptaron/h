@@ -32,6 +32,8 @@ pub enum ParseError {
 pub struct Resolution {
     pub path: PathBuf,
     pub clone_url: Option<String>,
+    /// The URL of the repository this one was forked from, when GitHub reports one.
+    pub upstream_url: Option<String>,
 }
 
 fn is_valid_name_char(c: char) -> bool {
@@ -120,22 +122,24 @@ pub fn resolve(
 
     match target {
         Target::GitHub { user, repo } => {
-            let (user, repo) = match lookup(&user, &repo) {
-                Some(info) => (info.owner, info.name),
-                None => (user, repo),
+            let (user, repo, parent) = match lookup(&user, &repo) {
+                Some(info) => (info.owner, info.name, info.parent),
+                None => (user, repo, None),
             };
             Ok(Resolution {
                 path: concat_path(code_root, &["github.com", &user, &repo]),
                 clone_url: Some(format!("https://github.com/{user}/{repo}.git")),
+                upstream_url: parent.map(|parent| format!("https://github.com/{parent}.git")),
             })
         }
         Target::Remote { url, host, path } => Ok(Resolution {
             path: strip_git_extension(&concat_path(code_root, &[&host, &path])),
             clone_url: Some(url),
+            upstream_url: None,
         }),
         Target::Name(name) => {
             let path = search(code_root, &name).ok_or_else(not_found)?;
-            Ok(Resolution { path, clone_url: None })
+            Ok(Resolution { path, clone_url: None, upstream_url: None })
         }
     }
 }
@@ -229,13 +233,14 @@ mod tests {
         let root = Path::new("/code");
         let res = resolve(root, "zimbatm/H", |user, repo| {
             assert_eq!((user, repo), ("zimbatm", "H"));
-            Some(RepoInfo { owner: "ZimBatm".into(), name: "h".into() })
+            Some(RepoInfo { owner: "ZimBatm".into(), name: "h".into(), parent: None })
         });
         assert_eq!(
             res,
             Ok(Resolution {
                 path: PathBuf::from("/code/github.com/ZimBatm/h"),
                 clone_url: Some("https://github.com/ZimBatm/h.git".into()),
+                upstream_url: None,
             })
         );
     }
@@ -248,8 +253,21 @@ mod tests {
             Ok(Resolution {
                 path: PathBuf::from("/code/github.com/a/b"),
                 clone_url: Some("https://github.com/a/b.git".into()),
+                upstream_url: None,
             })
         );
+    }
+
+    #[test]
+    fn resolves_forks_with_their_upstream() {
+        let res = resolve(Path::new("/code"), "me/nixpkgs", |_, _| {
+            Some(RepoInfo {
+                owner: "me".into(),
+                name: "nixpkgs".into(),
+                parent: Some("NixOS/nixpkgs".into()),
+            })
+        });
+        assert_eq!(res.unwrap().upstream_url, Some("https://github.com/NixOS/nixpkgs.git".into()));
     }
 
     #[test]
@@ -261,6 +279,7 @@ mod tests {
             Ok(Resolution {
                 path: PathBuf::from("/code/gitlab.com/group/project"),
                 clone_url: Some(url.into()),
+                upstream_url: None,
             })
         );
     }
@@ -271,7 +290,7 @@ mod tests {
         let project = tmp.path().join("example.com/owner/proj");
         fs::create_dir_all(&project).unwrap();
         let res = resolve(tmp.path(), "proj", |_, _| panic!("not GitHub"));
-        assert_eq!(res, Ok(Resolution { path: project, clone_url: None }));
+        assert_eq!(res, Ok(Resolution { path: project, clone_url: None, upstream_url: None }));
     }
 
     #[test]
@@ -280,7 +299,7 @@ mod tests {
         let project = tmp.path().join("example.com/bare.git");
         fs::create_dir_all(&project).unwrap();
         let res = resolve(tmp.path(), "bare.git", |_, _| None);
-        assert_eq!(res, Ok(Resolution { path: project, clone_url: None }));
+        assert_eq!(res, Ok(Resolution { path: project, clone_url: None, upstream_url: None }));
     }
 
     #[test]

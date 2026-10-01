@@ -64,7 +64,8 @@ pub fn canonical(path: &Path) -> String {
     fs::canonicalize(path).unwrap().to_str().unwrap().to_string()
 }
 
-/// A fake `git` that records its arguments, writes to stdout, and exits with `$FAKE_GIT_EXIT`.
+/// A fake `git` that records the arguments of every invocation, writes to stdout, and exits with
+/// `$FAKE_GIT_EXIT`.
 ///
 /// With `$FAKE_GIT_MKDIR` set, it also creates its last argument (the clone target).
 pub struct FakeGit {
@@ -80,7 +81,7 @@ impl FakeGit {
         fs::write(
             &git,
             "#!/bin/sh\n\
-             for arg; do printf '%s\\n' \"$arg\"; done > \"$FAKE_GIT_LOG\"\n\
+             { for arg; do printf '%s\\n' \"$arg\"; done; echo; } >> \"$FAKE_GIT_LOG\"\n\
              echo 'fake git stdout'\n\
              for last; do :; done\n\
              [ -n \"$FAKE_GIT_MKDIR\" ] && mkdir -p \"$last\"\n\
@@ -100,10 +101,18 @@ impl FakeGit {
         cmd.env("FAKE_GIT_LOG", &self.log);
     }
 
+    /// The arguments of every invocation, in order; empty if git never ran.
+    pub fn invocations(&self) -> Vec<Vec<String>> {
+        let Ok(log) = fs::read_to_string(&self.log) else { return Vec::new() };
+        log.split("\n\n")
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| chunk.lines().map(String::from).collect())
+            .collect()
+    }
+
     /// The arguments of the last invocation, or `None` if git never ran.
     pub fn args(&self) -> Option<Vec<String>> {
-        let log = fs::read_to_string(&self.log).ok()?;
-        Some(log.lines().map(String::from).collect())
+        self.invocations().pop()
     }
 }
 

@@ -29,6 +29,8 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 - `h <term> [clone options]` - extra options go to `git clone`; `--container` clones into
   `<dir>/.bare` with a `.git` file beside it and no working tree, for projects worked on only
   through `git worktree add`
+- `h store <command> ...` - the [object store](#the-object-store) commands; anything else after
+  `store`, or nothing, jumps to a project named `store`
 
 Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
 is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push

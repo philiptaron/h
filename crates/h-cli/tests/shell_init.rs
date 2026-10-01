@@ -184,6 +184,23 @@ fn bash_h_store_runs_in_place() {
 }
 
 #[test]
+fn bash_h_store_jumps_to_a_project_named_store() {
+    let tmp = code_tree();
+    mkdirs(tmp.path(), &["github.com/owner/store"]);
+    let out = run(bash(
+        tmp.path(),
+        r#"eval "$("$H_SHELL_INIT" --store "$ROOT/the-store" "$ROOT")"
+           h store; echo "ret=$?"
+           pwd"#,
+    ));
+    assert_eq!(out.stderr, "", "{out:?}");
+    assert_eq!(
+        out.stdout,
+        format!("ret=0\n{}\n", tmp.path().join("github.com/owner/store").display())
+    );
+}
+
+#[test]
 fn bash_completion() {
     let tmp = code_tree();
     if !run(bash(tmp.path(), "type compgen")).code.is_some_and(|c| c == 0) {

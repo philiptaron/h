@@ -13,6 +13,11 @@ pub const CODE_ROOT_ENV: &str = "H_CODE_ROOT";
 /// Code root used when neither an argument nor [`CODE_ROOT_ENV`] gives one.
 pub const DEFAULT_CODE_ROOT: &str = "~/src";
 
+/// The subcommands of `h store`. Only these send `h store` to the store commands, so a project
+/// named `store` can still be jumped to with `h store`.
+pub const STORE_COMMANDS: &[&str] =
+    &["init", "add", "fetch", "list", "path", "remote", "show", "worktree", "maintain"];
+
 /// Options accepted by `h-shell-init`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HInitOptions {
@@ -64,8 +69,8 @@ pub fn parse_h_init_args(
 
 /// The shell function (and completion, for bash and zsh) that wraps `h`.
 ///
-/// `h <term> [clone options]` runs `h go` and changes directory to what it prints; `h store ...`
-/// runs the store commands in place. Both pass the code root, the store and the git options.
+/// `h <term> [clone options]` runs `h go` and changes directory to what it prints; `h store
+/// <command> ...` runs the store commands in place. Both pass the code root, the store and the git options.
 pub fn render_h_init(
     opts: &HInitOptions,
     h_exe: &str,
@@ -81,10 +86,13 @@ pub fn render_h_init(
     }
     let tail =
         if opts.git_opts.is_empty() { String::new() } else { format!(" -- {}", opts.git_opts) };
+    let store_commands: Vec<String> =
+        STORE_COMMANDS.iter().chain(&["-h", "--help"]).map(|c| format!("store:{c}")).collect();
+    let store_commands = store_commands.join("|");
     let mut out = format!(
         "{name}() {{\n\
-         \x20 case \"$1\" in\n\
-         \x20   store)\n\
+         \x20 case \"$1:$2\" in\n\
+         \x20   {store_commands})\n\
          \x20     {common} \"$@\"{tail}\n\
          \x20     return\n\
          \x20     ;;\n\
@@ -206,8 +214,8 @@ mod tests {
         assert_eq!(
             out,
             r#"h() {
-  case "$1" in
-    store)
+  case "$1:$2" in
+    store:init|store:add|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" "$@"
       return
       ;;
@@ -234,8 +242,8 @@ mod tests {
         assert_eq!(
             out,
             r#"j() {
-  case "$1" in
-    store)
+  case "$1:$2" in
+    store:init|store:add|store:fetch|store:list|store:path|store:remote|store:show|store:worktree|store:maintain|store:-h|store:--help)
       command /bin/h --root "/code" --store "/store" "$@" -- -c user.name="Me Too"
       return
       ;;

@@ -2,6 +2,7 @@
 //! never pushed to.
 
 use std::ffi::OsString;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use crate::git::{self, GitError};
@@ -9,12 +10,25 @@ use crate::git::{self, GitError};
 /// The push URL that makes every push to a remote fail.
 pub const NO_PUSH: &str = "no_push";
 
+/// Whether any option already decides submodule handling or precludes it.
+fn decides_submodules(opts: &[OsString]) -> bool {
+    opts.iter().any(|opt| {
+        let b = opt.as_bytes();
+        b == b"--bare"
+            || b == b"--mirror"
+            || b == b"--recursive"
+            || b == b"--no-recursive"
+            || b.starts_with(b"--recurse-submodules")
+            || b.starts_with(b"--no-recurse-submodules")
+    })
+}
+
 /// Arguments to pass to `git` to clone `url` into `path`.
 ///
-/// `--recursive` is added only when the caller supplies no options of their own.
+/// Submodules are cloned too unless an option says otherwise.
 pub fn git_clone_args(url: &str, path: &Path, extra: &[OsString]) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["clone".into()];
-    if extra.is_empty() {
+    if !decides_submodules(extra) {
         args.push("--recursive".into());
     }
     args.extend(extra.iter().cloned());
@@ -71,9 +85,21 @@ mod tests {
     }
 
     #[test]
-    fn extra_options_replace_recursive() {
+    fn extra_options_keep_recursive() {
         let extra = ["--depth".into(), "1".into()];
         let args = git_clone_args("https://x/y.git", Path::new("/code/x/y"), &extra);
-        assert_eq!(strings(args), ["clone", "--depth", "1", "--", "https://x/y.git", "/code/x/y"]);
+        assert_eq!(
+            strings(args),
+            ["clone", "--recursive", "--depth", "1", "--", "https://x/y.git", "/code/x/y"]
+        );
+    }
+
+    #[test]
+    fn submodule_options_replace_recursive() {
+        for opt in ["--bare", "--mirror", "--no-recurse-submodules", "--recurse-submodules=."] {
+            let extra = [opt.into()];
+            let args = git_clone_args("https://x/y.git", Path::new("/code/x/y"), &extra);
+            assert_eq!(strings(args), ["clone", opt, "--", "https://x/y.git", "/code/x/y"]);
+        }
     }
 }

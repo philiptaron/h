@@ -143,6 +143,7 @@ fn bash_h_passes_git_opts() {
         git.args().unwrap(),
         [
             "clone",
+            "--recursive",
             "--depth",
             "1",
             "--branch",

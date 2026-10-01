@@ -293,8 +293,32 @@ fn passes_extra_arguments_to_git() {
     assert_resolved(&run, &path);
     assert_eq!(
         git.args().unwrap(),
-        ["clone", "--depth", "1", "--branch", "dev", "--", url, path.to_str().unwrap()]
+        [
+            "clone",
+            "--recursive",
+            "--depth",
+            "1",
+            "--branch",
+            "dev",
+            "--",
+            url,
+            path.to_str().unwrap()
+        ]
     );
+}
+
+#[test]
+fn bare_clones_are_not_recursive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let git = FakeGit::install(tmp.path());
+    let url = "https://example.com/proj";
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let run =
+        run(cmd.current_dir(tmp.path()).arg("--resolve").arg(tmp.path()).args([url, "--bare"]));
+    let path = tmp.path().join("example.com/proj");
+    assert_resolved(&run, &path);
+    assert_eq!(git.args().unwrap(), ["clone", "--bare", "--", url, path.to_str().unwrap()]);
 }
 
 #[test]

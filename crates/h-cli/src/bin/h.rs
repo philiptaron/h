@@ -108,7 +108,7 @@ fn main() -> ExitCode {
     let store = store.or_else(|| std::env::var_os("H_STORE")).filter(|s| !s.is_empty());
     let config = Config {
         root: expand_tilde(&root),
-        store: store.map(|s| Store::new(expand_tilde(&s))),
+        store: store.map(|s| Store::new(absolute(&s))),
         git_opts,
     };
 
@@ -121,6 +121,12 @@ fn main() -> ExitCode {
         Some("store") => store_cmd(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
     }
+}
+
+/// `path` with `~` expanded, made absolute: git runs in the store, not the current directory.
+fn absolute(path: &OsStr) -> PathBuf {
+    let path = expand_tilde(path);
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 fn utf8(arg: &OsStr) -> Result<&str, String> {
@@ -284,7 +290,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         },
         Some("worktree") => match terms.as_slice() {
             [term, reference] | [term, reference, _] => {
-                let dir = rest.get(2).map(|d| expand_tilde(d));
+                let dir = rest.get(2).map(|d| absolute(d));
                 upstream_for(config, store, term).and_then(|u| {
                     store
                         .worktree(&u.name, reference, dir)

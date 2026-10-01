@@ -256,6 +256,17 @@ fn worktrees_are_detached_checkouts_from_the_store() {
     assert!(temp.starts_with(sb.tmp.path().join("h-worktrees")), "{temp:?}");
     assert_eq!(fs::read_to_string(temp.join("README")).unwrap(), "hello\n");
 
+    // Relative paths are relative to the current directory, not to the store.
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.root());
+    let out = run(cmd
+        .current_dir(sb.root())
+        .args(["--store", "store", "store", "worktree", "proj"])
+        .args(["main", "rel"]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_eq!(out.stdout, format!("{}\n", sb.root().join("rel").display()));
+    assert!(sb.root().join("rel/README").is_file());
+
     let out = sb.h(&["worktree", "proj"]);
     assert_eq!(out.stderr, "Usage: h store worktree <term> <ref> [DIR]\n");
 }

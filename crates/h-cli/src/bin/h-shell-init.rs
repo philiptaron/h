@@ -1,6 +1,6 @@
 //! Print the `h` shell function, plus tab completion for bash and zsh.
 //!
-//! Usage: `eval "$(h-shell-init [--pushd] [--name NAME] [--git-opts "OPTIONS"] [code-root])"`
+//! Usage: `eval "$(h-shell-init [--pushd] [--name NAME] [--store DIR] [--git-opts "OPTIONS"] [code-root])"`
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -37,11 +37,19 @@ fn main() -> ExitCode {
     let Some(code_root) = code_root.to_str() else {
         return fail(&format!("Code root is not valid UTF-8: {}", code_root.display()));
     };
+    let store = opts.store.as_deref().map(expand_tilde);
+    let store = match &store {
+        Some(store) => match store.to_str() {
+            Some(store) => Some(store),
+            None => return fail(&format!("Store is not valid UTF-8: {}", store.display())),
+        },
+        None => None,
+    };
     let exe = exe::sibling("h");
     let Some(exe) = exe.to_str() else {
         return fail(&format!("Path to h is not valid UTF-8: {}", exe.display()));
     };
 
-    print!("{}", render_h_init(&opts, exe, code_root, Shell::detect_parent()));
+    print!("{}", render_h_init(&opts, exe, code_root, store, Shell::detect_parent()));
     ExitCode::SUCCESS
 }

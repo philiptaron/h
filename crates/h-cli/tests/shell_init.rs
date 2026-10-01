@@ -34,7 +34,7 @@ fn h_init_help() {
             out.stdout,
             format!(
                 "h-shell-init {VERSION}\nUsage: eval \"$(h-shell-init [--pushd] [--name NAME] \
-                 [--git-opts \"OPTIONS\"] [code-root])\"\n"
+                 [--store DIR] [--git-opts \"OPTIONS\"] [code-root])\"\n"
             )
         );
     }
@@ -80,12 +80,17 @@ fn h_init_from_path_calls_h_by_absolute_path() {
 fn h_init_code_root_defaults() {
     let out = run(command(H_SHELL_INIT).env("HOME", "/home/test"));
     assert!(out.stdout.contains("--root \"/home/test/src\" go"), "{out:?}");
+    assert!(!out.stdout.contains("--store"), "{out:?}");
 
     let out = run(command(H_SHELL_INIT).env("HOME", "/home/test").env("H_CODE_ROOT", "~/code"));
     assert!(out.stdout.contains("--root \"/home/test/code\" go"), "{out:?}");
 
     let out = run(command(H_SHELL_INIT).env("H_CODE_ROOT", "/env").arg("/arg"));
     assert!(out.stdout.contains("--root \"/arg\" go"), "{out:?}");
+
+    let out =
+        run(command(H_SHELL_INIT).env("HOME", "/home/test").args(["--store", "~/store", "/arg"]));
+    assert!(out.stdout.contains("--root \"/arg\" --store \"/home/test/store\" go"), "{out:?}");
 }
 
 fn code_tree() -> tempfile::TempDir {
@@ -153,6 +158,29 @@ fn bash_h_passes_git_opts() {
             path.to_str().unwrap()
         ]
     );
+}
+
+#[test]
+fn bash_h_store_runs_in_place() {
+    let tmp = code_tree();
+    let store = tmp.path().join("store");
+    let mut cmd = bash(
+        tmp.path(),
+        r#"eval "$("$H_SHELL_INIT" --store "$ROOT/store" "$ROOT")"
+           cd github.com
+           h store init >/dev/null; echo "ret=$?"
+           h store path
+           h store list; echo "ret=$?"
+           pwd"#,
+    );
+    isolate_git(&mut cmd, tmp.path());
+    let out = run(cmd);
+    assert_eq!(out.stderr, "", "{out:?}");
+    assert_eq!(
+        out.stdout,
+        format!("ret=0\n{}\nret=0\n{}\n", store.display(), tmp.path().join("github.com").display())
+    );
+    assert!(store.join("HEAD").is_file());
 }
 
 #[test]

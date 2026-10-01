@@ -55,6 +55,11 @@ jobs:
           cd src/deeper
           up
           test "$PWD" = "$project"
+          # the store: created on first use, read without a working tree
+          git -C "$project" -c user.name=ci -c user.email=ci@example.com -c commit.gpgsign=false commit -q --allow-empty -m init
+          eval "$(h-shell-init --store ~/store ~/code)"
+          h store add "file://$project"
+          h store show project HEAD | grep -F init
 
   lint:
     runs-on: ubuntu-latest

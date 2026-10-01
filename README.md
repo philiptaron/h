@@ -14,6 +14,7 @@ eval "$(h-shell-init [options] [code-root])"
 Options:
 - `--pushd` - use `pushd` instead of `cd`
 - `--name NAME` - use NAME as the shell function name (default: `h`)
+- `--store DIR` - the object store that clones borrow from and `h store` operates on
 - `--git-opts "OPTIONS"` - git options for every clone, typically `-c user.name=... -c user.email=...`
 
 Tab completion for project names is set up automatically for both bash and zsh.

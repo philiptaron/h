@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use h_core::args::{Command, unknown_option};
 use h_core::shell::{CdCommand, Shell};
 
-pub const H_USAGE: &str =
-    "Usage: eval \"$(h-shell-init [--pushd] [--name NAME] [--git-opts \"OPTIONS\"] [code-root])\"";
+pub const H_USAGE: &str = "Usage: eval \"$(h-shell-init [--pushd] [--name NAME] [--store DIR] \
+                           [--git-opts \"OPTIONS\"] [code-root])\"";
 
 /// Environment variable holding the default code root.
 pub const CODE_ROOT_ENV: &str = "H_CODE_ROOT";
@@ -20,6 +20,8 @@ pub struct HInitOptions {
     pub cd: CdCommand,
     pub git_opts: String,
     pub code_root: Option<OsString>,
+    /// The object store clones borrow from and `h store` operates on.
+    pub store: Option<OsString>,
 }
 
 impl Default for HInitOptions {
@@ -29,6 +31,7 @@ impl Default for HInitOptions {
             cd: CdCommand::Cd,
             git_opts: String::new(),
             code_root: None,
+            store: None,
         }
     }
 }
@@ -49,6 +52,7 @@ pub fn parse_h_init_args(
             Some("--git-opts") if has_value => {
                 opts.git_opts = args.next().unwrap().to_string_lossy().into_owned()
             }
+            Some("--store") if has_value => opts.store = args.next(),
             Some("-h" | "--help") => return Ok(Command::Help),
             Some("-V" | "--version") => return Ok(Command::Version),
             _ if !arg.as_encoded_bytes().starts_with(b"-") => opts.code_root = Some(arg),
@@ -60,16 +64,31 @@ pub fn parse_h_init_args(
 
 /// The shell function (and completion, for bash and zsh) that wraps `h`.
 ///
-/// `h <term> [clone options]` runs `h go` and changes directory to what it prints, passing the
-/// code root and the git options.
-pub fn render_h_init(opts: &HInitOptions, h_exe: &str, code_root: &str, shell: Shell) -> String {
+/// `h <term> [clone options]` runs `h go` and changes directory to what it prints; `h store ...`
+/// runs the store commands in place. Both pass the code root, the store and the git options.
+pub fn render_h_init(
+    opts: &HInitOptions,
+    h_exe: &str,
+    code_root: &str,
+    store: Option<&str>,
+    shell: Shell,
+) -> String {
     let name = &opts.func_name;
     let cd = opts.cd.as_str();
-    let common = format!("command {h_exe} --root \"{code_root}\"");
+    let mut common = format!("command {h_exe} --root \"{code_root}\"");
+    if let Some(store) = store {
+        common.push_str(&format!(" --store \"{store}\""));
+    }
     let tail =
         if opts.git_opts.is_empty() { String::new() } else { format!(" -- {}", opts.git_opts) };
     let mut out = format!(
         "{name}() {{\n\
+         \x20 case \"$1\" in\n\
+         \x20   store)\n\
+         \x20     {common} \"$@\"{tail}\n\
+         \x20     return\n\
+         \x20     ;;\n\
+         \x20 esac\n\
          \x20 _h_dir=$({common} go \"$@\"{tail})\n\
          \x20 _h_ret=$?\n\
          \x20 [ \"$_h_dir\" != \"$PWD\" ] && {cd} \"$_h_dir\"\n\
@@ -134,6 +153,8 @@ mod tests {
             "j",
             "--git-opts",
             "--depth 1",
+            "--store",
+            "~/store",
             "~/code",
         ]));
         assert_eq!(
@@ -143,6 +164,7 @@ mod tests {
                 cd: CdCommand::Pushd,
                 git_opts: "--depth 1".into(),
                 code_root: Some("~/code".into()),
+                store: Some("~/store".into()),
             }))
         );
     }
@@ -175,14 +197,21 @@ mod tests {
             parse_h_init_args(args(&["--git-opts"])),
             Err("Unknown option: --git-opts".into())
         );
+        assert_eq!(parse_h_init_args(args(&["--store"])), Err("Unknown option: --store".into()));
     }
 
     #[test]
     fn renders_h_function() {
-        let out = render_h_init(&HInitOptions::default(), "/bin/h", "/code", Shell::Unknown);
+        let out = render_h_init(&HInitOptions::default(), "/bin/h", "/code", None, Shell::Unknown);
         assert_eq!(
             out,
             r#"h() {
+  case "$1" in
+    store)
+      command /bin/h --root "/code" "$@"
+      return
+      ;;
+  esac
   _h_dir=$(command /bin/h --root "/code" go "$@")
   _h_ret=$?
   [ "$_h_dir" != "$PWD" ] && cd "$_h_dir"
@@ -193,18 +222,25 @@ mod tests {
     }
 
     #[test]
-    fn renders_h_function_with_git_opts() {
+    fn renders_h_function_with_store_and_git_opts() {
         let opts = HInitOptions {
             func_name: "j".into(),
             cd: CdCommand::Pushd,
             git_opts: "-c user.name=\"Me Too\"".into(),
             code_root: None,
+            store: Some("/store".into()),
         };
-        let out = render_h_init(&opts, "/bin/h", "/code", Shell::Unknown);
+        let out = render_h_init(&opts, "/bin/h", "/code", Some("/store"), Shell::Unknown);
         assert_eq!(
             out,
             r#"j() {
-  _h_dir=$(command /bin/h --root "/code" go "$@" -- -c user.name="Me Too")
+  case "$1" in
+    store)
+      command /bin/h --root "/code" --store "/store" "$@" -- -c user.name="Me Too"
+      return
+      ;;
+  esac
+  _h_dir=$(command /bin/h --root "/code" --store "/store" go "$@" -- -c user.name="Me Too")
   _h_ret=$?
   [ "$_h_dir" != "$PWD" ] && pushd "$_h_dir"
   return $_h_ret
@@ -215,8 +251,8 @@ mod tests {
 
     #[test]
     fn renders_bash_completion() {
-        let out = render_h_init(&HInitOptions::default(), "/bin/h", "/code", Shell::Bash);
-        let completion = out.split_once("}\n").unwrap().1;
+        let out = render_h_init(&HInitOptions::default(), "/bin/h", "/code", None, Shell::Bash);
+        let completion = out.split_once("\n}\n").unwrap().1;
         assert_eq!(
             completion,
             r#"_h_complete() {
@@ -236,8 +272,8 @@ complete -F _h_complete h
     #[test]
     fn renders_zsh_completion() {
         let opts = HInitOptions { func_name: "j".into(), ..Default::default() };
-        let out = render_h_init(&opts, "/bin/h", "/code", Shell::Zsh);
-        let completion = out.split_once("}\n").unwrap().1;
+        let out = render_h_init(&opts, "/bin/h", "/code", None, Shell::Zsh);
+        let completion = out.split_once("\n}\n").unwrap().1;
         assert_eq!(
             completion,
             r#"_j_complete() {

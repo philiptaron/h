@@ -1,9 +1,9 @@
 //! The `h` command: jump to projects (cloning them if needed) and operate the shared object store.
 //!
-//! The shell function from `h-shell-init` runs `h --root <dir> go <term> [clone options] -- <git
-//! options>` and `cd`s to the one line printed on stdout; on failure `go` prints the current
-//! directory so the shell stays put. Everything else is meant to be run directly, by people and
-//! by agents alike.
+//! The shell function from `h-shell-init` runs `h --root <dir> [--store <dir>] go <term> [clone
+//! options] -- <git options>` and `cd`s to the one line printed on stdout; on failure `go` prints
+//! the current directory so the shell stays put. Everything else is meant to be run directly,
+//! by people and by agents alike.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;

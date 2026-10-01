@@ -13,7 +13,7 @@ eval "$(h-shell-init [options] [code-root])"
 Options:
 - `--pushd` - use `pushd` instead of `cd`
 - `--name NAME` - use NAME as the shell function name (default: `h`)
-- `--git-opts "OPTIONS"` - default git clone options (can be overridden per-call)
+- `--git-opts "OPTIONS"` - git options for every clone, typically `-c user.name=... -c user.email=...`
 
 Tab completion for project names is set up automatically for both bash and zsh.
 
@@ -24,12 +24,20 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 - `h <name>` - search for project matching `<name>` up to 3 levels deep
 - `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>` or clone it (queries GitHub API for correct casing)
 - `h <url>` - cd to `~/code/<domain>/<path>` or clone it
+- `h <term> [clone options]` - extra options go to `git clone`
 
 Clones recurse into submodules unless an option says otherwise.
 
 When GitHub says the repository is a fork, the clone gets an `upstream` remote that can be
 fetched but not pushed to (its push URL is `no_push`) and `origin`, the fork, becomes the default
 push target.
+
+The `h` binary takes `--root DIR`, or `$H_CODE_ROOT`, so scripts and agents can run it without
+the shell function:
+
+```bash
+h --root ~/code resolve nixpkgs
+```
 
 ## up
 

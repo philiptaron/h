@@ -59,31 +59,23 @@ pub fn parse_h_init_args(
 }
 
 /// The shell function (and completion, for bash and zsh) that wraps `h`.
+///
+/// `h <term> [clone options]` runs `h go` and changes directory to what it prints, passing the
+/// code root and the git options.
 pub fn render_h_init(opts: &HInitOptions, h_exe: &str, code_root: &str, shell: Shell) -> String {
     let name = &opts.func_name;
     let cd = opts.cd.as_str();
-    let mut out = if opts.git_opts.is_empty() {
-        format!(
-            "{name}() {{\n\
-             \x20 _h_dir=$(command {h_exe} --resolve \"{code_root}\" \"$@\")\n\
-             \x20 _h_ret=$?\n\
-             \x20 [ \"$_h_dir\" != \"$PWD\" ] && {cd} \"$_h_dir\"\n\
-             \x20 return $_h_ret\n\
-             }}\n"
-        )
-    } else {
-        let git_opts = &opts.git_opts;
-        format!(
-            "{name}() {{\n\
-             \x20 _h_term=\"$1\"\n\
-             \x20 shift\n\
-             \x20 _h_dir=$(command {h_exe} --resolve \"{code_root}\" \"$_h_term\" {git_opts} \"$@\")\n\
-             \x20 _h_ret=$?\n\
-             \x20 [ \"$_h_dir\" != \"$PWD\" ] && {cd} \"$_h_dir\"\n\
-             \x20 return $_h_ret\n\
-             }}\n"
-        )
-    };
+    let common = format!("command {h_exe} --root \"{code_root}\"");
+    let tail =
+        if opts.git_opts.is_empty() { String::new() } else { format!(" -- {}", opts.git_opts) };
+    let mut out = format!(
+        "{name}() {{\n\
+         \x20 _h_dir=$({common} go \"$@\"{tail})\n\
+         \x20 _h_ret=$?\n\
+         \x20 [ \"$_h_dir\" != \"$PWD\" ] && {cd} \"$_h_dir\"\n\
+         \x20 return $_h_ret\n\
+         }}\n"
+    );
 
     // Only emit completion code for the detected shell: bash fails to parse zsh glob qualifiers
     // like `*(N/:t)` even inside an untaken branch of an `if`.
@@ -191,7 +183,7 @@ mod tests {
         assert_eq!(
             out,
             r#"h() {
-  _h_dir=$(command /bin/h --resolve "/code" "$@")
+  _h_dir=$(command /bin/h --root "/code" go "$@")
   _h_ret=$?
   [ "$_h_dir" != "$PWD" ] && cd "$_h_dir"
   return $_h_ret
@@ -205,16 +197,14 @@ mod tests {
         let opts = HInitOptions {
             func_name: "j".into(),
             cd: CdCommand::Pushd,
-            git_opts: "--depth 1".into(),
+            git_opts: "-c user.name=\"Me Too\"".into(),
             code_root: None,
         };
         let out = render_h_init(&opts, "/bin/h", "/code", Shell::Unknown);
         assert_eq!(
             out,
             r#"j() {
-  _h_term="$1"
-  shift
-  _h_dir=$(command /bin/h --resolve "/code" "$_h_term" --depth 1 "$@")
+  _h_dir=$(command /bin/h --root "/code" go "$@" -- -c user.name="Me Too")
   _h_ret=$?
   [ "$_h_dir" != "$PWD" ] && pushd "$_h_dir"
   return $_h_ret

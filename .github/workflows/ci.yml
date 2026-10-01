@@ -38,8 +38,8 @@ jobs:
           # run from $PATH in another directory: the generated functions must call the h and up
           # next to the init programs, not ./h in the current directory
           cd "$RUNNER_TEMP"
-          h-shell-init --name h ~/code | grep -F "command $out/bin/h --resolve"
-          h-shell-init --name hq --git-opts '-c user.name=x' ~/code | grep -F "command $out/bin/h --resolve"
+          h-shell-init --name h ~/code | grep -F "command $out/bin/h --root"
+          h-shell-init --name hq --git-opts '-c user.name=x' ~/code | grep -F "command $out/bin/h --root"
           up-shell-init | grep -F "command $out/bin/up"
           # completion follows the parent shell (/proc on Linux, proc_name on macOS). The `; :`
           # keeps the shell from exec'ing h-shell-init in its place

@@ -61,7 +61,7 @@ fn h_init_points_at_sibling_h() {
     let out = run(command(H_SHELL_INIT).arg("/code"));
     assert_eq!(out.code, Some(0));
     let h = canonical(Path::new(H));
-    assert!(out.stdout.contains(&format!("command {h} --resolve \"/code\" \"$@\"")), "{out:?}");
+    assert!(out.stdout.contains(&format!("command {h} --root \"/code\" go \"$@\"")), "{out:?}");
     // Not run from bash or zsh, so no completion.
     assert!(!out.stdout.contains("complete"), "{out:?}");
 }
@@ -73,19 +73,19 @@ fn h_init_from_path_calls_h_by_absolute_path() {
     let path = std::env::join_paths([bin_dir.to_path_buf()]).unwrap();
     let out = run(command("h-shell-init").current_dir(tmp.path()).env("PATH", path).arg("/code"));
     let h = canonical(Path::new(H));
-    assert!(out.stdout.contains(&format!("command {h} --resolve")), "{out:?}");
+    assert!(out.stdout.contains(&format!("command {h} --root")), "{out:?}");
 }
 
 #[test]
 fn h_init_code_root_defaults() {
     let out = run(command(H_SHELL_INIT).env("HOME", "/home/test"));
-    assert!(out.stdout.contains("--resolve \"/home/test/src\""), "{out:?}");
+    assert!(out.stdout.contains("--root \"/home/test/src\" go"), "{out:?}");
 
     let out = run(command(H_SHELL_INIT).env("HOME", "/home/test").env("H_CODE_ROOT", "~/code"));
-    assert!(out.stdout.contains("--resolve \"/home/test/code\""), "{out:?}");
+    assert!(out.stdout.contains("--root \"/home/test/code\" go"), "{out:?}");
 
     let out = run(command(H_SHELL_INIT).env("H_CODE_ROOT", "/env").arg("/arg"));
-    assert!(out.stdout.contains("--resolve \"/arg\""), "{out:?}");
+    assert!(out.stdout.contains("--root \"/arg\" go"), "{out:?}");
 }
 
 fn code_tree() -> tempfile::TempDir {
@@ -131,7 +131,7 @@ fn bash_h_passes_git_opts() {
     let git = FakeGit::install(tmp.path());
     let mut cmd = bash(
         tmp.path(),
-        r#"eval "$("$H_SHELL_INIT" --git-opts "--depth 1" "$ROOT")"
+        r#"eval "$("$H_SHELL_INIT" --git-opts "-c user.name=\"Me Too\"" "$ROOT")"
            h https://example.com/new/repo.git --branch dev; echo "ret=$?"; pwd"#,
     );
     git.apply(&mut cmd);
@@ -144,8 +144,8 @@ fn bash_h_passes_git_opts() {
         [
             "clone",
             "--recursive",
-            "--depth",
-            "1",
+            "-c",
+            "user.name=Me Too",
             "--branch",
             "dev",
             "--",

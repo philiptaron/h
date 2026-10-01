@@ -1,4 +1,4 @@
-//! End-to-end tests for the `h` binary.
+//! End-to-end tests for the `h` binary's `go` and `resolve` commands.
 
 mod common;
 
@@ -10,88 +10,92 @@ use common::*;
 const H: &str = env!("CARGO_BIN_EXE_h");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const USAGE: &str = "Usage: h (<name> | <repo>/<name> | <url>) [git opts]\n";
+const GO_USAGE: &str = "Usage: h go (<name> | <user>/<repo> | <url>) [clone options]\n";
 
 fn h(cwd: &Path, args: &[&str]) -> Run {
     run(command(H).current_dir(cwd).args(args))
 }
 
-fn resolve(root: &Path, term: &str) -> Run {
-    run(command(H).current_dir(root).arg("--resolve").arg(root).arg(term))
+fn go(root: &Path, term: &str) -> Run {
+    run(command(H).current_dir(root).arg("--root").arg(root).args(["go", term]))
 }
 
-fn assert_failed_in(run: &Run, cwd: &Path, stderr: &str) {
-    assert_eq!(run.code, Some(1), "{run:?}");
-    assert_eq!(run.stdout, format!("{}\n", canonical(cwd)));
-    assert_eq!(run.stderr, stderr);
+fn assert_failed_in(out: &Run, cwd: &Path, stderr: &str) {
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert_eq!(out.stdout, format!("{}\n", canonical(cwd)));
+    assert_eq!(out.stderr, stderr);
 }
 
-fn assert_resolved(run: &Run, path: &Path) {
-    assert_eq!(run.code, Some(0), "{run:?}");
-    assert_eq!(run.stdout, format!("{}\n", path.display()));
+fn assert_resolved(out: &Run, path: &Path) {
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_eq!(out.stdout, format!("{}\n", path.display()));
 }
 
 #[test]
 fn without_arguments_prints_usage() {
     let tmp = tempfile::tempdir().unwrap();
-    let run = h(tmp.path(), &[]);
-    let usage = format!("h {VERSION}\nUsage: eval \"$(h-shell-init [options] [code-root])\"\n");
-    assert_failed_in(&run, tmp.path(), &usage);
+    let out = h(tmp.path(), &[]);
+    assert_eq!(out.code, Some(1));
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.starts_with(&format!("h {VERSION}\nUsage: h [--root DIR]")), "{out:?}");
 }
 
 #[test]
-fn prints_version() {
+fn prints_version_and_help() {
     let tmp = tempfile::tempdir().unwrap();
     for flag in ["-V", "--version"] {
-        let run = h(tmp.path(), &[flag]);
-        assert_eq!((run.code, run.stdout.as_str()), (Some(0), format!("h {VERSION}\n").as_str()));
-        assert_eq!(run.stderr, "");
+        let out = h(tmp.path(), &[flag]);
+        assert_eq!((out.code, out.stdout.as_str()), (Some(0), format!("h {VERSION}\n").as_str()));
+        assert_eq!(out.stderr, "");
     }
+    let out = h(tmp.path(), &["--help"]);
+    assert_eq!(out.code, Some(0));
+    assert!(out.stdout.contains("resolve <term>"), "{out:?}");
 }
 
 #[test]
-fn without_resolve_reports_not_installed() {
+fn rejects_unknown_options_and_commands() {
     let tmp = tempfile::tempdir().unwrap();
-    let run = h(tmp.path(), &["proj"]);
-    assert_failed_in(
-        &run,
-        tmp.path(),
-        &format!(
-            "h {VERSION}\nh is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"\n"
-        ),
-    );
+    let out = h(tmp.path(), &["--bogus"]);
+    assert_eq!(out.code, Some(1));
+    assert!(out.stderr.starts_with("Unknown option: --bogus\n"), "{out:?}");
+    let out = h(tmp.path(), &["jump"]);
+    assert!(out.stderr.starts_with("Unknown command: jump\n"), "{out:?}");
 }
 
 #[test]
-fn resolve_requires_root_and_term() {
+fn go_requires_a_term() {
     let tmp = tempfile::tempdir().unwrap();
-    let run = h(tmp.path(), &["--resolve"]);
-    assert_failed_in(&run, tmp.path(), "Usage: h --resolve <code-root> <term>\n");
-    let run = h(tmp.path(), &["--resolve", "/code"]);
-    assert_failed_in(&run, tmp.path(), USAGE);
-}
-
-#[test]
-fn help_prints_usage() {
-    let tmp = tempfile::tempdir().unwrap();
+    let out = h(tmp.path(), &["--root", "/code", "go"]);
+    assert_failed_in(&out, tmp.path(), GO_USAGE);
     for flag in ["-h", "--help"] {
-        let run = h(tmp.path(), &["--resolve", "/code", flag]);
-        assert_failed_in(&run, tmp.path(), USAGE);
+        let out = h(tmp.path(), &["--root", "/code", "go", flag]);
+        assert_failed_in(&out, tmp.path(), GO_USAGE);
     }
+}
+
+#[test]
+fn legacy_resolve_flag_still_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    mkdirs(tmp.path(), &["github.com/owner/proj"]);
+    let out = run(command(H).current_dir(tmp.path()).arg("--resolve").arg(tmp.path()).arg("proj"));
+    assert_resolved(&out, &tmp.path().join("github.com/owner/proj"));
+    let out = h(tmp.path(), &["--resolve"]);
+    assert_failed_in(&out, tmp.path(), "Usage: h --resolve <code-root> <term>\n");
 }
 
 #[test]
 fn finds_projects_by_name() {
     let tmp = tempfile::tempdir().unwrap();
     mkdirs(tmp.path(), &["github.com/owner/Proj", "proj", "gitlab.com/proj"]);
-    assert_resolved(&resolve(tmp.path(), "proj"), &tmp.path().join("github.com/owner/Proj"));
-    assert_resolved(&resolve(tmp.path(), "Proj"), &tmp.path().join("github.com/owner/Proj"));
+    assert_resolved(&go(tmp.path(), "proj"), &tmp.path().join("github.com/owner/Proj"));
+    assert_resolved(&go(tmp.path(), "Proj"), &tmp.path().join("github.com/owner/Proj"));
 }
 
 #[test]
 fn reports_missing_projects() {
     let tmp = tempfile::tempdir().unwrap();
-    assert_failed_in(&resolve(tmp.path(), "nope"), tmp.path(), "nope not found\n");
+    assert_failed_in(&go(tmp.path(), "nope"), tmp.path(), "nope not found\n");
 }
 
 #[test]
@@ -99,26 +103,61 @@ fn reports_unknown_patterns() {
     let tmp = tempfile::tempdir().unwrap();
     for term in ["a/b/c", "two words", ""] {
         let msg = format!("Unknown pattern for {term}\n");
-        assert_failed_in(&resolve(tmp.path(), term), tmp.path(), &msg);
+        assert_failed_in(&go(tmp.path(), term), tmp.path(), &msg);
     }
 }
 
 #[test]
 fn reports_scp_urls_without_path() {
     let tmp = tempfile::tempdir().unwrap();
-    assert_failed_in(&resolve(tmp.path(), "git@host"), tmp.path(), "git@host not found\n");
+    assert_failed_in(&go(tmp.path(), "git@host"), tmp.path(), "git@host not found\n");
 }
 
 #[test]
-fn expands_tilde_in_code_root() {
+fn root_comes_from_flag_env_or_default() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["code/example.com/proj"]);
-    let run = run(command(H).current_dir(tmp.path()).env("HOME", tmp.path()).args([
-        "--resolve",
-        "~/code",
-        "proj",
-    ]));
-    assert_resolved(&run, &tmp.path().join("code/example.com/proj"));
+    mkdirs(tmp.path(), &["code/example.com/proj", "src/example.com/proj", "env/example.com/proj"]);
+    let home = tmp.path();
+    let out = run(command(H)
+        .current_dir(home)
+        .env("HOME", home)
+        .args(["--root", "~/code", "go", "proj"]));
+    assert_resolved(&out, &home.join("code/example.com/proj"));
+    let out = run(command(H)
+        .current_dir(home)
+        .env("HOME", home)
+        .env("H_CODE_ROOT", "~/env")
+        .args(["go", "proj"]));
+    assert_resolved(&out, &home.join("env/example.com/proj"));
+    let out = run(command(H).current_dir(home).env("HOME", home).args(["go", "proj"]));
+    assert_resolved(&out, &home.join("src/example.com/proj"));
+}
+
+#[test]
+fn resolve_never_clones() {
+    let tmp = tempfile::tempdir().unwrap();
+    mkdirs(tmp.path(), &["github.com/owner/proj"]);
+    let git = FakeGit::install(tmp.path());
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let out = run(cmd
+        .current_dir(tmp.path())
+        .arg("--root")
+        .arg(tmp.path())
+        .args(["resolve", "owner/proj"]));
+    assert_resolved(&out, &tmp.path().join("github.com/owner/proj"));
+
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    let out = run(cmd
+        .current_dir(tmp.path())
+        .arg("--root")
+        .arg(tmp.path())
+        .args(["resolve", "owner/other"]));
+    assert_eq!(out.code, Some(1));
+    assert_eq!(out.stdout, "", "resolve prints nothing on failure");
+    assert_eq!(out.stderr, "owner/other not found\n");
+    assert_eq!(git.args(), None);
 }
 
 #[test]
@@ -130,13 +169,13 @@ fn github_shorthand_uses_canonical_casing() {
         200,
         r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#,
     )]);
-    let run = run(command(H)
+    let out = run(command(H)
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
-        .args(["--resolve"])
+        .arg("--root")
         .arg(tmp.path())
-        .arg("zimbatm/h"));
-    assert_resolved(&run, &tmp.path().join("github.com/ZimBatm/H"));
+        .args(["go", "zimbatm/h"]));
+    assert_resolved(&out, &tmp.path().join("github.com/ZimBatm/H"));
 
     let requests = api.requests();
     assert_eq!(requests.len(), 1);
@@ -151,17 +190,17 @@ fn github_lookup_failure_keeps_given_casing() {
     let tmp = tempfile::tempdir().unwrap();
     mkdirs(tmp.path(), &["github.com/zimbatm/h"]);
     let api = MockGitHub::start(&[("/repos/zimbatm/h", 500, "{}")]);
-    let run = run(command(H)
+    let out = run(command(H)
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
-        .arg("--resolve")
+        .arg("--root")
         .arg(tmp.path())
-        .arg("zimbatm/h"));
-    assert_resolved(&run, &tmp.path().join("github.com/zimbatm/h"));
+        .args(["go", "zimbatm/h"]));
+    assert_resolved(&out, &tmp.path().join("github.com/zimbatm/h"));
     assert_eq!(api.requests().len(), 1);
 
     // An unreachable API behaves the same.
-    assert_resolved(&resolve(tmp.path(), "zimbatm/h"), &tmp.path().join("github.com/zimbatm/h"));
+    assert_resolved(&go(tmp.path(), "zimbatm/h"), &tmp.path().join("github.com/zimbatm/h"));
 }
 
 #[test]
@@ -175,7 +214,7 @@ fn github_urls_resolve_to_github_paths() {
         "git@github.com:zimbatm/h.git",
         "zimbatm/h.git",
     ] {
-        assert_resolved(&resolve(tmp.path(), term), &want);
+        assert_resolved(&go(tmp.path(), term), &want);
     }
 }
 
@@ -190,7 +229,7 @@ fn other_urls_resolve_under_their_host() {
         "git@gitlab.com:group/sub/proj.git",
         "gitea@GITLAB.COM:group/sub/proj",
     ] {
-        assert_resolved(&resolve(tmp.path(), term), &want);
+        assert_resolved(&go(tmp.path(), term), &want);
     }
 }
 
@@ -206,21 +245,27 @@ fn clones_missing_github_repos() {
     )]);
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd
+    let out = run(cmd
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
-        .arg("--resolve")
+        .arg("--root")
         .arg(&root)
-        .arg("zimbatm/h"));
+        .args(["go", "zimbatm/h"]));
 
     let path = root.join("github.com/Zimbatm/h");
-    assert_resolved(&run, &path);
+    assert_resolved(&out, &path);
     // Git's stdout goes to stderr so it is not mistaken for the directory.
-    assert_eq!(run.stderr, "fake git stdout\n");
+    assert_eq!(out.stderr, "fake git stdout\n");
     assert!(root.join("github.com/Zimbatm").is_dir(), "parent directories are created");
     assert_eq!(
-        git.args().unwrap(),
-        ["clone", "--recursive", "--", "https://github.com/Zimbatm/h.git", path.to_str().unwrap()]
+        git.invocations(),
+        [[
+            "clone",
+            "--recursive",
+            "--",
+            "https://github.com/Zimbatm/h.git",
+            path.to_str().unwrap()
+        ]]
     );
 }
 
@@ -237,15 +282,15 @@ fn forks_get_an_unpushable_upstream() {
     )]);
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd
+    let out = run(cmd
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
-        .arg("--resolve")
+        .arg("--root")
         .arg(&root)
-        .arg("me/nixpkgs"));
+        .args(["go", "me/nixpkgs"]));
 
     let path = root.join("github.com/me/nixpkgs");
-    assert_resolved(&run, &path);
+    assert_resolved(&out, &path);
     let path = path.to_str().unwrap();
     let c = ["-C", path];
     assert_eq!(
@@ -269,33 +314,41 @@ fn clones_other_urls_verbatim() {
     let url = "git@gitlab.com:group/proj.git";
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd.current_dir(tmp.path()).arg("--resolve").arg(tmp.path()).arg(url));
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(tmp.path()).args(["go", url]));
 
     let path = tmp.path().join("gitlab.com/group/proj");
-    assert_resolved(&run, &path);
+    assert_resolved(&out, &path);
     assert_eq!(git.args().unwrap(), ["clone", "--recursive", "--", url, path.to_str().unwrap()]);
 }
 
 #[test]
-fn passes_extra_arguments_to_git() {
+fn passes_clone_options_and_git_options() {
     let tmp = tempfile::tempdir().unwrap();
     let git = FakeGit::install(tmp.path());
     let url = "https://example.com/proj";
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd
-        .current_dir(tmp.path())
-        .arg("--resolve")
-        .arg(tmp.path())
-        .args([url, "--depth", "1", "--branch", "dev"]));
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(tmp.path()).args([
+        "go",
+        url,
+        "--depth",
+        "1",
+        "--branch",
+        "dev",
+        "--",
+        "-c",
+        "user.name=Me",
+    ]));
 
     let path = tmp.path().join("example.com/proj");
-    assert_resolved(&run, &path);
+    assert_resolved(&out, &path);
     assert_eq!(
         git.args().unwrap(),
         [
             "clone",
             "--recursive",
+            "-c",
+            "user.name=Me",
             "--depth",
             "1",
             "--branch",
@@ -314,10 +367,10 @@ fn bare_clones_are_not_recursive() {
     let url = "https://example.com/proj";
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run =
-        run(cmd.current_dir(tmp.path()).arg("--resolve").arg(tmp.path()).args([url, "--bare"]));
+    let out =
+        run(cmd.current_dir(tmp.path()).arg("--root").arg(tmp.path()).args(["go", url, "--bare"]));
     let path = tmp.path().join("example.com/proj");
-    assert_resolved(&run, &path);
+    assert_resolved(&out, &path);
     assert_eq!(git.args().unwrap(), ["clone", "--bare", "--", url, path.to_str().unwrap()]);
 }
 
@@ -328,12 +381,12 @@ fn does_not_clone_existing_directories() {
     let git = FakeGit::install(tmp.path());
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd
+    let out = run(cmd
         .current_dir(tmp.path())
-        .arg("--resolve")
+        .arg("--root")
         .arg(tmp.path())
-        .arg("https://example.com/proj.git"));
-    assert_resolved(&run, &tmp.path().join("example.com/proj"));
+        .args(["go", "https://example.com/proj.git"]));
+    assert_resolved(&out, &tmp.path().join("example.com/proj"));
     assert_eq!(git.args(), None);
 }
 
@@ -343,28 +396,28 @@ fn clone_failure_returns_git_status() {
     let git = FakeGit::install(tmp.path());
     let mut cmd = command(H);
     git.apply(&mut cmd);
-    let run = run(cmd
+    let out = run(cmd
         .current_dir(tmp.path())
         .env("FAKE_GIT_EXIT", "42")
-        .arg("--resolve")
+        .arg("--root")
         .arg(tmp.path())
-        .arg("https://example.com/proj"));
-    assert_eq!(run.code, Some(42));
-    assert_eq!(run.stdout, format!("{}\n", canonical(tmp.path())));
+        .args(["go", "https://example.com/proj"]));
+    assert_eq!(out.code, Some(42));
+    assert_eq!(out.stdout, format!("{}\n", canonical(tmp.path())));
 }
 
 #[test]
 fn missing_git_is_reported() {
     let tmp = tempfile::tempdir().unwrap();
-    let run = run(command(H)
+    let out = run(command(H)
         .current_dir(tmp.path())
         .env("PATH", tmp.path().join("empty"))
-        .arg("--resolve")
+        .arg("--root")
         .arg(tmp.path())
-        .arg("https://example.com/proj"));
-    assert_eq!(run.code, Some(127));
-    assert_eq!(run.stdout, format!("{}\n", canonical(tmp.path())));
-    assert!(run.stderr.starts_with("failed to run git: "), "{run:?}");
+        .args(["go", "https://example.com/proj"]));
+    assert_eq!(out.code, Some(127));
+    assert_eq!(out.stdout, format!("{}\n", canonical(tmp.path())));
+    assert!(out.stderr.starts_with("failed to run git: "), "{out:?}");
 }
 
 #[test]
@@ -377,14 +430,14 @@ fn clones_with_real_git() {
 
     let mut cmd = command(H);
     isolate_git(&mut cmd, tmp.path());
-    let run = run(cmd.current_dir(tmp.path()).arg("--resolve").arg(&root).arg(&url));
+    let out = run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args(["go", &url]));
 
     // `file:///abs/path` has an empty host, giving `<root>//abs/path`.
     let path = format!("{}/{}", root.display(), src.display());
     let path = Path::new(path.strip_suffix(".git").unwrap());
-    assert_resolved(&run, path);
+    assert_resolved(&out, path);
     assert_eq!(fs::read_to_string(path.join("README")).unwrap(), "hello\n");
 
     // A second call finds the clone instead of cloning again.
-    assert_resolved(&resolve(&root, &url), path);
+    assert_resolved(&go(&root, &url), path);
 }

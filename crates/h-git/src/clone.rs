@@ -3,11 +3,13 @@
 //! from but never pushed to.
 
 use std::ffi::OsString;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::io::IsTerminal;
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Stdio;
 
 use crate::git::{self, GitError, config_pairs, non_config_opts};
+use crate::submodules::{self, SubmoduleOptions};
 
 /// The name of the bare repository inside a container clone.
 pub const BARE_DIR: &str = ".bare";
@@ -37,38 +39,62 @@ pub struct CloneRequest<'a> {
     pub upstream_url: Option<&'a str>,
 }
 
-/// Whether any option already decides submodule handling or precludes it.
-fn decides_submodules(opts: &[OsString]) -> bool {
-    opts.iter().any(|opt| {
-        let b = opt.as_bytes();
-        b == b"--bare"
-            || b == b"--mirror"
-            || b == b"--recursive"
-            || b == b"--no-recursive"
-            || b.starts_with(b"--recurse-submodules")
-            || b.starts_with(b"--no-recurse-submodules")
-    })
+/// How a plain clone deals with its submodules and the store.
+struct Plan<'a> {
+    submodules: SubmoduleOptions,
+    /// The store to borrow from, if any.
+    store: Option<&'a Path>,
+    /// Whether the submodules are left out of `git clone` and cloned afterwards by
+    /// [`update_submodules`], so that they borrow from the store too.
+    split: bool,
+}
+
+fn plan<'a>(req: &CloneRequest<'a>) -> Plan<'a> {
+    let submodules = SubmoduleOptions::parse(req.git_opts.iter().chain(req.extra));
+    let recurses = !submodules.pathspecs().is_empty();
+    // With its own `--reference`, a recursive clone is git's to finish: git looks for each
+    // submodule under `modules/` of every alternate, the store's included, and fails when it
+    // is not there, or refuses outright beside `--reference-if-able`.
+    let store = req.reference.filter(|_| !(recurses && submodules.references));
+    let split = store.is_some() && recurses;
+    Plan { submodules, store, split }
 }
 
 /// Arguments to pass to `git` for a plain (non-container) clone.
 ///
 /// Submodules are cloned too unless an option says otherwise, and objects are borrowed from the
-/// reference store when there is one.
+/// reference store when there is one. When both, `git clone` leaves the submodules alone and they
+/// are cloned afterwards by [`update_submodules`], so that they borrow from the store as well.
 pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
+    let plan = plan(req);
     let mut args: Vec<OsString> = vec!["clone".into()];
-    if !decides_submodules(req.git_opts) && !decides_submodules(req.extra) {
+    if plan.submodules.recurse.is_none() && !plan.submodules.bare && !plan.split {
         args.push("--recursive".into());
     }
-    if let Some(reference) = req.reference {
+    if let Some(store) = plan.store {
         args.push("--reference-if-able".into());
-        args.push(reference.into());
+        args.push(store.into());
         if let Some(prefixes) = alternate_refs_prefixes(req.reference_names) {
             args.push("-c".into());
             args.push(format!("core.alternateRefsPrefixes={prefixes}").into());
         }
     }
+    if plan.split {
+        // What `git clone --recurse-submodules` itself records.
+        for pathspec in plan.submodules.pathspecs() {
+            args.push("-c".into());
+            args.push(format!("submodule.active={pathspec}").into());
+        }
+    }
     args.extend(req.git_opts.iter().cloned());
-    args.extend(req.extra.iter().cloned());
+    // Without a filter, `git clone` is left to reject `--also-filter-submodules` itself.
+    let only_for_submodules = |opt: &&OsString| {
+        plan.split && plan.submodules.filter.is_some() && SubmoduleOptions::is_submodule_only(opt)
+    };
+    args.extend(req.extra.iter().filter(|opt| !only_for_submodules(opt)).cloned());
+    if plan.split {
+        args.push("--no-recurse-submodules".into());
+    }
     args.push("--".into());
     args.push(req.url.into());
     args.push(req.path.into());
@@ -119,7 +145,29 @@ fn git_dir(req: &CloneRequest) -> std::path::PathBuf {
 }
 
 fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
-    git::run(None, &git_clone_args(req))
+    git::run(None, &git_clone_args(req))?;
+    match plan(req) {
+        Plan { submodules, store: Some(store), split: true } if submodules.checks_out() => {
+            update_submodules(req.path, store, &submodules)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Clone the submodules of the new clone at `path`, borrowing from `store`, as `git clone
+/// --recurse-submodules` would have after checking out.
+fn update_submodules(path: &Path, store: &Path, opts: &SubmoduleOptions) -> Result<(), GitError> {
+    // Settings `git clone` consults when it clones submodules.
+    let pattern = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
+    let settings = git::output(Some(path), &["config", "--type=bool", "--get-regexp", pattern])
+        .unwrap_or_default();
+    let enabled = |key: &str| settings.lines().any(|line| line == format!("{key} true"));
+    if enabled("submodule.stickyrecursiveclone") {
+        git::run(Some(path), &["config", "submodule.recurse", "true"])?;
+    }
+    let filter = opts.also_filter.unwrap_or_else(|| enabled("clone.filtersubmodules"));
+    let progress = opts.progress.unwrap_or_else(|| !opts.quiet && std::io::stderr().is_terminal());
+    git::run(Some(path), &submodules::update_args(opts, store, filter, progress))
 }
 
 /// Clone options that mean the same to `git fetch`, so a container clone can pass them on.
@@ -538,13 +586,16 @@ mod tests {
     fn borrows_from_the_reference_store() {
         let mut req = request(&[], &[]);
         req.reference = Some(Path::new("/store"));
+        // Submodules are cloned afterwards, so that they borrow from the store too.
         assert_eq!(
             strings(git_clone_args(&req)),
             [
                 "clone",
-                "--recursive",
                 "--reference-if-able",
                 "/store",
+                "-c",
+                "submodule.active=.",
+                "--no-recurse-submodules",
                 "--",
                 "https://x/y.git",
                 "/code/x/y"
@@ -556,7 +607,7 @@ mod tests {
         req.reference_names = &names;
         let args = strings(git_clone_args(&req));
         assert_eq!(
-            args[2..6],
+            args[1..5],
             [
                 "--reference-if-able",
                 "/store",
@@ -565,5 +616,71 @@ mod tests {
                  refs/remotes/x/parent/ refs/tags/x/parent/"
             ]
         );
+        assert!(plan(&req).split);
+    }
+
+    #[test]
+    fn submodules_of_borrowing_clones_follow_the_options() {
+        let store = Some(Path::new("/store"));
+        let git_opts = opts(&["-c", "user.name=Me"]);
+        let extra = opts(&[
+            "--recurse-submodules=lib",
+            "--filter=blob:none",
+            "--also-filter-submodules",
+            "--recursive=b",
+        ]);
+        let req = CloneRequest { reference: store, ..request(&git_opts, &extra) };
+        assert_eq!(
+            strings(git_clone_args(&req)),
+            [
+                "clone",
+                "--reference-if-able",
+                "/store",
+                "-c",
+                "submodule.active=b",
+                "-c",
+                "submodule.active=lib",
+                "-c",
+                "user.name=Me",
+                "--recurse-submodules=lib",
+                "--filter=blob:none",
+                "--recursive=b",
+                "--no-recurse-submodules",
+                "--",
+                "https://x/y.git",
+                "/code/x/y"
+            ]
+        );
+
+        // Without a filter, git is left to reject --also-filter-submodules itself.
+        let extra = opts(&["--also-filter-submodules"]);
+        let req = CloneRequest { reference: store, ..request(&[], &extra) };
+        assert!(strings(git_clone_args(&req)).contains(&"--also-filter-submodules".to_string()));
+
+        // No submodules, nothing to split: the store is simply borrowed from.
+        for extra in [&["--no-recurse-submodules"][..], &["--bare"]] {
+            let extra = opts(extra);
+            let req = CloneRequest { reference: store, ..request(&[], &extra) };
+            let args = strings(git_clone_args(&req));
+            assert_eq!(
+                args[..4],
+                ["clone", "--reference-if-able", "/store", extra[0].to_str().unwrap()]
+            );
+            assert!(!plan(&req).split);
+        }
+    }
+
+    #[test]
+    fn own_references_leave_recursive_clones_to_git() {
+        let extra = opts(&["--reference", "/other"]);
+        let req = CloneRequest { reference: Some(Path::new("/store")), ..request(&[], &extra) };
+        assert_eq!(
+            strings(git_clone_args(&req)),
+            ["clone", "--recursive", "--reference", "/other", "--", "https://x/y.git", "/code/x/y"]
+        );
+        // Without submodules, the store and the user's references go together.
+        let extra = opts(&["--reference-if-able=/other", "--no-recurse-submodules"]);
+        let req = CloneRequest { reference: Some(Path::new("/store")), ..request(&[], &extra) };
+        assert_eq!(strings(git_clone_args(&req))[1..3], ["--reference-if-able", "/store"]);
     }
 }

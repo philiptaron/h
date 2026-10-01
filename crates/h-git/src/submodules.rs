@@ -1,0 +1,328 @@
+//! Submodules of a clone that borrows objects from a store.
+//!
+//! `git clone --recurse-submodules --reference-if-able <store>` passes the store on to submodules
+//! only as `submodule.alternateLocation=superproject`, which looks for each submodule at
+//! `<store>/modules/<name>`, the layout of a checkout's `.git`. A store never has it, so every
+//! submodule says it "cannot add alternate", is downloaded in full, and the setting stays in the
+//! clone. So such a clone is made without submodules, and the step `git clone` would have run
+//! after checkout, `git submodule update --init --recursive`, is run with `--reference <store>`.
+
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+
+/// Long clone options that take their value as the next argument when it is not given with `=`.
+const VALUE_OPTIONS: &[&str] = &[
+    "--template",
+    "--reference",
+    "--reference-if-able",
+    "--origin",
+    "--branch",
+    "--revision",
+    "--upload-pack",
+    "--depth",
+    "--shallow-since",
+    "--shallow-exclude",
+    "--separate-git-dir",
+    "--ref-format",
+    "--config",
+    "--server-option",
+    "--filter",
+    "--bundle-uri",
+    "--jobs",
+];
+
+/// Short clone options that take a value, attached (`-bmain`) or as the next argument.
+const VALUE_FLAGS: &[u8] = b"obucj";
+
+/// What the options of a clone say about its submodules, read as `git clone` reads them: in order,
+/// the last of an option and its negation winning.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SubmoduleOptions {
+    /// The pathspecs given to `--recurse-submodules` (`.` when it has none), or `None` when no
+    /// option decides. `--no-recurse-submodules` leaves none.
+    pub recurse: Option<Vec<String>>,
+    /// `--bare` or `--mirror`, which h takes to mean no submodules unless asked for them.
+    pub bare: bool,
+    /// `-n` or `--no-checkout`: nothing is checked out, so no submodule is cloned either.
+    pub no_checkout: bool,
+    /// The clone was given its own `--reference` or `--reference-if-able`.
+    pub references: bool,
+    pub dissociate: bool,
+    /// `--shallow-submodules`.
+    pub shallow: bool,
+    /// `-j` or `--jobs`.
+    pub jobs: Option<String>,
+    /// `--remote-submodules`.
+    pub remote: bool,
+    pub filter: Option<String>,
+    /// `--also-filter-submodules` or its negation, which override `clone.filterSubmodules`.
+    pub also_filter: Option<bool>,
+    pub single_branch: Option<bool>,
+    /// `--depth`, `--shallow-since` or `--shallow-exclude`, which imply `--single-branch`.
+    pub deepen: bool,
+    pub quiet: bool,
+    pub progress: Option<bool>,
+    pub ref_format: Option<String>,
+}
+
+impl SubmoduleOptions {
+    /// Read the clone options `opts`, given to `git clone` in this order.
+    pub fn parse<'a>(opts: impl IntoIterator<Item = &'a OsString>) -> SubmoduleOptions {
+        let mut parsed = SubmoduleOptions::default();
+        let mut iter = opts.into_iter().map(|opt| opt.to_string_lossy());
+        while let Some(opt) = iter.next() {
+            let (name, value) = if opt.starts_with("--") {
+                match opt.split_once('=') {
+                    Some((name, value)) => (name.to_string(), Some(value.to_string())),
+                    None if VALUE_OPTIONS.contains(&&*opt) => {
+                        (opt.to_string(), iter.next().map(|v| v.into_owned()))
+                    }
+                    None => (opt.to_string(), None),
+                }
+            } else if let [b'-', flag, rest @ ..] = opt.as_bytes()
+                && VALUE_FLAGS.contains(flag)
+            {
+                let value = match rest {
+                    [] => iter.next().map(|v| v.into_owned()),
+                    rest => Some(String::from_utf8_lossy(rest).into_owned()),
+                };
+                (format!("-{}", *flag as char), value)
+            } else {
+                (opt.to_string(), None)
+            };
+            parsed.apply(&name, value);
+        }
+        parsed
+    }
+
+    fn apply(&mut self, name: &str, value: Option<String>) {
+        match name {
+            "--recurse-submodules" | "--recursive" => {
+                self.recurse.get_or_insert_with(Vec::new).push(value.unwrap_or_else(|| ".".into()))
+            }
+            "--no-recurse-submodules" | "--no-recursive" => self.recurse = Some(Vec::new()),
+            "--bare" | "--mirror" => self.bare = true,
+            "-n" | "--no-checkout" => self.no_checkout = true,
+            "--reference" | "--reference-if-able" => self.references = true,
+            "--dissociate" => self.dissociate = true,
+            "--no-dissociate" => self.dissociate = false,
+            "--shallow-submodules" => self.shallow = true,
+            "--no-shallow-submodules" => self.shallow = false,
+            "-j" | "--jobs" => self.jobs = value,
+            "--remote-submodules" => self.remote = true,
+            "--no-remote-submodules" => self.remote = false,
+            "--filter" => self.filter = value,
+            "--no-filter" => self.filter = None,
+            "--also-filter-submodules" => self.also_filter = Some(true),
+            "--no-also-filter-submodules" => self.also_filter = Some(false),
+            "--single-branch" => self.single_branch = Some(true),
+            "--no-single-branch" => self.single_branch = Some(false),
+            "--depth" | "--shallow-since" | "--shallow-exclude" => self.deepen = true,
+            "-q" | "--quiet" => self.quiet = true,
+            "-v" | "--verbose" | "--no-quiet" | "--no-verbose" => self.quiet = false,
+            "--progress" => self.progress = Some(true),
+            "--no-progress" => self.progress = Some(false),
+            "--ref-format" => self.ref_format = value,
+            _ => {}
+        }
+    }
+
+    /// The pathspecs of the submodules to clone: those of `--recurse-submodules`, or all of them
+    /// when no option decides, unless the clone is bare. Sorted and without duplicates, as `git
+    /// clone` writes them to `submodule.active`.
+    pub fn pathspecs(&self) -> Vec<String> {
+        let mut pathspecs = match &self.recurse {
+            Some(pathspecs) => pathspecs.clone(),
+            None if self.bare => Vec::new(),
+            None => vec![".".into()],
+        };
+        pathspecs.sort();
+        pathspecs.dedup();
+        pathspecs
+    }
+
+    /// Whether the clone checks out a working tree, after which `git clone` updates submodules.
+    pub fn checks_out(&self) -> bool {
+        !self.bare && !self.no_checkout
+    }
+
+    /// Whether `opt` is one that `git clone --no-recurse-submodules` rejects, because it only
+    /// means something for submodules, which are then cloned by [`update_args`] instead.
+    pub fn is_submodule_only(opt: &OsStr) -> bool {
+        opt == "--also-filter-submodules" || opt == "--no-also-filter-submodules"
+    }
+}
+
+/// The `git submodule update` arguments that clone submodules after checkout as `git clone`
+/// does, but borrowing objects from `store`.
+///
+/// `filter_submodules` is whether the clone's filter applies to submodules too
+/// (`--also-filter-submodules`, or `clone.filterSubmodules`), and `progress` whether to show
+/// progress, which `git clone` decides from its own verbosity and terminal.
+pub fn update_args(
+    opts: &SubmoduleOptions,
+    store: &Path,
+    filter_submodules: bool,
+    progress: bool,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> =
+        ["submodule", "update", "--require-init", "--recursive"].map(OsString::from).into();
+    args.push("--reference".into());
+    args.push(store.into());
+    if opts.dissociate {
+        args.push("--dissociate".into());
+    }
+    if opts.shallow {
+        args.push("--depth=1".into());
+    }
+    if let Some(jobs) = &opts.jobs {
+        args.push(format!("--jobs={jobs}").into());
+    }
+    if progress {
+        args.push("--progress".into());
+    }
+    if opts.quiet {
+        args.push("--quiet".into());
+    }
+    if opts.remote {
+        args.push("--remote".into());
+        args.push("--no-fetch".into());
+    }
+    if let Some(format) = &opts.ref_format {
+        args.push(format!("--ref-format={format}").into());
+    }
+    if let Some(filter) = opts.filter.as_ref().filter(|_| filter_submodules) {
+        args.push(format!("--filter={filter}").into());
+    }
+    let single_branch = opts.single_branch.unwrap_or(opts.deepen);
+    args.push(if single_branch { "--single-branch" } else { "--no-single-branch" }.into());
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(list: &[&str]) -> SubmoduleOptions {
+        let opts: Vec<OsString> = list.iter().map(OsString::from).collect();
+        SubmoduleOptions::parse(&opts)
+    }
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter().map(|a| a.into_string().unwrap()).collect()
+    }
+
+    #[test]
+    fn recurses_into_everything_unless_an_option_decides() {
+        assert_eq!(parse(&[]).pathspecs(), ["."]);
+        assert_eq!(parse(&["--depth", "1"]).pathspecs(), ["."]);
+        for opts in [&["--bare"][..], &["--mirror"], &["--no-recurse-submodules"]] {
+            assert!(parse(opts).pathspecs().is_empty(), "{opts:?}");
+        }
+        assert_eq!(parse(&["--recursive"]).recurse, Some(vec![".".into()]));
+        // Pathspecs collect, sorted and once each; a negation clears them.
+        let opts = parse(&["--recurse-submodules=b", "--recursive=a", "--recurse-submodules=b"]);
+        assert_eq!(opts.pathspecs(), ["a", "b"]);
+        let opts = parse(&["--recurse-submodules=a", "--no-recursive", "--recurse-submodules"]);
+        assert_eq!(opts.pathspecs(), ["."]);
+        // An explicit request wins even in a bare clone, which then just has nothing to update.
+        let opts = parse(&["--bare", "--recursive"]);
+        assert_eq!((opts.pathspecs(), opts.checks_out()), (vec![".".to_string()], false));
+    }
+
+    #[test]
+    fn values_of_other_options_are_not_mistaken_for_options() {
+        let opts = parse(&["--branch", "--recursive", "-o", "--bare", "-c", "--no-checkout"]);
+        assert_eq!(opts, SubmoduleOptions::default());
+        let opts = parse(&["--jobs", "3", "-j5", "--filter", "blob:none", "-q"]);
+        assert_eq!(opts.jobs.as_deref(), Some("5"));
+        assert_eq!(opts.filter.as_deref(), Some("blob:none"));
+        assert!(opts.quiet);
+        // `--recurse-submodules` takes its pathspec only after `=`.
+        let opts = parse(&["--recurse-submodules", "lib"]);
+        assert_eq!(opts.pathspecs(), ["."]);
+    }
+
+    #[test]
+    fn reads_what_the_submodule_step_needs() {
+        let opts = parse(&[
+            "--reference=/other",
+            "--dissociate",
+            "--shallow-submodules",
+            "--remote-submodules",
+            "--filter=tree:0",
+            "--also-filter-submodules",
+            "--shallow-since=2020-01-01",
+            "-v",
+            "--progress",
+            "--ref-format=reftable",
+            "-n",
+        ]);
+        assert!(opts.references && opts.dissociate && opts.shallow && opts.remote);
+        assert!(opts.deepen && !opts.quiet && !opts.checks_out());
+        assert_eq!(opts.also_filter, Some(true));
+        assert_eq!(opts.progress, Some(true));
+        assert_eq!(opts.ref_format.as_deref(), Some("reftable"));
+        let opts = parse(&["-q", "--verbose", "--no-filter", "--no-shallow-submodules"]);
+        assert!(!opts.quiet && !opts.shallow && opts.filter.is_none());
+    }
+
+    #[test]
+    fn plain_update_borrows_from_the_store() {
+        let args = update_args(&parse(&[]), Path::new("/store"), false, false);
+        assert_eq!(
+            strings(args),
+            [
+                "submodule",
+                "update",
+                "--require-init",
+                "--recursive",
+                "--reference",
+                "/store",
+                "--no-single-branch"
+            ]
+        );
+    }
+
+    #[test]
+    fn update_follows_the_clone_options() {
+        let opts = parse(&[
+            "--dissociate",
+            "--shallow-submodules",
+            "-j",
+            "4",
+            "-q",
+            "--remote-submodules",
+            "--ref-format=reftable",
+            "--filter=blob:none",
+            "--depth=1",
+        ]);
+        assert_eq!(
+            strings(update_args(&opts, Path::new("/store"), true, true)),
+            [
+                "submodule",
+                "update",
+                "--require-init",
+                "--recursive",
+                "--reference",
+                "/store",
+                "--dissociate",
+                "--depth=1",
+                "--jobs=4",
+                "--progress",
+                "--quiet",
+                "--remote",
+                "--no-fetch",
+                "--ref-format=reftable",
+                "--filter=blob:none",
+                "--single-branch"
+            ]
+        );
+        // The filter reaches submodules only when asked to; --depth implies --single-branch
+        // unless told otherwise.
+        let opts = parse(&["--filter=blob:none", "--depth=1", "--no-single-branch"]);
+        let args = strings(update_args(&opts, Path::new("/store"), false, false));
+        assert!(!args.iter().any(|a| a.starts_with("--filter")), "{args:?}");
+        assert_eq!(args.last().unwrap(), "--no-single-branch");
+    }
+}

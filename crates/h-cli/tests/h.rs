@@ -504,18 +504,35 @@ fn clones_borrow_from_an_existing_store() {
         .args(["go", url]));
     let path = tmp.path().join("example.com/proj");
     assert_resolved(&out, &path);
+    // The store's upstreams are listed to scope negotiation, and submodules are cloned after the
+    // superproject, so that they borrow from the store too.
+    let (store, path) = (store.to_str().unwrap(), path.to_str().unwrap());
+    let c = ["-C", path];
+    let settings = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
     assert_eq!(
-        git.args().unwrap(),
+        git.invocations(),
         [
-            "clone",
-            "--recursive",
-            "--reference-if-able",
-            store.to_str().unwrap(),
-            "-c",
-            "core.alternateRefsPrefixes=refs/remotes/example.com/proj/ refs/tags/example.com/proj/",
-            "--",
-            url,
-            path.to_str().unwrap()
+            vec!["-C", store, "remote"],
+            vec![
+                "clone",
+                "--reference-if-able",
+                store,
+                "-c",
+                "core.alternateRefsPrefixes=refs/remotes/example.com/proj/ refs/tags/example.com/proj/",
+                "-c",
+                "submodule.active=.",
+                "--no-recurse-submodules",
+                "--",
+                url,
+                path
+            ],
+            [&c[..], &["config", "--type=bool", "--get-regexp", settings]].concat(),
+            [
+                &c[..],
+                &["submodule", "update", "--require-init", "--recursive", "--reference", store],
+                &["--no-single-branch"]
+            ]
+            .concat(),
         ]
     );
 

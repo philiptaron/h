@@ -67,6 +67,11 @@ to and never pruned, and clones made with a store configured borrow its objects 
 clone only tells the server about the store history it shares, its own upstream's and a fork's
 parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does not
 make every clone and fetch list all of their commits first.
+Their submodules borrow from it too: `h` clones them itself, with `git submodule update --init
+--recursive --reference <store>`, since git would look for them in the store's `modules/`
+directory. Only the first clone does this; for a submodule added later, pass `--reference
+"$H_STORE"` to `git submodule update` yourself. A clone given its own `--reference` with
+submodules uses only that, as git does.
 
 ```bash
 h store init                                  # create it

@@ -71,13 +71,37 @@ impl Sandbox {
 
     /// `h --root <root> [--store <store>] <args>`, with git isolated.
     fn h(&self, store: bool, args: &[&str]) -> Run {
+        self.h_api(store, UNREACHABLE_API, args)
+    }
+
+    /// [`Sandbox::h`], with the GitHub API at `api`.
+    fn h_api(&self, store: bool, api: &str, args: &[&str]) -> Run {
         let mut cmd = command(H);
         isolate_git(&mut cmd, self.tmp.path());
-        cmd.current_dir(self.tmp.path()).arg("--root").arg(&self.root);
+        cmd.current_dir(self.tmp.path()).env("H_GITHUB_API", api).arg("--root").arg(&self.root);
         if store {
             cmd.arg("--store").arg(&self.store);
         }
         run(cmd.args(args))
+    }
+
+    /// Publish `src/<name>` on GitHub as `up/<name>`, and a fork of it as `me/<name>`, with a
+    /// mock GitHub API that says so.
+    fn publish_fork(&self, name: &str) -> MockGitHub {
+        let fork = self.tmp.path().join("forks").join(format!("{name}.git"));
+        let clone = run(git_command(self.tmp.path())
+            .args(["clone", "-q", "--bare"])
+            .arg(self.src(name))
+            .arg(&fork));
+        assert_eq!(clone.code, Some(0), "{clone:?}");
+        rewrite_url(self.tmp.path(), &format!("https://github.com/up/{name}.git"), &self.src(name));
+        rewrite_url(self.tmp.path(), &format!("https://github.com/me/{name}.git"), &fork);
+        let fork_json = format!(
+            r#"{{"name": "{name}", "owner": {{"login": "me"}}, "parent": {{"full_name": "up/{name}"}}}}"#
+        );
+        let up_json = format!(r#"{{"name": "{name}", "owner": {{"login": "up"}}}}"#);
+        let (fork_path, up_path) = (format!("/repos/me/{name}"), format!("/repos/up/{name}"));
+        MockGitHub::start(&[(&fork_path, 200, &fork_json), (&up_path, 200, &up_json)])
     }
 
     fn ok(&self, store: bool, args: &[&str]) -> Run {
@@ -224,6 +248,65 @@ fn failing_submodules_fail_the_clone_as_git_does() {
     assert_eq!(with.stdout, format!("{}\n", canonical(sb.tmp.path())));
     // As with git clone, the superproject stays.
     assert!(sb.root.join("example.com/o/broken/README").is_file());
+}
+
+/// Point submodule `name` of `src/<repo>` at `url` and commit that.
+fn repoint_submodule(sb: &Sandbox, repo: &str, name: &str, url: &str) {
+    let src = sb.src(repo);
+    let key = format!("submodule.{name}.url");
+    sb.git(&src, &["config", "--file", ".gitmodules", &key, url]);
+    sb.git(&src, &["commit", "-qam", &format!("move {name}")]);
+}
+
+#[test]
+fn forks_keep_their_upstream_when_a_submodule_fails() {
+    let sb = Sandbox::new();
+    sb.publish("broken");
+    sb.add_submodule("broken", "lib", "lib");
+    repoint_submodule(&sb, "broken", "lib", &url("missing"));
+    rewrite_url(sb.tmp.path(), &url("missing"), &sb.tmp.path().join("missing"));
+    let api = sb.publish_fork("broken");
+    let clone = sb.root.join("github.com/me/broken");
+
+    for store in [false, true] {
+        if store {
+            sb.fill_store();
+        }
+        let out = sb.h_api(store, &api.url, &["go", "me/broken"]);
+        assert_ne!(out.code, Some(0), "store {store}: {out:?}");
+        assert!(clone.join("README").is_file(), "the superproject stays");
+        assert_eq!(sb.config(&clone, "remote.upstream.url"), "https://github.com/up/broken.git");
+        assert_eq!(sb.config(&clone, "remote.pushDefault"), "origin");
+        fs::remove_dir_all(&sb.root).unwrap();
+    }
+}
+
+#[test]
+fn submodules_get_the_identity_the_clone_is_made_with() {
+    let sb = Sandbox::new();
+    // A submodule behind HTTP authentication, whose clone asks the credential helpers, and a
+    // helper that writes down what it is asked and has nothing to give.
+    let server = MockGitHub::serve(|_, _| (401, String::new()));
+    sb.publish("app2");
+    sb.add_submodule("app2", "lib", "lib");
+    sb.add_submodule("app2", "other", "private");
+    repoint_submodule(&sb, "app2", "private", &format!("{}/private.git", server.url));
+    let log = sb.tmp.path().join("helper.log");
+    set_global(&sb, "credential.helper", &format!("!f() {{ cat >> '{}'; }}; f", log.display()));
+    let identity = ["--", "-c", "credential.username=PhilipTaronQ", "-c", "user.name=Q"];
+
+    for store in [false, true] {
+        let _ = fs::remove_file(&log);
+        let out = sb.h(store, &[&["go", &url("app2")][..], &identity].concat());
+        assert_ne!(out.code, Some(0), "the private submodule cannot be cloned: {out:?}");
+        let asked = fs::read_to_string(&log).unwrap_or_default();
+        assert!(asked.contains("username=PhilipTaronQ\n"), "store {store}: {asked:?}");
+        let lib = sb.root.join("example.com/o/app2/lib");
+        assert_eq!(sb.config(&lib, "user.name"), "Q", "store {store}");
+        assert_eq!(sb.config(&lib, "credential.username"), "PhilipTaronQ", "store {store}");
+        fs::remove_dir_all(&sb.root).unwrap();
+        sb.fill_store();
+    }
 }
 
 #[test]

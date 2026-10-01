@@ -3,7 +3,6 @@
 //! from but never pushed to.
 
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Stdio;
@@ -45,7 +44,8 @@ struct Plan<'a> {
     /// The store to borrow from, if any.
     store: Option<&'a Path>,
     /// Whether the submodules are left out of `git clone` and cloned afterwards by
-    /// [`update_submodules`], so that they borrow from the store too.
+    /// [`submodules::update`]: so that they borrow from the store too, and so that a fork's
+    /// upstream is there before them.
     split: bool,
 }
 
@@ -55,19 +55,26 @@ fn plan<'a>(req: &CloneRequest<'a>) -> Plan<'a> {
     // With its own `--reference`, a recursive clone is git's to finish: git looks for each
     // submodule under `modules/` of every alternate, the store's included, and fails when it
     // is not there, or refuses outright beside `--reference-if-able`.
-    let store = req.reference.filter(|_| !(recurses && submodules.references));
-    let split = store.is_some() && recurses;
+    let own_references = recurses && submodules.references;
+    let store = req.reference.filter(|_| !own_references);
+    let split = recurses && !own_references && (store.is_some() || req.upstream_url.is_some());
     Plan { submodules, store, split }
 }
 
 /// Arguments to pass to `git` for a plain (non-container) clone.
 ///
 /// Submodules are cloned too unless an option says otherwise, and objects are borrowed from the
-/// reference store when there is one. When both, `git clone` leaves the submodules alone and they
-/// are cloned afterwards by [`update_submodules`], so that they borrow from the store as well.
+/// reference store when there is one. With a store, or for a fork, `git clone` leaves the
+/// submodules alone and they are cloned afterwards by [`submodules::update`], so that they borrow
+/// from the store as well and come after the fork's upstream.
+///
+/// The identity in `git_opts` goes to git itself as well as to `git clone`, which writes it only
+/// into the new repository: given to git, it reaches the clones of submodules too, nested ones
+/// included, through the environment, so they fetch with the same credentials.
 pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     let plan = plan(req);
-    let mut args: Vec<OsString> = vec!["clone".into()];
+    let mut args = submodules::config_args(&config_pairs(req.git_opts));
+    args.push("clone".into());
     if plan.submodules.recurse.is_none() && !plan.submodules.bare && !plan.split {
         args.push("--recursive".into());
     }
@@ -121,15 +128,17 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
         // Any failure here is reported by git itself.
         let _ = std::fs::create_dir_all(parent);
     }
-    let result = if req.container { clone_container(req) } else { clone_plain(req) };
-    let result = result.and_then(|()| match req.upstream_url {
-        Some(url) => {
-            // A container's origin has every branch, however much history it has.
-            let single_branch = !req.container && single_branch(req.extra);
-            add_upstream(&git_dir(req), url, &history_opts(req.extra), single_branch)
-        }
-        None => Ok(()),
-    });
+    let result = if req.container {
+        // A container's origin has every branch, however much history it has.
+        clone_container(req).and_then(|()| match req.upstream_url {
+            Some(url) => {
+                add_upstream(&req.path.join(BARE_DIR), url, &history_opts(req.extra), false)
+            }
+            None => Ok(()),
+        })
+    } else {
+        clone_plain(req)
+    };
     match result {
         Ok(()) => 0,
         Err(err) => {
@@ -139,45 +148,35 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
     }
 }
 
-/// The directory to run `git -C` in once the clone exists.
-fn git_dir(req: &CloneRequest) -> std::path::PathBuf {
-    if req.container { req.path.join(BARE_DIR) } else { req.path.to_path_buf() }
-}
-
+/// Clone as `req` asks: the superproject, then a fork's upstream, then the submodules when h
+/// clones them itself, and finally the identity into every submodule. The upstream is added even
+/// when git's own clone of the submodules fails, since git leaves the superproject in place then;
+/// the first failure is the one returned.
 fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
-    git::run(None, &git_clone_args(req))?;
-    match plan(req) {
-        Plan { submodules, store: Some(store), split: true } if submodules.checks_out() => {
-            update_submodules(req.path, store, &submodules)
+    let plan = plan(req);
+    let cloned = git::run(None, &git_clone_args(req));
+    if cloned.is_err() && !req.path.join(".git").exists() {
+        return cloned;
+    }
+    let upstream = match req.upstream_url {
+        Some(url) => {
+            add_upstream(req.path, url, &history_opts(req.extra), single_branch(req.extra))
+        }
+        None => Ok(()),
+    };
+    let identity = config_pairs(req.git_opts);
+    let has_submodules = req.path.join(".gitmodules").is_file();
+    let cloned_submodules = match &plan {
+        Plan { submodules, store, split: true }
+            if cloned.is_ok() && has_submodules && submodules.checks_out() =>
+        {
+            submodules::update(req.path, *store, submodules, &identity)
         }
         _ => Ok(()),
-    }
-}
-
-/// Clone the submodules of the new clone at `path`, borrowing from `store`, as `git clone
-/// --recurse-submodules` would have after checking out.
-fn update_submodules(path: &Path, store: &Path, opts: &SubmoduleOptions) -> Result<(), GitError> {
-    // Settings `git clone` consults when it clones submodules.
-    let pattern = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
-    let settings = git::output(Some(path), &["config", "--type=bool", "--get-regexp", pattern])
-        .unwrap_or_default();
-    let enabled = |key: &str| settings.lines().any(|line| line == format!("{key} true"));
-    if enabled("submodule.stickyrecursiveclone") {
-        git::run(Some(path), &["config", "submodule.recurse", "true"])?;
-    }
-    let filter = opts.also_filter.unwrap_or_else(|| enabled("clone.filtersubmodules"));
-    let progress = opts.progress.unwrap_or_else(|| !opts.quiet && std::io::stderr().is_terminal());
-    let mut args: Vec<OsString> = Vec::new();
-    // Each submodule's clone offers the server every commit in the store as one it has, newest
-    // first, until the server recognizes one: all of them for a submodule the store lacks, and
-    // for one whose history is older than the rest of the store. The skipping negotiator gives
-    // up on unrelated history quickly, and still finds the submodule's own commits in the store.
-    // The `-c` reaches the submodules' clones, nested ones included, through the environment.
-    if git::output(Some(path), &["config", "--get", "fetch.negotiationAlgorithm"]).is_err() {
-        args.extend(["-c", "fetch.negotiationAlgorithm=skipping"].map(OsString::from));
-    }
-    args.extend(submodules::update_args(opts, store, filter, progress));
-    git::run(Some(path), &args)
+    };
+    let identified =
+        if has_submodules { submodules::write_identity(req.path, &identity) } else { Ok(()) };
+    cloned.and(upstream).and(cloned_submodules).and(identified)
 }
 
 /// Clone options that mean the same to `git fetch`, so a container clone can pass them on.
@@ -496,9 +495,12 @@ mod tests {
         let git_opts = opts(&["-c", "user.name=Me"]);
         let extra = opts(&["--depth", "1"]);
         let args = git_clone_args(&request(&git_opts, &extra));
+        // The identity goes to git as well, so that submodules' clones have it too.
         assert_eq!(
             strings(args),
             [
+                "-c",
+                "user.name=Me",
                 "clone",
                 "--recursive",
                 "-c",
@@ -643,6 +645,8 @@ mod tests {
         assert_eq!(
             strings(git_clone_args(&req)),
             [
+                "-c",
+                "user.name=Me",
                 "clone",
                 "--reference-if-able",
                 "/store",
@@ -678,6 +682,30 @@ mod tests {
             );
             assert!(!plan(&req).split);
         }
+    }
+
+    #[test]
+    fn forks_clone_their_submodules_after_the_upstream() {
+        let mut req = request(&[], &[]);
+        req.upstream_url = Some("https://x/parent.git");
+        assert_eq!(
+            strings(git_clone_args(&req)),
+            [
+                "clone",
+                "-c",
+                "submodule.active=.",
+                "--no-recurse-submodules",
+                "--",
+                "https://x/y.git",
+                "/code/x/y"
+            ]
+        );
+        assert!(plan(&req).split && plan(&req).store.is_none());
+        // With its own reference, git clones the submodules, through that reference.
+        let extra = opts(&["--reference", "/other"]);
+        let req =
+            CloneRequest { upstream_url: Some("https://x/parent.git"), ..request(&[], &extra) };
+        assert!(!plan(&req).split);
     }
 
     #[test]

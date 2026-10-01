@@ -1,4 +1,4 @@
-//! Submodules of a clone that borrows objects from a store.
+//! Submodules of a clone that borrows objects from a store, or that is a fork.
 //!
 //! `git clone --recurse-submodules --reference-if-able <store>` passes the store on to submodules
 //! only as `submodule.alternateLocation=superproject`, which looks for each submodule at
@@ -6,9 +6,16 @@
 //! submodule says it "cannot add alternate", is downloaded in full, and the setting stays in the
 //! clone. So such a clone is made without submodules, and the step `git clone` would have run
 //! after checkout, `git submodule update --init --recursive`, is run with `--reference <store>`.
+//! A fork's clone is made the same way, so that its upstream is added before its submodules.
+//!
+//! Either way the identity the clone is made with (`-c credential.username=…`, `user.*`) goes to
+//! the submodules' clones too, which `git clone -c` alone does not do.
 
 use std::ffi::{OsStr, OsString};
+use std::io::IsTerminal;
 use std::path::Path;
+
+use crate::git::{self, GitError};
 
 /// Long clone options that take their value as the next argument when it is not given with `=`.
 const VALUE_OPTIONS: &[&str] = &[
@@ -153,22 +160,98 @@ impl SubmoduleOptions {
     }
 }
 
+/// `-c key=value` arguments for git itself, one pair for each of `config`.
+pub fn config_args(config: &[(OsString, OsString)]) -> Vec<OsString> {
+    let mut args = Vec::new();
+    for (key, value) in config {
+        let mut setting = key.clone();
+        setting.push("=");
+        setting.push(value);
+        args.extend([OsString::from("-c"), setting]);
+    }
+    args
+}
+
+/// Clone the submodules of the new clone at `path`, borrowing from `store` when there is one, as
+/// `git clone --recurse-submodules` would have after checking out, with `identity` (the clone's
+/// `-c` pairs) in effect for every submodule's clone, nested ones included.
+pub fn update(
+    path: &Path,
+    store: Option<&Path>,
+    opts: &SubmoduleOptions,
+    identity: &[(OsString, OsString)],
+) -> Result<(), GitError> {
+    // Settings `git clone` consults when it clones submodules.
+    let pattern = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
+    let settings = git::output(Some(path), &["config", "--type=bool", "--get-regexp", pattern])
+        .unwrap_or_default();
+    let enabled = |key: &str| settings.lines().any(|line| line == format!("{key} true"));
+    if enabled("submodule.stickyrecursiveclone") {
+        git::run(Some(path), &["config", "submodule.recurse", "true"])?;
+    }
+    let filter = opts.also_filter.unwrap_or_else(|| enabled("clone.filtersubmodules"));
+    let progress = opts.progress.unwrap_or_else(|| !opts.quiet && std::io::stderr().is_terminal());
+    // The `-c` settings reach the submodules' clones, nested ones included, through the
+    // environment.
+    let mut args = config_args(identity);
+    if store.is_some() {
+        args.extend(negotiation_args(path));
+    }
+    args.extend(update_args(opts, store, filter, progress));
+    git::run(Some(path), &args)
+}
+
+/// The `-c` that has submodules borrowing from a store negotiate with the skipping algorithm,
+/// unless the user chose one for the repository at `path` or everywhere.
+///
+/// Each submodule's clone offers the server every commit in the store as one it has, newest
+/// first, until the server recognizes one: all of them for a submodule the store lacks, and for
+/// one whose history is older than the rest of the store. The skipping negotiator gives up on
+/// unrelated history quickly, and still finds the submodule's own commits in the store.
+pub(crate) fn negotiation_args(path: &Path) -> Vec<OsString> {
+    if git::output(Some(path), &["config", "--get", "fetch.negotiationAlgorithm"]).is_ok() {
+        return Vec::new();
+    }
+    ["-c", "fetch.negotiationAlgorithm=skipping"].map(OsString::from).into()
+}
+
+/// Write the `-c` pairs `identity` into the configuration of every submodule checked out in
+/// the checkout at `path`, nested ones included, as `git clone -c` writes them into the
+/// superproject, so that later fetches and commits there use them too.
+pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<(), GitError> {
+    if identity.is_empty() {
+        return Ok(());
+    }
+    let dirs = git::output(Some(path), &["submodule", "foreach", "--quiet", "--recursive", "pwd"])?;
+    for dir in dirs.lines().filter(|dir| !dir.is_empty()) {
+        for (key, value) in identity {
+            git::run(
+                Some(Path::new(dir)),
+                &[OsString::from("config"), key.clone(), value.clone()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// The `git submodule update` arguments that clone submodules after checkout as `git clone`
-/// does, but borrowing objects from `store`.
+/// does, but borrowing objects from `store` when there is one.
 ///
 /// `filter_submodules` is whether the clone's filter applies to submodules too
 /// (`--also-filter-submodules`, or `clone.filterSubmodules`), and `progress` whether to show
 /// progress, which `git clone` decides from its own verbosity and terminal.
 pub fn update_args(
     opts: &SubmoduleOptions,
-    store: &Path,
+    store: Option<&Path>,
     filter_submodules: bool,
     progress: bool,
 ) -> Vec<OsString> {
     let mut args: Vec<OsString> =
         ["submodule", "update", "--require-init", "--recursive"].map(OsString::from).into();
-    args.push("--reference".into());
-    args.push(store.into());
+    if let Some(store) = store {
+        args.push("--reference".into());
+        args.push(store.into());
+    }
     if opts.dissociate {
         args.push("--dissociate".into());
     }
@@ -269,7 +352,7 @@ mod tests {
 
     #[test]
     fn plain_update_borrows_from_the_store() {
-        let args = update_args(&parse(&[]), Path::new("/store"), false, false);
+        let args = update_args(&parse(&[]), Some(Path::new("/store")), false, false);
         assert_eq!(
             strings(args),
             [
@@ -281,6 +364,25 @@ mod tests {
                 "/store",
                 "--no-single-branch"
             ]
+        );
+    }
+
+    #[test]
+    fn without_a_store_update_borrows_nothing() {
+        let args = strings(update_args(&parse(&[]), None, false, false));
+        assert_eq!(
+            args,
+            ["submodule", "update", "--require-init", "--recursive", "--no-single-branch"]
+        );
+    }
+
+    #[test]
+    fn config_becomes_git_options() {
+        let config = [("user.name", "Me Too"), ("credential.username", "me")]
+            .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        assert_eq!(
+            strings(config_args(&config)),
+            ["-c", "user.name=Me Too", "-c", "credential.username=me"]
         );
     }
 
@@ -298,7 +400,7 @@ mod tests {
             "--depth=1",
         ]);
         assert_eq!(
-            strings(update_args(&opts, Path::new("/store"), true, true)),
+            strings(update_args(&opts, Some(Path::new("/store")), true, true)),
             [
                 "submodule",
                 "update",
@@ -321,7 +423,7 @@ mod tests {
         // The filter reaches submodules only when asked to; --depth implies --single-branch
         // unless told otherwise.
         let opts = parse(&["--filter=blob:none", "--depth=1", "--no-single-branch"]);
-        let args = strings(update_args(&opts, Path::new("/store"), false, false));
+        let args = strings(update_args(&opts, Some(Path::new("/store")), false, false));
         assert!(!args.iter().any(|a| a.starts_with("--filter")), "{args:?}");
         assert_eq!(args.last().unwrap(), "--no-single-branch");
     }

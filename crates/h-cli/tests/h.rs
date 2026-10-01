@@ -534,10 +534,12 @@ fn forks_get_an_unpushable_upstream() {
     assert_resolved(&out, &path);
     let path = path.to_str().unwrap();
     let c = ["-C", path];
+    // The upstream is added before any submodules are cloned, so git clone leaves them to h.
+    let clone = ["clone", "-c", "submodule.active=.", "--no-recurse-submodules", "--"];
     assert_eq!(
         git.invocations(),
         [
-            vec!["clone", "--recursive", "--", "https://github.com/me/nixpkgs.git", path],
+            [&clone[..], &["https://github.com/me/nixpkgs.git", path]].concat(),
             [&c[..], &["remote"]].concat(),
             [&c[..], &["remote", "add", "upstream", "https://github.com/NixOS/nixpkgs.git"]]
                 .concat(),
@@ -692,9 +694,12 @@ fn passes_clone_options_and_git_options() {
 
     let path = tmp.path().join("example.com/proj");
     assert_resolved(&out, &path);
+    // The identity goes to git too, which hands it on to the clones of submodules.
     assert_eq!(
         git.args().unwrap(),
         [
+            "-c",
+            "user.name=Me",
             "clone",
             "--recursive",
             "-c",
@@ -743,11 +748,9 @@ fn clones_borrow_from_an_existing_store() {
         .args(["go", url]));
     let path = tmp.path().join("example.com/proj");
     assert_resolved(&out, &path);
-    // The store's upstreams are listed to scope negotiation, and submodules are cloned after the
-    // superproject, so that they borrow from the store too.
+    // The store's upstreams are listed to scope negotiation, and submodules would be cloned
+    // after the superproject, so that they borrow from the store too; this one has none.
     let (store, path) = (store.to_str().unwrap(), path.to_str().unwrap());
-    let c = ["-C", path];
-    let settings = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
     assert_eq!(
         git.invocations(),
         [
@@ -765,15 +768,6 @@ fn clones_borrow_from_an_existing_store() {
                 url,
                 path
             ],
-            [&c[..], &["config", "--type=bool", "--get-regexp", settings]].concat(),
-            // The fake git reports a negotiator, so h leaves it be.
-            [&c[..], &["config", "--get", "fetch.negotiationAlgorithm"]].concat(),
-            [
-                &c[..],
-                &["submodule", "update", "--require-init", "--recursive", "--reference", store],
-                &["--no-single-branch"]
-            ]
-            .concat(),
         ]
     );
 

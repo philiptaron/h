@@ -147,6 +147,8 @@ fn bash_h_passes_git_opts() {
     assert_eq!(
         git.args().unwrap(),
         [
+            "-c",
+            "user.name=Me Too",
             "clone",
             "--recursive",
             "-c",

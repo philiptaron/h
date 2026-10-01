@@ -153,9 +153,7 @@ fn store_name(store: &Store, url: &str) -> Option<String> {
         Target::Remote { host, path, .. } => remote_name(&host, &path),
         Target::Name(_) => return None,
     };
-    let existing = store.remotes().ok()?;
-    let exact = existing.iter().find(|r| **r == name);
-    exact.or_else(|| existing.iter().find(|r| r.eq_ignore_ascii_case(&name))).cloned()
+    store.find(&name)
 }
 
 /// The commit a new worktree of the repository at `root` starts from, and how it was found.

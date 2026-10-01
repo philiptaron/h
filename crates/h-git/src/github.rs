@@ -72,21 +72,22 @@ pub fn credential_token(config: &[(OsString, OsString)]) -> Option<String> {
         .map(String::from)
 }
 
-/// Ask GitHub for the canonical casing of `user/repo`, with `token` when there is one. Returns
-/// `None` on any failure.
+/// Ask GitHub for the canonical casing of `user/repo`. Returns `None` on any failure.
 ///
-/// A token GitHub turns down (401 or 403: expired, revoked, or without access to repository
-/// metadata) is dropped and the request made again without it, since public repositories need
-/// none. The token is never rejected through git's credential helpers: git uses it for more
-/// than the API, and h did not store it.
+/// The first request carries no token, so public repositories never touch git's credential
+/// helpers, and a locked keyring is never asked to unlock for one. Only an answer a token could
+/// change asks `token` for one and tries again with it: see [`token_could_help`]. The token is
+/// never rejected through git's credential helpers, even when GitHub turns it down: git uses it
+/// for more than the API, and h did not store it.
 pub fn fetch_repo_info(
     api_base: &str,
     user: &str,
     repo: &str,
-    token: Option<&str>,
+    token: impl FnOnce() -> Option<String>,
 ) -> Option<RepoInfo> {
     let agent: Agent = Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
+        .http_status_as_error(false)
         .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
         .build()
         .into();
@@ -100,17 +101,35 @@ pub fn fetch_repo_info(
         if let Some(token) = token {
             request = request.header("Authorization", format!("Bearer {token}"));
         }
-        request.call()
+        request.call().ok()
     };
-    let mut response = match get(token) {
-        Err(ureq::Error::StatusCode(401 | 403)) if token.is_some() => get(None).ok()?,
-        response => response.ok()?,
-    };
+    let mut response = get(None)?;
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+    let could_help = token_could_help(
+        response.status().as_u16(),
+        header("x-ratelimit-remaining"),
+        header("retry-after").is_some(),
+    );
+    if could_help {
+        response = get(Some(&token()?))?;
+    }
     if response.status() != 200 {
         return None;
     }
     let body = response.body_mut().read_to_string().ok()?;
     parse_repo_info(&body)
+}
+
+/// Whether a token could change GitHub's answer `status`: a 404, which is also what a private
+/// repository looks like without one, or a rate limit, which is far higher with one. GitHub
+/// reports a rate limit as a 429, or as a 403 with `x-ratelimit-remaining: 0` (the primary limit)
+/// or a `retry-after` header (a secondary one); any other 403 is a refusal a token won't undo.
+fn token_could_help(status: u16, ratelimit_remaining: Option<&str>, retry_after: bool) -> bool {
+    match status {
+        404 | 429 => true,
+        403 => ratelimit_remaining.is_some_and(|n| n.trim() == "0") || retry_after,
+        _ => false,
+    }
 }
 
 /// Extract `owner.login`, `name` and, for a fork, `parent.full_name` from a GitHub repository
@@ -172,7 +191,20 @@ mod tests {
     #[test]
     fn unreachable_api_returns_none() {
         // Port 1 on localhost is essentially never listening; the connection is refused at once.
-        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", None), None);
-        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", Some("token")), None);
+        let token = || panic!("no answer at all, so no reason to ask for a token");
+        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", token), None);
+    }
+
+    #[test]
+    fn tokens_are_asked_for_only_when_they_could_help() {
+        assert!(token_could_help(404, None, false), "private repositories look missing");
+        assert!(token_could_help(429, None, false));
+        assert!(token_could_help(403, Some("0"), false), "primary rate limit");
+        assert!(token_could_help(403, Some("12"), true), "secondary rate limit");
+        assert!(!token_could_help(403, Some("12"), false), "a plain refusal");
+        assert!(!token_could_help(403, None, false));
+        for status in [200, 301, 401, 500] {
+            assert!(!token_could_help(status, Some("0"), true), "{status}");
+        }
     }
 }

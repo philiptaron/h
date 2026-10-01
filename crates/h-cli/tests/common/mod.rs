@@ -151,6 +151,16 @@ impl MockGitHub {
 
     /// Answer each request with the status and body `respond` gives for its path and head.
     pub fn serve(respond: impl Fn(&str, &str) -> (u16, String) + Send + 'static) -> MockGitHub {
+        MockGitHub::serve_with_headers(move |path, head| {
+            let (status, body) = respond(path, head);
+            (status, String::new(), body)
+        })
+    }
+
+    /// Like [`MockGitHub::serve`], with header lines (each ending in `\r\n`) added to the answer.
+    pub fn serve_with_headers(
+        respond: impl Fn(&str, &str) -> (u16, String, String) + Send + 'static,
+    ) -> MockGitHub {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -169,11 +179,11 @@ impl MockGitHub {
                     head.push_str(&line);
                 }
                 let path = head.split_whitespace().nth(1).unwrap_or_default().to_string();
-                let (status, body) = respond(&path, &head);
+                let (status, headers, body) = respond(&path, &head);
                 log.lock().unwrap().push(head);
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\n\
+                    "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\n{headers}\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );

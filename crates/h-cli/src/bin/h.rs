@@ -149,8 +149,8 @@ fn utf8(arg: &OsStr) -> Result<&str, String> {
 fn resolve_term(config: &Config, term: &str, casing: Casing) -> Result<Resolution, String> {
     let api = github::api_base();
     resolve(&config.root, term, casing, |user, repo| {
-        let token = github::credential_token(&config_pairs(&config.git_opts));
-        github::fetch_repo_info(&api, user, repo, token.as_deref())
+        let token = || github::credential_token(&config_pairs(&config.git_opts));
+        github::fetch_repo_info(&api, user, repo, token)
     })
 }
 

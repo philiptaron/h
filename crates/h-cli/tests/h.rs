@@ -322,31 +322,96 @@ fn go_with_git(home: &Path, api: &MockGitHub, term: &str, git_opts: &[&str]) -> 
     run(cmd.args(["go", term, "--"]).args(git_opts))
 }
 
+/// The token each request to `api` carried, if any.
+fn tokens_sent(api: &MockGitHub) -> Vec<Option<String>> {
+    api.requests()
+        .iter()
+        .map(|head| {
+            let head = head.to_ascii_lowercase();
+            let token = head.lines().find_map(|l| l.strip_prefix("authorization: bearer "));
+            token.map(|t| t.trim().to_string())
+        })
+        .collect()
+}
+
+const ZIMBATM_H: &str = r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#;
+
 #[test]
-fn lookups_carry_the_token_git_keeps_for_github() {
+fn public_lookups_never_ask_for_a_token() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     make_git_repo(&home.join("src"));
     rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
     let asked = credential_helper(home, "s3cret");
-    let api = MockGitHub::start(&[(
-        "/repos/zimbatm/h",
-        200,
-        r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#,
-    )]);
+    let api = MockGitHub::start(&[("/repos/zimbatm/h", 200, ZIMBATM_H)]);
+
+    let out = go_with_git(home, &api, "zimbatm/h", &["-c", "credential.username=Ident"]);
+    assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
+    assert_eq!(tokens_sent(&api), [None]);
+    assert!(!asked.exists(), "the helper was asked: {:?}", fs::read_to_string(&asked));
+}
+
+#[test]
+fn private_repos_are_looked_up_again_with_the_token() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
+    let asked = credential_helper(home, "s3cret");
+    // Without the token a private repository looks missing.
+    let api = MockGitHub::serve(|path, head| match path {
+        "/repos/zimbatm/h" if head.to_ascii_lowercase().contains("bearer s3cret") => {
+            (200, ZIMBATM_H.into())
+        }
+        _ => (404, r#"{"message": "Not Found"}"#.into()),
+    });
 
     // The identity's credential.username, from the shell function's git options, picks the token.
     let out = go_with_git(home, &api, "zimbatm/h", &["-c", "credential.username=Ident"]);
     assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
-    let requests = api.requests();
-    assert_eq!(requests.len(), 1);
-    let head = requests[0].to_ascii_lowercase();
-    assert!(head.contains("authorization: bearer s3cret\r\n"), "{head}");
+    assert_eq!(tokens_sent(&api), [None, Some("s3cret".into())]);
     let asked = fs::read_to_string(asked).unwrap();
     for line in ["protocol=https", "host=github.com", "username=Ident"] {
         assert!(asked.lines().any(|l| l == line), "{line} in {asked:?}");
     }
     assert!(!out.stdout.contains("s3cret") && !out.stderr.contains("s3cret"), "{out:?}");
+}
+
+#[test]
+fn rate_limited_lookups_are_made_again_with_the_token() {
+    for (status, headers) in
+        [(403, "X-RateLimit-Remaining: 0\r\n"), (403, "Retry-After: 60\r\n"), (429, "")]
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        make_git_repo(&home.join("src"));
+        rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
+        credential_helper(home, "s3cret");
+        let api = MockGitHub::serve_with_headers(move |_, head| {
+            if head.to_ascii_lowercase().contains("bearer s3cret") {
+                (200, String::new(), ZIMBATM_H.into())
+            } else {
+                (status, headers.into(), r#"{"message": "API rate limit exceeded"}"#.into())
+            }
+        });
+        let out = go_with_git(home, &api, "zimbatm/h", &[]);
+        assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
+        assert_eq!(tokens_sent(&api), [None, Some("s3cret".into())], "{status} {headers:?}");
+    }
+
+    // A 403 that is not a rate limit is a refusal a token won't undo.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/zimbatm/h.git", &home.join("src"));
+    let asked = credential_helper(home, "s3cret");
+    let api = MockGitHub::start(&[("/repos/zimbatm/h", 403, r#"{"message": "Forbidden"}"#)]);
+    assert_resolved(
+        &go_with_git(home, &api, "zimbatm/h", &[]),
+        &home.join("code/github.com/zimbatm/h"),
+    );
+    assert_eq!(tokens_sent(&api), [None]);
+    assert!(!asked.exists());
 }
 
 #[test]
@@ -387,28 +452,24 @@ fn lookups_never_prompt_for_a_credential() {
 }
 
 #[test]
-fn rejected_tokens_fall_back_to_anonymous_lookups() {
+fn rejected_tokens_leave_the_casing_as_typed() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     make_git_repo(&home.join("src"));
-    rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
+    rewrite_url(home, "https://github.com/zimbatm/h.git", &home.join("src"));
     credential_helper(home, "expired");
-    let api = MockGitHub::serve(|path, head| match path {
-        "/repos/zimbatm/h" if head.to_ascii_lowercase().contains("authorization:") => {
+    let api = MockGitHub::serve(|_, head| {
+        if head.to_ascii_lowercase().contains("authorization:") {
             (401, r#"{"message": "Bad credentials"}"#.into())
+        } else {
+            (404, r#"{"message": "Not Found"}"#.into())
         }
-        "/repos/zimbatm/h" => (200, r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#.into()),
-        _ => (404, "{}".into()),
     });
 
+    // One try without the token and one with it; then the lookup has no answer.
     let out = go_with_git(home, &api, "zimbatm/h", &[]);
-    assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
-    let auth: Vec<bool> = api
-        .requests()
-        .iter()
-        .map(|head| head.to_ascii_lowercase().contains("authorization:"))
-        .collect();
-    assert_eq!(auth, [true, false]);
+    assert_resolved(&out, &home.join("code/github.com/zimbatm/h"));
+    assert_eq!(tokens_sent(&api), [None, Some("expired".into())]);
 }
 
 #[test]

@@ -97,6 +97,14 @@ fn strip_git_suffix(s: &str) -> &str {
     }
 }
 
+/// The store's name for the repository at `host` and `path`: the two joined by `/`, without
+/// empty segments, which git rejects in remote names (`file:///abs/path` has an empty host).
+fn remote_name(host: &str, path: &str) -> String {
+    let segments: Vec<&str> =
+        std::iter::once(host).chain(path.split('/')).filter(|s| !s.is_empty()).collect();
+    strip_git_suffix(&segments.join("/")).to_string()
+}
+
 /// Strip a trailing `.git` from a path, provided something precedes it.
 pub fn strip_git_extension(path: &Path) -> PathBuf {
     let bytes = path.as_os_str().as_bytes();
@@ -147,7 +155,7 @@ pub fn resolve(
         Target::Remote { url, host, path } => Ok(Resolution {
             path: strip_git_extension(&concat_path(code_root, &[&host, &path])),
             clone_url: Some(url),
-            remote: Some(strip_git_suffix(&format!("{host}/{path}")).to_string()),
+            remote: Some(remote_name(&host, &path)),
             upstream_url: None,
         }),
         Target::Name(name) => {
@@ -285,6 +293,14 @@ mod tests {
             })
         });
         assert_eq!(res.unwrap().upstream_url, Some("https://github.com/NixOS/nixpkgs.git".into()));
+    }
+
+    #[test]
+    fn remote_names_have_no_empty_segments() {
+        let res = resolve(Path::new("/code"), "file:///srv/git/proj.git", |_, _| None).unwrap();
+        assert_eq!(res.remote, Some("srv/git/proj".into()));
+        let res = resolve(Path::new("/code"), "https://host//a/b/", |_, _| None).unwrap();
+        assert_eq!(res.remote, Some("host/a/b".into()));
     }
 
     #[test]

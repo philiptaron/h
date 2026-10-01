@@ -47,7 +47,8 @@ jobs:
           nix shell --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zsh --command zsh -fc 'h-shell-init ~/code; :' | grep -Fx 'compdef _h_complete h'
           # the functions themselves: h finds a project, up goes back to its root
           project=~/code/github.com/example/project
-          mkdir -p "$project/.git" "$project/src/deeper"
+          mkdir -p "$project/src/deeper"
+          git init -q "$project"
           eval "$(h-shell-init ~/code)"
           eval "$(up-shell-init)"
           h project

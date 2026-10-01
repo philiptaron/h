@@ -523,11 +523,15 @@ fn container_clones_are_bare_with_a_git_file() {
     assert_eq!(git(&["rev-parse", "--is-bare-repository"]), "true");
     assert_eq!(git(&["config", "user.name"]), "Me");
     assert_eq!(git(&["rev-parse", "--abbrev-ref", "origin/HEAD"]), "origin/main");
-    assert_eq!(git(&["branch", "--list"]), "", "no local branches are created");
+    assert_eq!(git(&["for-each-ref", "refs/heads"]), "", "no local branches are created");
 
     // Work happens in worktrees beside the bare repository.
     git(&["worktree", "add", "--quiet", "feature", "origin/main"]);
     assert_eq!(fs::read_to_string(path.join("feature/README")).unwrap(), "hello\n");
+    // HEAD is detached at the default branch, so a new branch starts there, not as an orphan.
+    assert_eq!(git(&["rev-parse", "HEAD"]), git(&["rev-parse", "origin/main"]));
+    git(&["worktree", "add", "--quiet", "topic"]);
+    assert_eq!(fs::read_to_string(path.join("topic/README")).unwrap(), "hello\n");
 }
 
 #[test]

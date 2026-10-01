@@ -125,6 +125,8 @@ fn container_fetch_opts(extra: &[OsString]) -> Result<Vec<OsString>, GitError> {
 /// Create `<path>/.bare` by fetching into a fresh bare repository, then point `<path>/.git` at
 /// it. Unlike `git clone --bare`, the result has `origin` with ordinary remote-tracking branches,
 /// so worktrees are added from `origin/<branch>` and local branches are only ever the user's.
+/// HEAD is detached at `origin/HEAD`, so a new branch made by `git worktree add <dir>` starts
+/// from the default branch instead of being an orphan of the branch HEAD names but nobody has.
 ///
 /// A failure removes `<path>` again, as `git clone` does, so that a later `h` does not mistake
 /// the remains for a finished clone.
@@ -161,6 +163,7 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
     fetch.push("origin".into());
     git::run(Some(&bare), &fetch)?;
     git::run(Some(&bare), &["remote", "set-head", "origin", "--auto"])?;
+    git::run(Some(&bare), &["update-ref", "--no-deref", "HEAD", "refs/remotes/origin/HEAD"])?;
     std::fs::write(req.path.join(".git"), format!("gitdir: ./{BARE_DIR}\n"))
         .map_err(GitError::Spawn)
 }

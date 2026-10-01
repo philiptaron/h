@@ -18,8 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux finds its own executable through /proc/self/exe, macOS through
-        # _NSGetExecutablePath (src/util.c), so both are built and smoke-tested
+        # Linux finds its own executable through /proc/self/exe and the parent shell through /proc,
+        # macOS through _NSGetExecutablePath and proc_name (crates/h-core/src/{exe,shell}.rs), so
+        # both are built, tested (nix build runs cargo test) and smoke-tested
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +32,9 @@ jobs:
           set -euo pipefail
           out=$(readlink -f result)
           export PATH="$out/bin:$PATH"
+          for program in h h-shell-init up up-shell-init; do
+            "$program" --version | grep -E "^$program [0-9]+\.[0-9]+\.[0-9]+$"
+          done
           # run from $PATH in another directory: the generated functions must call the h and up
           # next to the init programs, not ./h in the current directory
           cd "$RUNNER_TEMP"
@@ -52,10 +56,14 @@ jobs:
           up
           test "$PWD" = "$project"
 
-  format:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      - name: clang-format
-        run: nix shell --inputs-from . nixpkgs#clang-tools --command sh -c 'cd src && clang-format --dry-run -Werror *.c *.h'
+      - name: rustfmt
+        run: nix develop --command cargo fmt --all --check
+      - name: clippy
+        run: nix develop --command cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: nixfmt
+        run: nix shell --inputs-from . nixpkgs#nixfmt --command nixfmt --check flake.nix

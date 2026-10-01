@@ -51,7 +51,7 @@ fn prints_version_and_help() {
     }
     let out = h(tmp.path(), &["--help"]);
     assert_eq!(out.code, Some(0));
-    assert!(out.stdout.contains("resolve <term>"), "{out:?}");
+    assert!(out.stdout.contains("store worktree <term> <ref> [DIR]"), "{out:?}");
 }
 
 #[test]

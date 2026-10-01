@@ -32,6 +32,9 @@ pub enum ParseError {
 pub struct Resolution {
     pub path: PathBuf,
     pub clone_url: Option<String>,
+    /// The name of the repository in an object store: its path relative to the code root, such
+    /// as `github.com/NixOS/nixpkgs`. `None` when the path is not valid UTF-8.
+    pub remote: Option<String>,
     /// The URL of the repository this one was forked from, when GitHub reports one.
     pub upstream_url: Option<String>,
 }
@@ -86,6 +89,14 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
     }
 }
 
+/// Strip a trailing `.git` from a string, provided something precedes it.
+fn strip_git_suffix(s: &str) -> &str {
+    match s.strip_suffix(".git") {
+        Some(stem) if !stem.is_empty() => stem,
+        _ => s,
+    }
+}
+
 /// Strip a trailing `.git` from a path, provided something precedes it.
 pub fn strip_git_extension(path: &Path) -> PathBuf {
     let bytes = path.as_os_str().as_bytes();
@@ -129,17 +140,21 @@ pub fn resolve(
             Ok(Resolution {
                 path: concat_path(code_root, &["github.com", &user, &repo]),
                 clone_url: Some(format!("https://github.com/{user}/{repo}.git")),
+                remote: Some(format!("github.com/{user}/{repo}")),
                 upstream_url: parent.map(|parent| format!("https://github.com/{parent}.git")),
             })
         }
         Target::Remote { url, host, path } => Ok(Resolution {
             path: strip_git_extension(&concat_path(code_root, &[&host, &path])),
             clone_url: Some(url),
+            remote: Some(strip_git_suffix(&format!("{host}/{path}")).to_string()),
             upstream_url: None,
         }),
         Target::Name(name) => {
             let path = search(code_root, &name).ok_or_else(not_found)?;
-            Ok(Resolution { path, clone_url: None, upstream_url: None })
+            let remote =
+                path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(String::from);
+            Ok(Resolution { path, clone_url: None, remote, upstream_url: None })
         }
     }
 }
@@ -240,6 +255,7 @@ mod tests {
             Ok(Resolution {
                 path: PathBuf::from("/code/github.com/ZimBatm/h"),
                 clone_url: Some("https://github.com/ZimBatm/h.git".into()),
+                remote: Some("github.com/ZimBatm/h".into()),
                 upstream_url: None,
             })
         );
@@ -253,6 +269,7 @@ mod tests {
             Ok(Resolution {
                 path: PathBuf::from("/code/github.com/a/b"),
                 clone_url: Some("https://github.com/a/b.git".into()),
+                remote: Some("github.com/a/b".into()),
                 upstream_url: None,
             })
         );
@@ -279,6 +296,7 @@ mod tests {
             Ok(Resolution {
                 path: PathBuf::from("/code/gitlab.com/group/project"),
                 clone_url: Some(url.into()),
+                remote: Some("gitlab.com/group/project".into()),
                 upstream_url: None,
             })
         );
@@ -290,7 +308,11 @@ mod tests {
         let project = tmp.path().join("example.com/owner/proj");
         fs::create_dir_all(&project).unwrap();
         let res = resolve(tmp.path(), "proj", |_, _| panic!("not GitHub"));
-        assert_eq!(res, Ok(Resolution { path: project, clone_url: None, upstream_url: None }));
+        let remote = Some("example.com/owner/proj".into());
+        assert_eq!(
+            res,
+            Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None })
+        );
     }
 
     #[test]
@@ -299,7 +321,11 @@ mod tests {
         let project = tmp.path().join("example.com/bare.git");
         fs::create_dir_all(&project).unwrap();
         let res = resolve(tmp.path(), "bare.git", |_, _| None);
-        assert_eq!(res, Ok(Resolution { path: project, clone_url: None, upstream_url: None }));
+        let remote = Some("example.com/bare.git".into());
+        assert_eq!(
+            res,
+            Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None })
+        );
     }
 
     #[test]

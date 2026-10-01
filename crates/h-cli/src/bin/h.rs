@@ -1,4 +1,4 @@
-//! The `h` command: jump to projects, cloning them if needed.
+//! The `h` command: jump to projects (cloning them if needed) and operate the shared object store.
 //!
 //! The shell function from `h-shell-init` runs `h --root <dir> go <term> [clone options] -- <git
 //! options>` and `cd`s to the one line printed on stdout; on failure `go` prints the current
@@ -13,25 +13,40 @@ use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo};
 use h_git::github;
-use h_git::resolve::{Resolution, resolve};
+use h_git::resolve::{Resolution, Target, parse_term, resolve};
+use h_git::store::Store;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "\
-Usage: h [--root DIR] <command> [args] [-- <git options>]
+Usage: h [--root DIR] [--store DIR] <command> [args] [-- <git options>]
 
 Commands:
   go <term> [clone options] [--container]
                               print the project directory, cloning it first if needed
   resolve <term>              print the project directory, failing if it is absent
+  store init                  create the object store
+  store add <term>...         add upstream repositories to the store and fetch them
+  store fetch [-q] [<term>...]
+                              fetch every upstream in the store, or only the named ones
+  store list                  list the upstreams in the store
+  store path                  print the store directory
+  store remote <term>         print the store's name for an upstream
+  store show <term> <ref>[:<path>]
+                              show a commit, or a file at a commit, from the store
+  store worktree <term> <ref> [DIR]
+                              check <ref> out, detached, into DIR (default: a temporary directory)
+  store maintain [hourly|daily|weekly]
+                              run the store's maintenance tasks (default: daily)
 
 A term is a project name, <user>/<repo> on GitHub, or a git URL. The code root defaults to
-$H_CODE_ROOT, then ~/src. Git options after `--` (`-c key=value`) are written into every
-clone.";
+$H_CODE_ROOT, then ~/src; the store to $H_STORE. Git options after `--` (`-c key=value`) are
+written into every clone and into the store.";
 
 /// Everything the commands need to know.
 struct Config {
     root: PathBuf,
+    store: Option<Store>,
     git_opts: Vec<OsString>,
 }
 
@@ -59,12 +74,17 @@ fn main() -> ExitCode {
     }
 
     let mut root = None;
+    let mut store = None;
     let mut i = 0;
     while i < args.len() {
         let has_value = i + 1 < args.len();
         match args[i].to_str() {
             Some("--root") if has_value => {
                 root = Some(args[i + 1].clone());
+                i += 2;
+            }
+            Some("--store") if has_value => {
+                store = Some(args[i + 1].clone());
                 i += 2;
             }
             Some("-V" | "--version") => {
@@ -85,7 +105,12 @@ fn main() -> ExitCode {
 
     let root =
         root.or_else(|| std::env::var_os("H_CODE_ROOT")).unwrap_or_else(|| OsString::from("~/src"));
-    let config = Config { root: expand_tilde(&root), git_opts };
+    let store = store.or_else(|| std::env::var_os("H_STORE")).filter(|s| !s.is_empty());
+    let config = Config {
+        root: expand_tilde(&root),
+        store: store.map(|s| Store::new(expand_tilde(&s))),
+        git_opts,
+    };
 
     let Some((cmd, rest)) = command.split_first() else {
         return fail(&format!("h {VERSION}\n{USAGE}"));
@@ -93,6 +118,7 @@ fn main() -> ExitCode {
     match cmd.to_str() {
         Some("go") => go(&config, rest),
         Some("resolve") => resolve_cmd(&config, rest),
+        Some("store") => store_cmd(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
     }
 }
@@ -173,4 +199,150 @@ fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         Ok(_) => fail(&format!("{term} not found")),
         Err(msg) => fail(&msg),
     }
+}
+
+/// An upstream in the store: its remote name and, when known, the URL to add it from.
+struct Upstream {
+    name: String,
+    url: Option<String>,
+}
+
+/// The store's name for `term`, preferring an upstream already in the store over a GitHub
+/// lookup, and finding a bare project name among the upstreams' last path segments.
+fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, String> {
+    let existing = store.remotes().map_err(|e| e.to_string())?;
+    let target = parse_term(term).map_err(|_| format!("Unknown pattern for {term}"))?;
+    let candidate = match &target {
+        Target::GitHub { user, repo } => Some(format!("github.com/{user}/{repo}")),
+        Target::Remote { .. } | Target::Name(_) => None,
+    };
+    if let Some(candidate) = candidate
+        && let Some(name) = existing.iter().find(|r| r.eq_ignore_ascii_case(&candidate))
+    {
+        return Ok(Upstream { name: name.clone(), url: None });
+    }
+    if let Target::Name(name) = &target {
+        let case_sensitive = name.bytes().any(|b| b.is_ascii_uppercase());
+        let matches: Vec<&String> = existing
+            .iter()
+            .filter(|r| {
+                let last = r.rsplit('/').next().unwrap_or(r);
+                if case_sensitive { last == name } else { last.eq_ignore_ascii_case(name) }
+            })
+            .collect();
+        return match matches.as_slice() {
+            [one] => Ok(Upstream { name: (*one).clone(), url: None }),
+            [] => Err(format!("{term} is not in the store")),
+            many => {
+                let names: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
+                Err(format!("{term} is ambiguous in the store: {}", names.join(", ")))
+            }
+        };
+    }
+    let resolution = resolve_term(config, term)?;
+    match (resolution.remote, resolution.clone_url) {
+        (Some(name), url @ Some(_)) => Ok(Upstream { name, url }),
+        _ => Err(format!("{term} cannot be added to the store")),
+    }
+}
+
+/// `h store <subcommand> ...`
+fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
+    let Some(store) = &config.store else {
+        return fail("No store configured: pass --store DIR or set H_STORE");
+    };
+    let Some((sub, rest)) = args.split_first() else {
+        return fail(USAGE);
+    };
+    let terms: Result<Vec<&str>, String> = rest.iter().map(|a| utf8(a)).collect();
+    let terms = match terms {
+        Ok(terms) => terms,
+        Err(msg) => return fail(&msg),
+    };
+    let result = match sub.to_str() {
+        Some("init") => store
+            .init(&config.git_opts)
+            .map(|()| print_path(&store.path))
+            .map_err(|e| e.to_string()),
+        Some("path") => {
+            print_path(&store.path);
+            Ok(())
+        }
+        Some("list") => store_list(store),
+        Some("add") => store_add(config, store, &terms),
+        Some("fetch") => store_fetch(config, store, &terms),
+        Some("remote") => match terms.as_slice() {
+            [term] => upstream_for(config, store, term).map(|u| println!("{}", u.name)),
+            _ => Err("Usage: h store remote <term>".into()),
+        },
+        Some("show") => match terms.as_slice() {
+            [term, spec] => upstream_for(config, store, term)
+                .and_then(|u| store.show(&u.name, spec).map_err(|e| e.to_string())),
+            _ => Err("Usage: h store show <term> <ref>[:<path>]".into()),
+        },
+        Some("worktree") => match terms.as_slice() {
+            [term, reference] | [term, reference, _] => {
+                let dir = rest.get(2).map(|d| expand_tilde(d));
+                upstream_for(config, store, term).and_then(|u| {
+                    store
+                        .worktree(&u.name, reference, dir)
+                        .map(|dir| print_path(&dir))
+                        .map_err(|e| e.to_string())
+                })
+            }
+            _ => Err("Usage: h store worktree <term> <ref> [DIR]".into()),
+        },
+        Some("maintain") => match terms.as_slice() {
+            [] => store.maintain("daily").map_err(|e| e.to_string()),
+            [schedule] => store.maintain(schedule).map_err(|e| e.to_string()),
+            _ => Err("Usage: h store maintain [hourly|daily|weekly]".into()),
+        },
+        _ => Err(format!("Unknown store command: {}\n{USAGE}", sub.to_string_lossy())),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(msg) => fail(&msg),
+    }
+}
+
+fn store_list(store: &Store) -> Result<(), String> {
+    for name in store.remotes().map_err(|e| e.to_string())? {
+        println!("{name}");
+    }
+    Ok(())
+}
+
+fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+    if terms.is_empty() {
+        return Err("Usage: h store add <term>...".into());
+    }
+    if !store.exists() {
+        store.init(&config.git_opts).map_err(|e| e.to_string())?;
+    }
+    let mut names = Vec::new();
+    for term in terms {
+        let upstream = upstream_for(config, store, term)?;
+        match &upstream.url {
+            Some(url) => match store.add_remote(&upstream.name, url) {
+                Ok(true) => eprintln!("added {}", upstream.name),
+                Ok(false) => eprintln!("{} is already in the store", upstream.name),
+                Err(e) => return Err(e.to_string()),
+            },
+            None => eprintln!("{} is already in the store", upstream.name),
+        }
+        names.push(upstream.name);
+    }
+    store.fetch(&names, false).map_err(|e| e.to_string())
+}
+
+fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+    if !store.exists() {
+        return Err(format!("No store at {}: run `h store init` first", store.path.display()));
+    }
+    let quiet = terms.iter().any(|t| *t == "-q" || *t == "--quiet");
+    let mut names = Vec::new();
+    for term in terms.iter().filter(|t| **t != "-q" && **t != "--quiet") {
+        names.push(upstream_for(config, store, term)?.name);
+    }
+    store.fetch(&names, quiet).map_err(|e| e.to_string())
 }

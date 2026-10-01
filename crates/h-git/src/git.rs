@@ -1,7 +1,7 @@
 //! Running `git`.
 //!
 //! Git's stdout is sent to stderr, so that stdout stays free for the single directory the shell
-//! functions `cd` to.
+//! functions `cd` to. Commands that need git's output capture it explicitly.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -66,6 +66,36 @@ pub fn command(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
 /// Run `git` with `args`, in `dir` if given.
 pub fn run(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
     let status = command(dir, args).status().map_err(GitError::Spawn)?;
+    if status.success() {
+        Ok(())
+    } else {
+        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
+        Err(GitError::Failed { args, code: exit_code(status) })
+    }
+}
+
+/// Run `git` with `args` and return what it printed on stdout.
+pub fn output(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
+    let mut cmd = Command::new("git");
+    if let Some(dir) = dir {
+        cmd.arg("-C").arg(dir);
+    }
+    let out = cmd.args(args).output().map_err(GitError::Spawn)?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
+        Err(GitError::Failed { args, code: exit_code(out.status) })
+    }
+}
+
+/// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
+pub fn passthrough(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
+    let mut cmd = Command::new("git");
+    if let Some(dir) = dir {
+        cmd.arg("-C").arg(dir);
+    }
+    let status = cmd.args(args).status().map_err(GitError::Spawn)?;
     if status.success() {
         Ok(())
     } else {
@@ -148,5 +178,10 @@ mod tests {
         assert!(matches!(err, GitError::Failed { .. }), "{err:?}");
         assert_eq!(err.code(), 129);
         assert_eq!(err.to_string(), "git --no-such-option failed with status 129");
+    }
+
+    #[test]
+    fn captures_output() {
+        assert!(output(None, &["--version"]).unwrap().starts_with("git version"));
     }
 }

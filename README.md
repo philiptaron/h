@@ -1,6 +1,7 @@
 # h
 
-Fast shell navigation for projects organized as `~/code/<domain>/<path>`.
+Fast shell navigation for projects organized as `~/code/<domain>/<path>`, and a shared object
+store that keeps the upstream history of big projects in one place.
 
 Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Queries the GitHub API to get the canonical casing of `user/repo`.
 
@@ -34,10 +35,35 @@ When GitHub says the repository is a fork, the clone gets an `upstream` remote t
 fetched but not pushed to (its push URL is `no_push`) and `origin`, the fork, becomes the default
 push target.
 
-The `h` binary takes `--root DIR`, or `$H_CODE_ROOT`, so scripts and agents can run it without
-the shell function:
+## The object store
+
+A store is one bare repository holding many unrelated upstream repositories as remotes, each
+named by the path `h` would clone it to. Branches live under `refs/remotes/<name>/` and tags
+under `refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
+`github.com/torvalds/linux/v6.12` both resolve and nothing collides. The store is never pushed
+to and never pruned.
 
 ```bash
+h store init                                  # create it
+h store add NixOS/nixpkgs torvalds/linux      # add upstreams and fetch them
+h store add https://gitlab.gnome.org/GNOME/gdm.git
+h store fetch                                 # fetch everything (run this from a timer)
+h store list                                  # the upstreams' names
+h store show nixpkgs master:lib/default.nix   # a file, straight from the store
+h store show torvalds/linux v6.12             # a commit
+h store worktree nixpkgs staging              # a detached checkout in a temporary directory
+h store maintain daily                        # commit-graph, incremental repack, prune worktrees
+```
+
+Terms given to `store` commands match upstreams already in the store first, so a bare name such
+as `nixpkgs` works when it is unambiguous, and `nixos/nixpkgs` matches `github.com/NixOS/nixpkgs`
+without asking GitHub.
+
+The `h` binary takes `--root DIR` and `--store DIR`, or `$H_CODE_ROOT` and `$H_STORE`, so
+scripts and agents can run it without the shell function:
+
+```bash
+h --store ~/.cache/git/me store fetch --quiet
 h --root ~/code resolve nixpkgs
 ```
 

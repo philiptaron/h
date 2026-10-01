@@ -6,6 +6,7 @@
 mod common;
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -169,6 +170,49 @@ fn fetch_keeps_every_upstreams_tags_when_tags_are_pruned_globally() {
     assert_eq!(git(&["config", "--local", "fetch.pruneTags"]), "false\n");
     git(&["fetch", "-q", "--prune", "--all"]);
     assert_eq!(tags(), want);
+}
+
+#[test]
+fn adding_an_unrelated_upstream_offers_few_commits() {
+    let sb = Sandbox::new();
+    // An upstream with a long history, which the source repository shares nothing with.
+    let long = sb.tmp.path().join("src/long");
+    assert!(git_command(sb.root()).args(["init", "-q"]).arg(&long).status().unwrap().success());
+    let mut stream = String::new();
+    for i in 0..500 {
+        let msg = format!("c{i}");
+        let time = 1_600_000_000 + i * 60;
+        stream.push_str(&format!(
+            "commit refs/heads/main\ncommitter T <t@e> {time} +0000\ndata {}\n{msg}\n",
+            msg.len()
+        ));
+    }
+    let mut import = sb
+        .git(&long)
+        .args(["fast-import", "--quiet"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    import.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    let long_url = "https://example.org/x/long.git";
+    rewrite_url(sb.root(), long_url, &long);
+    sb.ok(&["add", long_url]);
+    assert_eq!(sb.store_config("fetch.negotiationAlgorithm"), "skipping");
+
+    // Each commit the store offers the server is a `have` line.
+    let trace = sb.tmp.path().join("packets");
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.root());
+    let out = run(cmd
+        .current_dir(sb.root())
+        .env("GIT_TRACE_PACKET", &trace)
+        .arg("--store")
+        .arg(&sb.store)
+        .args(["store", "add", PROJ_URL]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let haves = fs::read_to_string(&trace).unwrap().matches("> have ").count();
+    assert!(haves < 50, "offered {haves} of the store's 500 commits");
 }
 
 /// A second source repository, published as `<PROJ_URL minus .git>/sub.git`.

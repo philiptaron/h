@@ -32,6 +32,9 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // must not reach the store.
     ("fetch.pruneTags", "false"),
     ("fetch.parallel", "4"),
+    // Every upstream's commits are offered to every fetch, and git offers all of them until the
+    // server recognizes one, which an unrelated upstream never does. Skipping offers a few.
+    ("fetch.negotiationAlgorithm", "skipping"),
     // Worktrees made from the store are throwaway: forget them as soon as they are gone.
     ("gc.worktreePruneExpire", "now"),
 ];

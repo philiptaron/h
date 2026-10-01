@@ -40,8 +40,8 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // Every upstream's commits are offered to every fetch, and git offers all of them until the
     // server recognizes one, which an unrelated upstream never does. Skipping offers a few.
     ("fetch.negotiationAlgorithm", "skipping"),
-    // `h store worktree` makes clones, but a worktree of the store made by hand (or by h 0.3.0 and
-    // earlier) is throwaway too: forget it as soon as it is gone.
+    // `h store worktree` makes clones, but a worktree of the store made by hand is throwaway too:
+    // forget it as soon as it is gone.
     ("gc.worktreePruneExpire", "now"),
 ];
 

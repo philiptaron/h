@@ -286,6 +286,7 @@ fn forks_get_an_unpushable_upstream() {
     let out = run(cmd
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
+        .env("FAKE_GIT_STDOUT", "origin")
         .arg("--root")
         .arg(&root)
         .args(["go", "me/nixpkgs"]));
@@ -298,6 +299,7 @@ fn forks_get_an_unpushable_upstream() {
         git.invocations(),
         [
             vec!["clone", "--recursive", "--", "https://github.com/me/nixpkgs.git", path],
+            [&c[..], &["remote"]].concat(),
             [&c[..], &["remote", "add", "upstream", "https://github.com/NixOS/nixpkgs.git"]]
                 .concat(),
             [&c[..], &["config", "remote.upstream.pushurl", "no_push"]].concat(),
@@ -324,6 +326,7 @@ fn shallow_forks_fetch_a_shallow_upstream() {
     let out = run(cmd
         .current_dir(tmp.path())
         .env("H_GITHUB_API", &api.url)
+        .env("FAKE_GIT_STDOUT", "origin")
         .arg("--root")
         .arg(&root)
         .args(["go", "me/nixpkgs", "--depth", "1", "--branch", "dev"]));
@@ -332,6 +335,45 @@ fn shallow_forks_fetch_a_shallow_upstream() {
     assert_resolved(&out, &path);
     let fetch = ["-C", path.to_str().unwrap(), "fetch", "--quiet", "--depth", "1", "upstream"];
     assert_eq!(git.args().unwrap(), fetch);
+}
+
+#[test]
+fn forks_push_to_the_remote_the_clone_has() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fork = Fork::publish(tmp.path(), &[]);
+    let root = tmp.path().join("code");
+    let path = root.join("github.com/me/proj");
+    let git = |args: &[&str]| run(git_command(tmp.path()).arg("-C").arg(&path).args(args));
+
+    // `clone.defaultRemoteName` and `--origin` both rename the clone's remote.
+    let global =
+        |args: &[&str]| run(git_command(tmp.path()).args(["config", "--global"]).args(args));
+    for (default_name, extra, name) in
+        [(Some("mine"), &[][..], "mine"), (None, &["--origin", "theirs"][..], "theirs")]
+    {
+        match default_name {
+            Some(default_name) => global(&["clone.defaultRemoteName", default_name]),
+            None => global(&["--unset", "clone.defaultRemoteName"]),
+        };
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        let out = run(cmd
+            .current_dir(tmp.path())
+            .env("H_GITHUB_API", &fork.api.url)
+            .arg("--root")
+            .arg(&root)
+            .args(["go", "me/proj"])
+            .args(extra));
+        assert_resolved(&out, &path);
+        assert_eq!(git(&["remote"]).stdout, format!("{name}\nupstream\n"));
+        assert_eq!(git(&["config", "remote.pushDefault"]).stdout.trim(), name);
+
+        git(&["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let push = git(&["push", "--dry-run"]);
+        assert_eq!(push.code, Some(0), "{name}: {push:?}");
+        assert!(push.stderr.contains(fork.fork.to_str().unwrap()), "{name}: {push:?}");
+        fs::remove_dir_all(&path).unwrap();
+    }
 }
 
 #[test]

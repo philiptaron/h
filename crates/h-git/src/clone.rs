@@ -312,14 +312,20 @@ fn parse_remote_head(out: &str) -> Option<RemoteHead> {
 }
 
 /// Add `url` as the `upstream` remote of the repository at `dir`, fetchable but not pushable,
-/// and make `origin` the default push target. `fetch_opts` (such as `--depth 1`) are passed to
-/// the first fetch.
+/// and make the clone's own remote the default push target. That remote is read back from the
+/// clone, since `--origin` and `clone.defaultRemoteName` can call it something other than
+/// `origin`. `fetch_opts` (such as `--depth 1`) are passed to the first fetch.
 pub fn add_upstream(dir: &Path, url: &str, fetch_opts: &[OsString]) -> Result<(), GitError> {
+    let remotes = git::output(Some(dir), &["remote"])?;
+    let [origin] = remotes.lines().collect::<Vec<_>>()[..] else {
+        let msg = format!("Cannot tell which remote of {} to push to: {remotes:?}", dir.display());
+        return Err(GitError::Invalid(msg));
+    };
     let dir = Some(dir);
     git::run(dir, &["remote", "add", "upstream", url])?;
     git::run(dir, &["config", "remote.upstream.pushurl", NO_PUSH])?;
     git::run(dir, &["config", "remote.upstream.tagOpt", "--no-tags"])?;
-    git::run(dir, &["config", "remote.pushDefault", "origin"])?;
+    git::run(dir, &["config", "remote.pushDefault", origin])?;
     let mut fetch: Vec<OsString> = vec!["fetch".into(), "--quiet".into()];
     fetch.extend(fetch_opts.iter().cloned());
     fetch.push("upstream".into());

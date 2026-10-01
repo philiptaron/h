@@ -71,8 +71,8 @@ pub fn canonical(path: &Path) -> String {
     fs::canonicalize(path).unwrap().to_str().unwrap().to_string()
 }
 
-/// A fake `git` that records the arguments of every invocation, writes to stdout, and exits with
-/// `$FAKE_GIT_EXIT`.
+/// A fake `git` that records the arguments of every invocation, writes `$FAKE_GIT_STDOUT` (by
+/// default `fake git stdout`) to stdout, and exits with `$FAKE_GIT_EXIT`.
 ///
 /// With `$FAKE_GIT_MKDIR` set, it also creates its last argument (the clone target).
 pub struct FakeGit {
@@ -89,7 +89,7 @@ impl FakeGit {
             &git,
             "#!/bin/sh\n\
              { for arg; do printf '%s\\n' \"$arg\"; done; echo; } >> \"$FAKE_GIT_LOG\"\n\
-             echo 'fake git stdout'\n\
+             printf '%s\\n' \"${FAKE_GIT_STDOUT-fake git stdout}\"\n\
              for last; do :; done\n\
              [ -n \"$FAKE_GIT_MKDIR\" ] && mkdir -p \"$last\"\n\
              exit \"${FAKE_GIT_EXIT:-0}\"\n",
@@ -229,6 +229,57 @@ pub fn rewrite_url(home: &Path, url: &str, local: &Path) {
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+/// A repository on GitHub and a fork of it, served from local repositories, with a mock GitHub
+/// API that says `me/proj` is a fork of `up/proj`.
+pub struct Fork {
+    pub api: MockGitHub,
+    /// The repository published as `https://github.com/up/proj.git`.
+    pub upstream: PathBuf,
+    /// The bare repository published as `https://github.com/me/proj.git`.
+    pub fork: PathBuf,
+}
+
+impl Fork {
+    pub const UPSTREAM_URL: &str = "https://github.com/up/proj.git";
+    pub const FORK_URL: &str = "https://github.com/me/proj.git";
+
+    /// Publish the two under `home`. The upstream has two commits on `main` and one more on each
+    /// of `branches`; the fork has the upstream's branches plus one commit of its own on `main`.
+    pub fn publish(home: &Path, branches: &[&str]) -> Fork {
+        let git = |dir: &Path, args: &[&str]| {
+            let out = run(git_command(home).arg("-C").arg(dir).args(args));
+            assert_eq!(out.code, Some(0), "git {args:?}: {out:?}");
+            out.stdout.trim().to_string()
+        };
+        let upstream = home.join("github/up/proj");
+        make_git_repo(&upstream);
+        git(&upstream, &["commit", "-q", "--allow-empty", "-m", "second"]);
+        for branch in branches {
+            git(&upstream, &["switch", "-q", "-c", branch, "main"]);
+            git(&upstream, &["commit", "-q", "--allow-empty", "-m", branch]);
+        }
+        git(&upstream, &["switch", "-q", "main"]);
+
+        let fork = home.join("github/me/proj.git");
+        let out = run(git_command(home).args(["clone", "-q", "--bare"]).arg(&upstream).arg(&fork));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        let commit = git(&fork, &["commit-tree", "main^{tree}", "-p", "main", "-m", "fork"]);
+        git(&fork, &["update-ref", "refs/heads/main", &commit]);
+
+        rewrite_url(home, Self::UPSTREAM_URL, &upstream);
+        rewrite_url(home, Self::FORK_URL, &fork);
+        let api = MockGitHub::start(&[
+            (
+                "/repos/me/proj",
+                200,
+                r#"{"name": "proj", "owner": {"login": "me"}, "parent": {"full_name": "up/proj"}}"#,
+            ),
+            ("/repos/up/proj", 200, r#"{"name": "proj", "owner": {"login": "up"}}"#),
+        ]);
+        Fork { api, upstream, fork }
+    }
 }
 
 /// Whether `program` can be found on `PATH`.

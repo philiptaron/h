@@ -86,9 +86,9 @@ h store worktree nixpkgs staging              # a detached checkout in a tempora
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
 
-Terms given to `store` commands match upstreams already in the store first, so a bare name such
-as `nixpkgs` works when it is unambiguous, and `nixos/nixpkgs` matches `github.com/NixOS/nixpkgs`
-without asking GitHub.
+Terms given to `store` commands match upstreams already in the store first, so a name as
+`h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and
+`nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub.
 
 The `h` binary takes `--root DIR` and `--store DIR`, or `$H_CODE_ROOT` and `$H_STORE`, so
 scripts and agents can run it without the shell function:

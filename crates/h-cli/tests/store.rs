@@ -401,6 +401,23 @@ fn terms_find_upstreams_already_in_the_store() {
 }
 
 #[test]
+fn names_from_the_list_are_terms() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    sb.ok(&["add", PROJ_URL, sub_url]);
+    let list = sb.ok(&["list"]).stdout;
+    let names: Vec<&str> = list.lines().collect();
+    assert_eq!(names, [PROJ.to_string(), format!("{PROJ}/sub")]);
+    for (name, readme) in names.iter().zip(["hello\n", "sub\n"]) {
+        assert_eq!(sb.ok(&["remote", name]).stdout, format!("{name}\n"));
+        assert_eq!(sb.ok(&["show", name, "main:README"]).stdout, readme, "{name}");
+        sb.ok(&["fetch", "-q", name]);
+        let out = sb.ok(&["add", name]);
+        assert!(out.stderr.contains("already in the store"), "{out:?}");
+    }
+}
+
+#[test]
 fn show_prints_files_and_commits_from_the_store() {
     let sb = Sandbox::new();
     sb.ok(&["add", PROJ_URL]);

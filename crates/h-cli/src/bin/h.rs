@@ -238,9 +238,13 @@ struct Upstream {
 }
 
 /// The store's name for `term`, preferring an upstream already in the store over a GitHub
-/// lookup, and finding a bare project name among the upstreams' last path segments.
+/// lookup, and finding a bare project name among the upstreams' last path segments. A name as
+/// `h store list` prints it is taken as it is.
 fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, String> {
     let existing = store.remotes().map_err(|e| e.to_string())?;
+    if existing.iter().any(|r| r == term) {
+        return Ok(Upstream { name: term.to_string(), url: None });
+    }
     let target = parse_term(term).map_err(|_| format!("Unknown pattern for {term}"))?;
     let candidate = match &target {
         Target::GitHub { user, repo } => Some(remote_name("github.com", &format!("{user}/{repo}"))),

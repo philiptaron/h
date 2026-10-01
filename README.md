@@ -32,6 +32,12 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 - `h store <command> ...` - the [object store](#the-object-store) commands; anything else after
   `store`, or nothing, jumps to a project named `store`
 
+GitHub API lookups carry the token git's credential helpers keep for github.com, found with
+`git credential fill` and the `credential.*` settings among the git options (so each identity's
+`credential.username` picks its own), which lets private repositories and their forks resolve.
+Nothing ever prompts: with no stored credential, or one GitHub turns down, the lookup goes
+without.
+
 Clones recurse into submodules unless an option says otherwise. When GitHub says the repository
 is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push
 URL is `no_push`) and the fork's remote (`origin`, or whatever `--origin` or

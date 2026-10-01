@@ -18,6 +18,8 @@ pub const UNREACHABLE_API: &str = "http://127.0.0.1:1";
 /// A command with an environment insulated from the user's: no proxies, no direnv, no real
 /// GitHub, no code root or store from the user's shell, and none of the variables that tie git
 /// to a repository, as a hook or `git rebase --exec` would have them, `git -c` settings included.
+/// Git sees none of the user's configuration either, so no test asks their credential helpers
+/// for a GitHub token; [`isolate_git`] gives it a configuration of its own.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
     let git_config = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
@@ -37,7 +39,9 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     ] {
         cmd.env_remove(var);
     }
-    cmd.env("H_GITHUB_API", UNREACHABLE_API);
+    cmd.env("H_GITHUB_API", UNREACHABLE_API)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd
 }
 
@@ -74,7 +78,8 @@ pub fn canonical(path: &Path) -> String {
 /// A fake `git` that records the arguments of every invocation, writes `$FAKE_GIT_STDOUT` (by
 /// default `fake git stdout`) to stdout, and exits with `$FAKE_GIT_EXIT`.
 ///
-/// With `$FAKE_GIT_MKDIR` set, it also creates its last argument (the clone target).
+/// With `$FAKE_GIT_MKDIR` set, it also creates its last argument (the clone target). Asked for a
+/// credential (`git credential fill`), it has none: it fails without recording anything.
 pub struct FakeGit {
     pub bin_dir: PathBuf,
     pub log: PathBuf,
@@ -88,6 +93,7 @@ impl FakeGit {
         fs::write(
             &git,
             "#!/bin/sh\n\
+             case \" $* \" in *' credential fill '*) exit 1 ;; esac\n\
              { for arg; do printf '%s\\n' \"$arg\"; done; echo; } >> \"$FAKE_GIT_LOG\"\n\
              printf '%s\\n' \"${FAKE_GIT_STDOUT-fake git stdout}\"\n\
              for last; do :; done\n\
@@ -132,10 +138,21 @@ pub struct MockGitHub {
 impl MockGitHub {
     /// Serve `routes` of `(request path, status, body)`; anything else gets a 404.
     pub fn start(routes: &[(&str, u16, &str)]) -> MockGitHub {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
         let routes: Vec<(String, u16, String)> =
             routes.iter().map(|(p, s, b)| (p.to_string(), *s, b.to_string())).collect();
+        MockGitHub::serve(move |path, _head| {
+            routes
+                .iter()
+                .find(|(p, _, _)| *p == path)
+                .map(|(_, s, b)| (*s, b.clone()))
+                .unwrap_or((404, r#"{"message": "Not Found"}"#.to_string()))
+        })
+    }
+
+    /// Answer each request with the status and body `respond` gives for its path and head.
+    pub fn serve(respond: impl Fn(&str, &str) -> (u16, String) + Send + 'static) -> MockGitHub {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&requests);
 
@@ -152,13 +169,8 @@ impl MockGitHub {
                     head.push_str(&line);
                 }
                 let path = head.split_whitespace().nth(1).unwrap_or_default().to_string();
+                let (status, body) = respond(&path, &head);
                 log.lock().unwrap().push(head);
-
-                let (status, body) = routes
-                    .iter()
-                    .find(|(p, _, _)| *p == path)
-                    .map(|(_, s, b)| (*s, b.clone()))
-                    .unwrap_or((404, r#"{"message": "Not Found"}"#.to_string()));
                 let _ = write!(
                     stream,
                     "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\n\

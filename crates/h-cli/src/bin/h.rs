@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
+use h_git::git::config_pairs;
 use h_git::github;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
@@ -138,10 +139,13 @@ fn utf8(arg: &OsStr) -> Result<&str, String> {
 }
 
 /// Resolve `term` against the code root, asking GitHub for the canonical casing when `casing`
-/// calls for it.
+/// calls for it, with the token git keeps for github.com for this identity.
 fn resolve_term(config: &Config, term: &str, casing: Casing) -> Result<Resolution, String> {
     let api = github::api_base();
-    resolve(&config.root, term, casing, |user, repo| github::fetch_repo_info(&api, user, repo))
+    resolve(&config.root, term, casing, |user, repo| {
+        let token = github::credential_token(&config_pairs(&config.git_opts));
+        github::fetch_repo_info(&api, user, repo, token.as_deref())
+    })
 }
 
 /// `h go <term> [clone options] [--container]`: print the directory, cloning if needed.

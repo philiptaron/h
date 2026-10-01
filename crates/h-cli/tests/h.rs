@@ -3,7 +3,8 @@
 mod common;
 
 use std::fs;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use common::*;
 
@@ -290,6 +291,124 @@ fn clones_missing_github_repos() {
     assert!(head.starts_with("get /repos/zimbatm/h http/1.1\r\n"), "{head}");
     assert!(head.contains("user-agent: h-cli\r\n"), "{head}");
     assert!(head.contains("accept: application/vnd.github.v3+json\r\n"), "{head}");
+    assert!(!head.contains("authorization:"), "no credential, no token: {head}");
+}
+
+/// Install a credential helper in the isolated git configuration under `home` that answers
+/// every request with `password`, and return the file where it records what git asked it.
+fn credential_helper(home: &Path, password: &str) -> PathBuf {
+    let asked = home.join("helper-asked");
+    let helper = home.join("credential-helper");
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = get ] || exit 0\ncat >> '{}'\necho username=me\necho password={password}\n",
+        asked.display()
+    );
+    fs::write(&helper, script).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = run(git_command(home)
+        .args(["config", "--file"])
+        .arg(global_gitconfig(home))
+        .arg("credential.helper")
+        .arg(&helper));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    asked
+}
+
+/// `h go <term> -- <git options>` with real, isolated git and the mock API at `api`.
+fn go_with_git(home: &Path, api: &MockGitHub, term: &str, git_opts: &[&str]) -> Run {
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, home);
+    cmd.current_dir(home).env("H_GITHUB_API", &api.url).arg("--root").arg(home.join("code"));
+    run(cmd.args(["go", term, "--"]).args(git_opts))
+}
+
+#[test]
+fn lookups_carry_the_token_git_keeps_for_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
+    let asked = credential_helper(home, "s3cret");
+    let api = MockGitHub::start(&[(
+        "/repos/zimbatm/h",
+        200,
+        r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#,
+    )]);
+
+    // The identity's credential.username, from the shell function's git options, picks the token.
+    let out = go_with_git(home, &api, "zimbatm/h", &["-c", "credential.username=Ident"]);
+    assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    let head = requests[0].to_ascii_lowercase();
+    assert!(head.contains("authorization: bearer s3cret\r\n"), "{head}");
+    let asked = fs::read_to_string(asked).unwrap();
+    for line in ["protocol=https", "host=github.com", "username=Ident"] {
+        assert!(asked.lines().any(|l| l == line), "{line} in {asked:?}");
+    }
+    assert!(!out.stdout.contains("s3cret") && !out.stderr.contains("s3cret"), "{out:?}");
+}
+
+#[test]
+fn lookups_never_prompt_for_a_credential() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/zimbatm/h.git", &home.join("src"));
+    // Every way git could ask the user for a password records that it was asked.
+    let asked = home.join("asked");
+    let askpass = home.join("askpass");
+    fs::write(&askpass, format!("#!/bin/sh\necho \"$1\" >> '{}'\necho x\n", asked.display()))
+        .unwrap();
+    fs::set_permissions(&askpass, fs::Permissions::from_mode(0o755)).unwrap();
+    let config = ["config", "--file"];
+    let out = run(git_command(home)
+        .args(config)
+        .arg(global_gitconfig(home))
+        .arg("core.askPass")
+        .arg(&askpass));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let api = MockGitHub::start(&[]);
+
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, home);
+    let out = run(cmd
+        .current_dir(home)
+        .env("H_GITHUB_API", &api.url)
+        .env("GIT_ASKPASS", &askpass)
+        .env("SSH_ASKPASS", &askpass)
+        .env("GIT_TERMINAL_PROMPT", "1")
+        .arg("--root")
+        .arg(home.join("code"))
+        .args(["go", "zimbatm/h"]));
+    assert_resolved(&out, &home.join("code/github.com/zimbatm/h"));
+    assert!(!asked.exists(), "asked: {:?}", fs::read_to_string(&asked));
+    assert!(!api.requests()[0].to_ascii_lowercase().contains("authorization:"));
+}
+
+#[test]
+fn rejected_tokens_fall_back_to_anonymous_lookups() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    make_git_repo(&home.join("src"));
+    rewrite_url(home, "https://github.com/ZimBatm/H.git", &home.join("src"));
+    credential_helper(home, "expired");
+    let api = MockGitHub::serve(|path, head| match path {
+        "/repos/zimbatm/h" if head.to_ascii_lowercase().contains("authorization:") => {
+            (401, r#"{"message": "Bad credentials"}"#.into())
+        }
+        "/repos/zimbatm/h" => (200, r#"{"name": "H", "owner": {"login": "ZimBatm"}}"#.into()),
+        _ => (404, "{}".into()),
+    });
+
+    let out = go_with_git(home, &api, "zimbatm/h", &[]);
+    assert_resolved(&out, &home.join("code/github.com/ZimBatm/H"));
+    let auth: Vec<bool> = api
+        .requests()
+        .iter()
+        .map(|head| head.to_ascii_lowercase().contains("authorization:"))
+        .collect();
+    assert_eq!(auth, [true, false]);
 }
 
 #[test]

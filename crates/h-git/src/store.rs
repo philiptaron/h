@@ -27,6 +27,10 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // Fetching is done by `h store fetch`, which also updates tags; prefetch does neither.
     ("maintenance.prefetch.enabled", "false"),
     ("fetch.prune", "true"),
+    // Pruning tags adds `refs/tags/*:refs/tags/*` to every fetch, which would delete the other
+    // upstreams' tags and write this one's outside its namespace. A global `fetch.pruneTags`
+    // must not reach the store.
+    ("fetch.pruneTags", "false"),
     ("fetch.parallel", "4"),
     // Worktrees made from the store are throwaway: forget them as soon as they are gone.
     ("gc.worktreePruneExpire", "now"),
@@ -214,8 +218,11 @@ impl Store {
     }
 
     /// Fetch the named upstreams, or all of them when `names` is empty.
+    ///
+    /// Tags are never pruned, even in stores made before [`STORE_CONFIG`] said so: git passes
+    /// `--no-prune-tags` on to the fetch of each upstream.
     pub fn fetch(&self, names: &[String], quiet: bool) -> Result<(), GitError> {
-        let mut args = vec!["fetch", "--prune", "--no-write-fetch-head"];
+        let mut args = vec!["fetch", "--prune", "--no-prune-tags", "--no-write-fetch-head"];
         if quiet {
             args.push("--quiet");
         }

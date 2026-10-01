@@ -137,6 +137,40 @@ fn add_names_upstreams_by_path_and_namespaces_their_tags() {
     assert!(push.stderr.contains("no_push"), "{push:?}");
 }
 
+#[test]
+fn fetch_keeps_every_upstreams_tags_when_tags_are_pruned_globally() {
+    let sb = Sandbox::new();
+    assert!(sb.git(&sb.src).args(["tag", "v1.0"]).status().unwrap().success());
+    let other = sb.tmp.path().join("src/other");
+    make_git_repo(&other);
+    assert!(sb.git(&other).args(["tag", "v2.0"]).status().unwrap().success());
+    let other_url = "https://example.org/x/other.git";
+    rewrite_url(sb.root(), other_url, &other);
+    sb.ok(&["add", PROJ_URL, other_url]);
+
+    let git = |args: &[&str]| {
+        let out = run(sb.git(&sb.store).args(args));
+        assert_eq!(out.code, Some(0), "git {args:?}: {out:?}");
+        out.stdout
+    };
+    // A global `fetch.pruneTags` would make each upstream's fetch delete the other's tags.
+    let global = global_gitconfig(sb.root());
+    git(&["config", "--file", global.to_str().unwrap(), "fetch.pruneTags", "true"]);
+    let tags = || git(&["for-each-ref", "--format=%(refname)", "refs/tags"]);
+    let want = format!("refs/tags/{PROJ}/v1.0\nrefs/tags/example.org/x/other/v2.0\n");
+
+    // A store made before the store configuration said so is safe through `h store fetch`.
+    git(&["config", "--unset", "fetch.pruneTags"]);
+    sb.ok(&["fetch", "-q"]);
+    assert_eq!(tags(), want);
+
+    // Once `h store init` has run again, so is git's own fetch.
+    sb.ok(&["init"]);
+    assert_eq!(git(&["config", "--local", "fetch.pruneTags"]), "false\n");
+    git(&["fetch", "-q", "--prune", "--all"]);
+    assert_eq!(tags(), want);
+}
+
 /// A second source repository, published as `<PROJ_URL minus .git>/sub.git`.
 fn add_sub_source(sb: &Sandbox) -> &'static str {
     let sub = sb.tmp.path().join("src/sub");

@@ -75,7 +75,11 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
     }
     let result = if req.container { clone_container(req) } else { clone_plain(req) };
     let result = result.and_then(|()| match req.upstream_url {
-        Some(url) => add_upstream(&git_dir(req), url, &history_opts(req.extra)),
+        Some(url) => {
+            // A container's origin has every branch, however much history it has.
+            let single_branch = !req.container && single_branch(req.extra);
+            add_upstream(&git_dir(req), url, &history_opts(req.extra), single_branch)
+        }
         None => Ok(()),
     });
     match result {
@@ -140,6 +144,26 @@ fn history_opts(extra: &[OsString]) -> Vec<OsString> {
         }
     }
     out
+}
+
+/// The clone options that limit history by depth, and so imply `--single-branch`.
+const DEEPEN_OPTIONS: &[&str] = &["--depth", "--shallow-since", "--shallow-exclude"];
+
+/// Whether a clone with the options `extra` fetches a single branch, as `git clone` decides:
+/// `--single-branch` or `--no-single-branch`, whichever comes last, or else whether its history
+/// is limited by depth.
+fn single_branch(extra: &[OsString]) -> bool {
+    let explicit = non_config_opts(extra).iter().rev().find_map(|opt| match opt.to_str() {
+        Some("--single-branch") => Some(true),
+        Some("--no-single-branch") => Some(false),
+        _ => None,
+    });
+    explicit.unwrap_or_else(|| {
+        history_opts(extra).iter().any(|opt| {
+            let text = opt.to_string_lossy();
+            DEEPEN_OPTIONS.contains(&text.split_once('=').map_or(&*text, |(name, _)| name))
+        })
+    })
 }
 
 /// Create `<path>/.bare` by fetching into a fresh bare repository, then point `<path>/.git` at
@@ -314,15 +338,28 @@ fn parse_remote_head(out: &str) -> Option<RemoteHead> {
 /// Add `url` as the `upstream` remote of the repository at `dir`, fetchable but not pushable,
 /// and make the clone's own remote the default push target. That remote is read back from the
 /// clone, since `--origin` and `clone.defaultRemoteName` can call it something other than
-/// `origin`. `fetch_opts` (such as `--depth 1`) are passed to the first fetch.
-pub fn add_upstream(dir: &Path, url: &str, fetch_opts: &[OsString]) -> Result<(), GitError> {
+/// `origin`. `fetch_opts` (such as `--depth 1`) are passed to the first fetch. With
+/// `single_branch`, only the upstream's default branch is fetched, then and later, as `git clone`
+/// does for its own remote.
+pub fn add_upstream(
+    dir: &Path,
+    url: &str,
+    fetch_opts: &[OsString],
+    single_branch: bool,
+) -> Result<(), GitError> {
     let remotes = git::output(Some(dir), &["remote"])?;
     let [origin] = remotes.lines().collect::<Vec<_>>()[..] else {
         let msg = format!("Cannot tell which remote of {} to push to: {remotes:?}", dir.display());
         return Err(GitError::Invalid(msg));
     };
     let dir = Some(dir);
-    git::run(dir, &["remote", "add", "upstream", url])?;
+    let branch = if single_branch { default_branch(dir, url)? } else { None };
+    let mut add = vec!["remote", "add"];
+    if let Some(branch) = &branch {
+        add.extend(["-t", branch]);
+    }
+    add.extend(["upstream", url]);
+    git::run(dir, &add)?;
     git::run(dir, &["config", "remote.upstream.pushurl", NO_PUSH])?;
     git::run(dir, &["config", "remote.upstream.tagOpt", "--no-tags"])?;
     git::run(dir, &["config", "remote.pushDefault", origin])?;
@@ -330,6 +367,14 @@ pub fn add_upstream(dir: &Path, url: &str, fetch_opts: &[OsString]) -> Result<()
     fetch.extend(fetch_opts.iter().cloned());
     fetch.push("upstream".into());
     git::run(dir, &fetch)
+}
+
+/// The branch that HEAD names in the repository at `url`, if it names one.
+fn default_branch(dir: Option<&Path>, url: &str) -> Result<Option<String>, GitError> {
+    let out = git::output(dir, &["ls-remote", "--symref", url, "HEAD"])?;
+    let branch =
+        out.lines().find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"));
+    Ok(branch.map(String::from))
 }
 
 #[cfg(test)]
@@ -443,6 +488,24 @@ mod tests {
             opts(&["--depth", "1", "--filter=blob:none", "--shallow-since=2020-01-01"])
         );
         assert_eq!(history_opts(&opts(&["--recursive"])), opts(&[]));
+    }
+
+    #[test]
+    fn single_branch_follows_git_clone() {
+        for (extra, want) in [
+            (&[][..], false),
+            (&["--filter=blob:none"], false),
+            (&["--depth", "1"], true),
+            (&["--depth=1"], true),
+            (&["--shallow-since=2020-01-01"], true),
+            (&["--shallow-exclude", "v1"], true),
+            (&["--single-branch"], true),
+            (&["--depth", "1", "--no-single-branch"], false),
+            (&["--no-single-branch", "--single-branch"], true),
+            (&["-c", "--depth=1"], false),
+        ] {
+            assert_eq!(single_branch(&opts(extra)), want, "{extra:?}");
+        }
     }
 
     #[test]

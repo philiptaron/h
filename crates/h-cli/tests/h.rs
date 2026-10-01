@@ -338,6 +338,48 @@ fn shallow_forks_fetch_a_shallow_upstream() {
 }
 
 #[test]
+fn single_branch_forks_fetch_only_the_upstreams_default_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fork = Fork::publish(tmp.path(), &["b1", "b2", "b3"]);
+    let root = tmp.path().join("code");
+    let path = root.join("github.com/me/proj");
+    let git = |args: &[&str]| {
+        let out = run(git_command(tmp.path()).arg("-C").arg(&path).args(args));
+        assert_eq!(out.code, Some(0), "{args:?}: {out:?}");
+        out.stdout
+    };
+    let all = "refs/remotes/upstream/b1\nrefs/remotes/upstream/b2\nrefs/remotes/upstream/b3\n\
+               refs/remotes/upstream/main\n";
+    for (extra, branches, depth) in [
+        // A shallow clone fetches one branch, and so does its upstream, as shallowly.
+        (&["--depth", "1"][..], "refs/remotes/upstream/main\n", "1"),
+        (&["--single-branch"], "refs/remotes/upstream/main\n", "2"),
+        (&["--depth", "1", "--no-single-branch"], all, "1"),
+        (&[], all, "2"),
+    ] {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        let out = run(cmd
+            .current_dir(tmp.path())
+            .env("H_GITHUB_API", &fork.api.url)
+            .arg("--root")
+            .arg(&root)
+            .args(["go", "me/proj"])
+            .args(extra));
+        assert_resolved(&out, &path);
+        let refs = git(&["for-each-ref", "--format=%(refname)", "refs/remotes/upstream/"]);
+        let refs = refs.replace("refs/remotes/upstream/HEAD\n", "");
+        assert_eq!(refs, branches, "{extra:?}");
+        assert_eq!(git(&["rev-list", "--count", "upstream/main"]).trim(), depth, "{extra:?}");
+        // Later fetches stay as narrow as the first, as they do for the clone's own remote.
+        let refspec = if branches == all { "*" } else { "main" };
+        let want = format!("+refs/heads/{refspec}:refs/remotes/upstream/{refspec}\n");
+        assert_eq!(git(&["config", "--get-all", "remote.upstream.fetch"]), want, "{extra:?}");
+        fs::remove_dir_all(&path).unwrap();
+    }
+}
+
+#[test]
 fn forks_push_to_the_remote_the_clone_has() {
     let tmp = tempfile::tempdir().unwrap();
     let fork = Fork::publish(tmp.path(), &[]);

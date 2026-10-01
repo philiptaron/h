@@ -36,7 +36,9 @@ Clones recurse into submodules unless an option says otherwise. When GitHub says
 is a fork, the clone gets an `upstream` remote that can be fetched but not pushed to (its push
 URL is `no_push`) and the fork's remote (`origin`, or whatever `--origin` or
 `clone.defaultRemoteName` calls it) becomes the default push target. The upstream is fetched
-with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as the clone.
+with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as the clone,
+and when the clone has a single branch (`--single-branch`, or any of the first three without
+`--no-single-branch`), so does the upstream: its default branch.
 
 A container clone has `origin` with ordinary remote-tracking branches and no local branches,
 and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from

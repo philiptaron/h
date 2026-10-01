@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command<T> {
     Help,
+    Version,
     Run(T),
 }
 

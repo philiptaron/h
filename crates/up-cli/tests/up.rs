@@ -7,6 +7,7 @@ use std::path::Path;
 use common::*;
 
 const UP: &str = env!("CARGO_BIN_EXE_up");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn up(cwd: &Path, home: &Path) -> Run {
     run(command(UP).current_dir(cwd).env("PWD", cwd).env("HOME", home))
@@ -33,8 +34,20 @@ fn help_reports_not_installed() {
         assert_eq!(run.stdout, format!("{}\n", canonical(tmp.path())));
         assert_eq!(
             run.stderr,
-            "up is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"\n"
+            format!(
+                "up {VERSION}\nup is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"\n"
+            )
         );
+    }
+}
+
+#[test]
+fn prints_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    for flag in ["-V", "--version"] {
+        let run = run(command(UP).current_dir(tmp.path()).arg(flag));
+        assert_eq!((run.code, run.stdout), (Some(0), format!("up {VERSION}\n")));
+        assert_eq!(run.stderr, "");
     }
 }
 

@@ -17,6 +17,8 @@ Options:
 
 Tab completion for project names is set up automatically for both bash and zsh.
 
+All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with `-V`/`--version`.
+
 ## Usage
 
 - `h <name>` - search for project matching `<name>` up to 3 levels deep

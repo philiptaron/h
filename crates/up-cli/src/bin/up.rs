@@ -8,11 +8,19 @@ use std::process::ExitCode;
 use h_core::output::{fail_with_cwd, print_path};
 use up_cli::root::find_project_root;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn main() -> ExitCode {
-    if let Some(arg) = std::env::args_os().nth(1)
-        && (arg == "-h" || arg == "--help")
-    {
-        return fail_with_cwd("up is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\"");
+    if let Some(arg) = std::env::args_os().nth(1) {
+        if arg == "-h" || arg == "--help" {
+            return fail_with_cwd(&format!(
+                "up {VERSION}\nup is not installed\n\nUsage: eval \"$(up-shell-init [--pushd])\""
+            ));
+        }
+        if arg == "-V" || arg == "--version" {
+            println!("up {VERSION}");
+            return ExitCode::SUCCESS;
+        }
     }
 
     // Prefer $PWD, which preserves the symlinks the user navigated through.

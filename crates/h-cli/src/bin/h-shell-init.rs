@@ -14,11 +14,17 @@ use h_core::output::fail;
 use h_core::path::expand_tilde;
 use h_core::shell::Shell;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn main() -> ExitCode {
     let opts = match parse_h_init_args(std::env::args_os().skip(1)) {
         Ok(Command::Run(opts)) => opts,
         Ok(Command::Help) => {
-            println!("{H_USAGE}");
+            println!("h-shell-init {VERSION}\n{H_USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Command::Version) => {
+            println!("h-shell-init {VERSION}");
             return ExitCode::SUCCESS;
         }
         Err(msg) => return fail(&msg),

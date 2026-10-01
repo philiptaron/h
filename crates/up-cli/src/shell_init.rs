@@ -16,6 +16,7 @@ pub fn parse_up_init_args(
         match arg.to_str() {
             Some("--pushd") => cd = CdCommand::Pushd,
             Some("-h" | "--help") => return Ok(Command::Help),
+            Some("-V" | "--version") => return Ok(Command::Version),
             _ => return Err(unknown_option(&arg)),
         }
     }
@@ -48,6 +49,8 @@ mod tests {
         assert_eq!(parse_up_init_args(args(&[])), Ok(Command::Run(CdCommand::Cd)));
         assert_eq!(parse_up_init_args(args(&["--pushd"])), Ok(Command::Run(CdCommand::Pushd)));
         assert_eq!(parse_up_init_args(args(&["--help"])), Ok(Command::Help));
+        assert_eq!(parse_up_init_args(args(&["-V"])), Ok(Command::Version));
+        assert_eq!(parse_up_init_args(args(&["--version"])), Ok(Command::Version));
         assert_eq!(parse_up_init_args(args(&["x"])), Err("Unknown option: x".into()));
     }
 

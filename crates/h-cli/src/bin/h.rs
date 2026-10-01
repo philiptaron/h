@@ -14,14 +14,23 @@ use h_git::github;
 use h_git::resolve::resolve;
 
 const USAGE: &str = "Usage: h (<name> | <repo>/<name> | <url>) [git opts]";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().collect();
     if args.len() < 2 {
-        return fail_with_cwd("Usage: eval \"$(h-shell-init [options] [code-root])\"");
+        return fail_with_cwd(&format!(
+            "h {VERSION}\nUsage: eval \"$(h-shell-init [options] [code-root])\""
+        ));
+    }
+    if args[1] == "-V" || args[1] == "--version" {
+        println!("h {VERSION}");
+        return ExitCode::SUCCESS;
     }
     if args[1] != "--resolve" {
-        return fail_with_cwd("h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"");
+        return fail_with_cwd(&format!(
+            "h {VERSION}\nh is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\""
+        ));
     }
     let Some(code_root) = args.get(2) else {
         return fail_with_cwd("Usage: h --resolve <code-root> <term>");

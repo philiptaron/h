@@ -8,6 +8,7 @@ use std::path::Path;
 use common::*;
 
 const H: &str = env!("CARGO_BIN_EXE_h");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "Usage: h (<name> | <repo>/<name> | <url>) [git opts]\n";
 
@@ -34,7 +35,18 @@ fn assert_resolved(run: &Run, path: &Path) {
 fn without_arguments_prints_usage() {
     let tmp = tempfile::tempdir().unwrap();
     let run = h(tmp.path(), &[]);
-    assert_failed_in(&run, tmp.path(), "Usage: eval \"$(h-shell-init [options] [code-root])\"\n");
+    let usage = format!("h {VERSION}\nUsage: eval \"$(h-shell-init [options] [code-root])\"\n");
+    assert_failed_in(&run, tmp.path(), &usage);
+}
+
+#[test]
+fn prints_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    for flag in ["-V", "--version"] {
+        let run = h(tmp.path(), &[flag]);
+        assert_eq!((run.code, run.stdout.as_str()), (Some(0), format!("h {VERSION}\n").as_str()));
+        assert_eq!(run.stderr, "");
+    }
 }
 
 #[test]
@@ -44,7 +56,9 @@ fn without_resolve_reports_not_installed() {
     assert_failed_in(
         &run,
         tmp.path(),
-        "h is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"\n",
+        &format!(
+            "h {VERSION}\nh is not installed\n\nUsage: eval \"$(h-shell-init [code-root])\"\n"
+        ),
     );
 }
 

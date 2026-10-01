@@ -9,6 +9,7 @@ use common::*;
 
 const UP: &str = env!("CARGO_BIN_EXE_up");
 const UP_SHELL_INIT: &str = env!("CARGO_BIN_EXE_up-shell-init");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A bash with the binaries under test available as variables.
 fn bash(root: &Path, script: &str) -> Command {
@@ -28,10 +29,11 @@ fn zsh(root: &Path, script: &str) -> Command {
 fn up_init_output() {
     let out = run(command(UP_SHELL_INIT));
     assert_eq!(out.code, Some(0));
+    let up = canonical(Path::new(UP));
     assert_eq!(
         out.stdout,
         format!(
-            "up() {{\n  _up_dir=$(command {UP} \"$@\")\n  if [ $? = 0 ]; then\n    \
+            "up() {{\n  _up_dir=$(command {up} \"$@\")\n  if [ $? = 0 ]; then\n    \
              [ \"$_up_dir\" != \"$PWD\" ] && cd \"$_up_dir\"\n  fi\n}}\n"
         )
     );
@@ -41,9 +43,13 @@ fn up_init_output() {
 fn up_init_help_and_errors() {
     let out = run(command(UP_SHELL_INIT).arg("--help"));
     assert_eq!(
-        (out.code, out.stdout.as_str()),
-        (Some(0), "Usage: eval \"$(up-shell-init [--pushd])\"\n")
+        (out.code, out.stdout),
+        (Some(0), format!("up-shell-init {VERSION}\nUsage: eval \"$(up-shell-init [--pushd])\"\n"))
     );
+    for flag in ["-V", "--version"] {
+        let out = run(command(UP_SHELL_INIT).arg(flag));
+        assert_eq!((out.code, out.stdout), (Some(0), format!("up-shell-init {VERSION}\n")));
+    }
     let out = run(command(UP_SHELL_INIT).arg("--bogus"));
     assert_eq!((out.code, out.stderr.as_str()), (Some(1), "Unknown option: --bogus\n"));
 }

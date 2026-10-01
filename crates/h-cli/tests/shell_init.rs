@@ -9,6 +9,7 @@ use common::*;
 
 const H: &str = env!("CARGO_BIN_EXE_h");
 const H_SHELL_INIT: &str = env!("CARGO_BIN_EXE_h-shell-init");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A bash with the binaries under test available as variables.
 fn bash(root: &Path, script: &str) -> Command {
@@ -31,9 +32,19 @@ fn h_init_help() {
         assert_eq!(out.code, Some(0));
         assert_eq!(
             out.stdout,
-            "Usage: eval \"$(h-shell-init [--pushd] [--name NAME] [--git-opts \"OPTIONS\"] \
-             [code-root])\"\n"
+            format!(
+                "h-shell-init {VERSION}\nUsage: eval \"$(h-shell-init [--pushd] [--name NAME] \
+                 [--git-opts \"OPTIONS\"] [code-root])\"\n"
+            )
         );
+    }
+}
+
+#[test]
+fn h_init_version() {
+    for flag in ["-V", "--version"] {
+        let out = run(command(H_SHELL_INIT).arg(flag));
+        assert_eq!((out.code, out.stdout), (Some(0), format!("h-shell-init {VERSION}\n")));
     }
 }
 

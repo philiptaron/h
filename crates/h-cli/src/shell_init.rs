@@ -50,6 +50,7 @@ pub fn parse_h_init_args(
                 opts.git_opts = args.next().unwrap().to_string_lossy().into_owned()
             }
             Some("-h" | "--help") => return Ok(Command::Help),
+            Some("-V" | "--version") => return Ok(Command::Version),
             _ if !arg.as_encoded_bytes().starts_with(b"-") => opts.code_root = Some(arg),
             _ => return Err(unknown_option(&arg)),
         }
@@ -164,6 +165,12 @@ mod tests {
     fn parses_h_init_help() {
         assert_eq!(parse_h_init_args(args(&["-h"])), Ok(Command::Help));
         assert_eq!(parse_h_init_args(args(&["--pushd", "--help", "--bogus"])), Ok(Command::Help));
+    }
+
+    #[test]
+    fn parses_h_init_version() {
+        assert_eq!(parse_h_init_args(args(&["-V"])), Ok(Command::Version));
+        assert_eq!(parse_h_init_args(args(&["--version"])), Ok(Command::Version));
     }
 
     #[test]

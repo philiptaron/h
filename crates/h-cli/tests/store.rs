@@ -590,6 +590,13 @@ fn fetch_updates_everything_or_the_named_upstreams() {
     assert_eq!(sb.ok(&["show", "proj", "main:third"]).stdout, "new\n");
 }
 
+/// `git -C <dir> <args>` in the sandbox, which must succeed; its output, trimmed.
+fn git_ok(sb: &Sandbox, dir: &Path, args: &[&str]) -> String {
+    let out = run(sb.git(dir).args(args));
+    assert_eq!(out.code, Some(0), "git {args:?}: {out:?}");
+    out.stdout.trim().to_string()
+}
+
 #[test]
 fn fetch_brings_in_everything_it_can_and_names_what_failed() {
     let sb = Sandbox::new();
@@ -627,17 +634,71 @@ fn fetch_brings_in_everything_it_can_and_names_what_failed() {
 }
 
 #[test]
-fn worktrees_are_detached_checkouts_from_the_store() {
+fn worktrees_are_clones_with_the_upstreams_own_names() {
     let sb = Sandbox::new();
+    git_ok(&sb, &sb.src, &["tag", "-a", "-m", "release", "v1.0"]);
+    sb.publish("second");
+    git_ok(&sb, &sb.src, &["branch", "dev"]);
     sb.ok(&["add", PROJ_URL]);
 
     let dir = sb.tmp.path().join("wt");
     let out = sb.ok(&["worktree", "proj", "main", dir.to_str().unwrap()]);
-    assert_eq!(out.stdout, format!("{}\n", dir.display()));
-    assert_eq!(fs::read_to_string(dir.join("README")).unwrap(), "hello\n");
-    let head = run(sb.git(&dir).args(["symbolic-ref", "-q", "HEAD"]));
-    assert_ne!(head.code, Some(0), "HEAD is detached");
-    assert_eq!(run(sb.git(&sb.store).args(["branch", "--list"])).stdout, "", "no branch created");
+    assert_eq!(out.stdout, format!("{}\n", dir.display()), "stdout is the directory alone");
+    assert_eq!(fs::read_to_string(dir.join("second")).unwrap(), "new\n");
+    // The upstream's refs under the names a clone of it has, and nothing else from the store.
+    assert_eq!(
+        git_ok(&sb, &dir, &["for-each-ref", "--format=%(refname) %(symref)"]),
+        "refs/heads/main \n\
+         refs/remotes/origin/HEAD refs/remotes/origin/main\n\
+         refs/remotes/origin/dev \n\
+         refs/remotes/origin/main \n\
+         refs/tags/v1.0"
+    );
+    // A branch is checked out as a local branch tracking origin's, as `git clone --branch` does.
+    assert_eq!(git_ok(&sb, &dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/main");
+    let describe = git_ok(&sb, &dir, &["describe", "--tags", "--match", "v*"]);
+    assert!(describe.starts_with("v1.0-1-g"), "{describe}");
+    // Objects come from the store, and the refs it negotiates with are this upstream's.
+    let alternates = fs::read_to_string(dir.join(".git/objects/info/alternates")).unwrap();
+    assert_eq!(alternates.trim_end(), sb.store.join("objects").to_str().unwrap());
+    let objects = git_ok(&sb, &dir, &["count-objects", "-v"]);
+    assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
+    assert_eq!(
+        git_ok(&sb, &dir, &["config", "core.alternateRefsPrefixes"]),
+        format!("refs/remotes/{PROJ}/ refs/tags/{PROJ}/")
+    );
+    assert!(!sb.store.join("worktrees").exists(), "the store gets no worktree");
+
+    // Fetching refreshes it from the store, never from the upstream itself; pushing fails.
+    assert_eq!(git_ok(&sb, &dir, &["config", "remote.origin.url"]), sb.store.to_str().unwrap());
+    sb.publish("third");
+    sb.ok(&["fetch", "-q"]);
+    git_ok(&sb, &dir, &["fetch", "-q"]);
+    assert_eq!(
+        git_ok(&sb, &dir, &["rev-parse", "origin/main"]),
+        git_ok(&sb, &sb.src, &["rev-parse", "main"])
+    );
+    let origin_head = git_ok(&sb, &dir, &["symbolic-ref", "refs/remotes/origin/HEAD"]);
+    assert_eq!(origin_head, "refs/remotes/origin/main", "fetching keeps origin/HEAD symbolic");
+    let push = run(sb.git(&dir).args(["push", "origin", "main:refs/heads/x"]));
+    assert_ne!(push.code, Some(0));
+    assert!(push.stderr.contains("no_push"), "{push:?}");
+
+    // `HEAD` is the default branch; a tag or a commit hash is checked out detached.
+    let tagged = git_ok(&sb, &sb.src, &["rev-parse", "v1.0^{commit}"]);
+    let hash = git_ok(&sb, &sb.src, &["rev-parse", "main~1"]);
+    for (reference, want) in [("HEAD", None), ("v1.0", Some(&tagged)), (&hash[..], Some(&hash))] {
+        let dir = sb.tmp.path().join(format!("at-{}", &reference[..4]));
+        sb.ok(&["worktree", "proj", reference, dir.to_str().unwrap()]);
+        let branch = run(sb.git(&dir).args(["symbolic-ref", "-q", "--short", "HEAD"]));
+        match want {
+            None => assert_eq!(branch.stdout.trim(), "main", "{reference}"),
+            Some(want) => {
+                assert_ne!(branch.code, Some(0), "{reference} is checked out detached");
+                assert_eq!(&git_ok(&sb, &dir, &["rev-parse", "HEAD"]), want, "{reference}");
+            }
+        }
+    }
 
     // Without a directory, a temporary one is made.
     let mut cmd = command(H);
@@ -664,23 +725,82 @@ fn worktrees_are_detached_checkouts_from_the_store() {
     assert_eq!(out.stdout, format!("{}\n", sb.root().join("rel").display()));
     assert!(sb.root().join("rel/README").is_file());
 
-    // So can a commit hash.
-    let hash = run(sb.git(&sb.src).args(["rev-parse", "HEAD"])).stdout.trim().to_string();
-    let dir = sb.tmp.path().join("by-hash");
-    sb.ok(&["worktree", "proj", &hash, dir.to_str().unwrap()]);
-    assert_eq!(run(sb.git(&dir).args(["rev-parse", "HEAD"])).stdout.trim(), hash);
-
     let out = sb.h(&["worktree", "proj"]);
     assert_eq!(out.stderr, "Usage: h store worktree <term> <ref> [DIR]\n");
+}
+
+#[test]
+fn failed_worktrees_leave_nothing_behind() {
+    let sb = Sandbox::new();
+    sb.ok(&["add", PROJ_URL]);
+    let fails = |args: &[&str], stderr: &str| {
+        let out = sb.h(args);
+        assert_eq!(out.code, Some(1), "{args:?}: {out:?}");
+        assert_eq!(out.stdout, "", "{args:?}");
+        assert!(out.stderr.contains(stderr), "{args:?}: {out:?}");
+    };
+
+    // A reference the upstream lacks is refused before anything is made.
+    let dir = sb.tmp.path().join("nope");
+    let msg = format!("nope is not a branch, tag or commit of {PROJ}");
+    fails(&["worktree", "proj", "nope", dir.to_str().unwrap()], &msg);
+    assert!(!dir.exists());
+
+    // A failure part way through (here, writing a git option git rejects into the new clone)
+    // removes what was made, but keeps a directory that was there.
+    let bad_config = ["--", "-c", "nosection=x"];
+    let midway = "git config nosection x failed";
+    let dir = sb.tmp.path().join("midway");
+    let args = [&["worktree", "proj", "main", dir.to_str().unwrap()][..], &bad_config].concat();
+    fails(&args, midway);
+    assert!(!dir.exists());
+    let empty = sb.tmp.path().join("empty");
+    fs::create_dir(&empty).unwrap();
+    let args = [&["worktree", "proj", "main", empty.to_str().unwrap()][..], &bad_config].concat();
+    fails(&args, midway);
+    assert_eq!(fs::read_dir(&empty).unwrap().count(), 0, "emptied, not removed");
+
+    // A directory with anything in it, or a file, is never touched.
+    let full = sb.tmp.path().join("full");
+    fs::create_dir(&full).unwrap();
+    fs::write(full.join("mine"), "keep\n").unwrap();
+    let file = sb.tmp.path().join("file");
+    fs::write(&file, "keep\n").unwrap();
+    for dir in [&full, &file] {
+        let msg = "already exists and is not an empty directory";
+        fails(&["worktree", "proj", "main", dir.to_str().unwrap()], msg);
+    }
+    assert_eq!(fs::read_to_string(full.join("mine")).unwrap(), "keep\n");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "keep\n");
+}
+
+#[test]
+fn worktrees_of_nested_upstreams_see_only_their_own_refs() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    sb.ok(&["add", PROJ_URL]);
+    sb.ok(&["add", sub_url]);
+    let own_refs = "refs/heads/main \n\
+                    refs/remotes/origin/HEAD refs/remotes/origin/main\n\
+                    refs/remotes/origin/main";
+    for (term, readme) in [(PROJ_URL, "hello\n"), ("sub", "sub\n")] {
+        let dir = sb.tmp.path().join(if term == "sub" { "inner" } else { "outer" });
+        sb.ok(&["worktree", term, "HEAD", dir.to_str().unwrap()]);
+        assert_eq!(fs::read_to_string(dir.join("README")).unwrap(), readme, "{term}");
+        let refs = git_ok(&sb, &dir, &["for-each-ref", "--format=%(refname) %(symref)"]);
+        assert_eq!(refs, own_refs, "{term}");
+    }
 }
 
 #[test]
 fn maintain_runs_only_non_destructive_tasks() {
     let sb = Sandbox::new();
     sb.ok(&["add", PROJ_URL]);
-    // Leave a stale worktree behind, which the daily and weekly tasks prune.
+    // Leave a stale worktree of the store behind, which the daily and weekly tasks prune. `h store
+    // worktree` makes clones, so this is a worktree made by hand.
     let dir = sb.tmp.path().join("stale");
-    sb.ok(&["worktree", "proj", "main", dir.to_str().unwrap()]);
+    let (dir_arg, main) = (dir.to_str().unwrap(), format!("{PROJ}/main"));
+    git_ok(&sb, &sb.store, &["worktree", "add", "--quiet", "--detach", dir_arg, &main]);
     fs::remove_dir_all(&dir).unwrap();
 
     sb.ok(&["maintain", "hourly"]);

@@ -36,7 +36,8 @@ Commands:
   store show <term> <ref>[:<path>]
                               show a commit, or a file at a commit, from the store
   store worktree <term> <ref> [DIR]
-                              check <ref> out, detached, into DIR (default: a temporary directory)
+                              clone the upstream from the store into DIR (default: a temporary
+                              directory) and check <ref> out there
   store maintain [hourly|daily|weekly]
                               run the store's maintenance tasks (default: daily)
 
@@ -334,7 +335,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
                 let dir = rest.get(2).map(|d| absolute(d));
                 upstream_in_store(config, store, term).and_then(|name| {
                     store
-                        .worktree(&name, reference, dir)
+                        .worktree(&name, reference, dir, &config.git_opts)
                         .map(|dir| print_path(&dir))
                         .map_err(|e| e.to_string())
                 })

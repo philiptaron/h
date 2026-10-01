@@ -10,9 +10,10 @@
 //! ever pruned, so clones that borrow objects from the store stay intact.
 
 use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use crate::clone::NO_PUSH;
+use crate::clone::{NO_PUSH, alternate_refs_prefixes};
 use crate::git::{self, GitError, config_pairs};
 
 /// Configuration every store gets at creation.
@@ -35,7 +36,8 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // Every upstream's commits are offered to every fetch, and git offers all of them until the
     // server recognizes one, which an unrelated upstream never does. Skipping offers a few.
     ("fetch.negotiationAlgorithm", "skipping"),
-    // Worktrees made from the store are throwaway: forget them as soon as they are gone.
+    // `h store worktree` makes clones, but a worktree of the store made by hand (or by h 0.3.0 and
+    // earlier) is throwaway too: forget it as soon as it is gone.
     ("gc.worktreePruneExpire", "now"),
 ];
 
@@ -357,29 +359,137 @@ impl Store {
         git::passthrough(self.dir(), &["show", &spec])
     }
 
-    /// Check out `reference` of upstream `name` into a detached worktree at `dir`, or a fresh
-    /// temporary directory. Returns the worktree's path.
+    /// Clone upstream `name` from the store into `dir`, or a fresh temporary directory, and check
+    /// out `reference` there. Returns the clone's path.
+    ///
+    /// The clone borrows the store's objects, as `git clone --shared` would, but sees only this
+    /// upstream, and under the names an ordinary clone of it has: its branches as `origin/*`,
+    /// `origin/HEAD` at its default branch, and its tags as plain tags. So `git describe` and
+    /// build tooling behave as in any clone, and `git fetch` refreshes it from the store with no
+    /// network. Pushing back fails. A branch (or `HEAD`, the default branch) is checked out as a
+    /// local branch tracking `origin/<branch>`, as `git clone --branch` does, so work in the clone
+    /// can be committed; a tag or commit is checked out detached. The `-c key=value` pairs in
+    /// `git_opts` are written into it, as `h go` writes them into clones.
+    ///
+    /// `git clone --shared` itself is not used: it would also take the store's own HEAD and
+    /// branches, and every upstream's tags. Anything at `dir` but an empty directory is refused,
+    /// and a failure removes whatever was made, so `dir` ends up a whole clone or as it was.
     pub fn worktree(
         &self,
         name: &str,
         reference: &str,
         dir: Option<PathBuf>,
+        git_opts: &[OsString],
     ) -> Result<PathBuf, GitError> {
+        let prefix = self.prefix(name)?;
+        let start = self.checkout_start(name, &prefix, reference)?;
         let dir = dir.unwrap_or_else(|| temp_worktree_dir(name, reference));
-        if let Some(parent) = dir.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let existed = dir.exists();
+        if existed && !dir.read_dir().is_ok_and(|mut entries| entries.next().is_none()) {
+            let msg = format!("{} already exists and is not an empty directory", dir.display());
+            return Err(GitError::Invalid(msg));
         }
-        let commit = self.revision(name, reference)?;
-        let args: Vec<OsString> = vec![
-            "worktree".into(),
-            "add".into(),
-            "--detach".into(),
-            "--quiet".into(),
-            dir.clone().into(),
-            commit.into(),
+        let result = self.fill_checkout(name, &prefix, &start, &dir, git_opts);
+        if result.is_err() {
+            remove_checkout(&dir, existed);
+        }
+        result.map(|()| dir)
+    }
+
+    /// Where a checkout of `reference` of upstream `name` (called `prefix` in refs) starts:
+    /// a branch of the upstream, or else the commit that `reference` names, such as a tag, a
+    /// hash or `main~2`. Checked before anything is made, so a bad reference leaves nothing.
+    fn checkout_start(&self, name: &str, prefix: &str, reference: &str) -> Result<Start, GitError> {
+        let dir = self.dir();
+        let branches = format!("refs/remotes/{prefix}/");
+        let branch = if reference == "HEAD" {
+            let head = format!("{branches}HEAD");
+            git::output(dir, &["symbolic-ref", "--quiet", &head])
+                .ok()
+                .and_then(|target| target.trim().strip_prefix(&branches).map(String::from))
+        } else {
+            let exact = format!("{branches}{reference}");
+            git::output(dir, &["show-ref", "--verify", "--quiet", &exact])
+                .ok()
+                .map(|_| reference.to_string())
+        };
+        if let Some(branch) = branch {
+            return Ok(Start::Branch(branch));
+        }
+        let commit = format!("{}^{{commit}}", self.revision(name, reference)?);
+        match git::output(dir, &["rev-parse", "--verify", "--quiet", &commit]) {
+            Ok(oid) => Ok(Start::Detached(oid.trim().to_string())),
+            Err(_) => {
+                let msg = format!("{reference} is not a branch, tag or commit of {name}");
+                Err(GitError::Invalid(msg))
+            }
+        }
+    }
+
+    /// Make the clone described at [`Store::worktree`] in `dir`.
+    fn fill_checkout(
+        &self,
+        name: &str,
+        prefix: &str,
+        start: &Start,
+        dir: &Path,
+        git_opts: &[OsString],
+    ) -> Result<(), GitError> {
+        let format = git::output(self.dir(), &["rev-parse", "--show-object-format"])?;
+        let format = format!("--object-format={}", format.trim());
+        std::fs::create_dir_all(dir).map_err(GitError::Spawn)?;
+        let init: Vec<OsString> =
+            vec!["init".into(), "--quiet".into(), format.into(), dir.as_os_str().into()];
+        git::run(None, &init)?;
+        let mut alternates = self.path.join("objects").into_os_string().into_vec();
+        alternates.push(b'\n');
+        std::fs::write(dir.join(".git/objects/info/alternates"), alternates)
+            .map_err(GitError::Spawn)?;
+
+        let clone = Some(dir);
+        let store: OsString = self.path.clone().into();
+        git::run(clone, &[OsString::from("config"), "remote.origin.url".into(), store])?;
+        let fetch = [
+            format!("+refs/remotes/{prefix}/*:refs/remotes/origin/*"),
+            // Leave out the store's `<prefix>/HEAD`: origin/HEAD is pointed at the default
+            // branch below, as a symbolic ref, and no fetch should write to it.
+            format!("^refs/remotes/{prefix}/HEAD"),
+            format!("+refs/tags/{prefix}/*:refs/tags/*"),
         ];
-        git::run(self.dir(), &args)?;
-        Ok(dir)
+        for refspec in &fetch {
+            git::run(clone, &["config", "--add", "remote.origin.fetch", refspec])?;
+        }
+        for (key, value) in [
+            ("remote.origin.pushurl", NO_PUSH),
+            // Following tags would bring the store's names for them, `<prefix>/v1.0`.
+            ("remote.origin.tagOpt", "--no-tags"),
+            // The store's own HEAD says nothing about the upstream's default branch.
+            ("remote.origin.followRemoteHEAD", "never"),
+        ] {
+            git::run(clone, &["config", key, value])?;
+        }
+        if let Some(prefixes) = alternate_refs_prefixes(&[name.to_string()]) {
+            git::run(clone, &["config", "core.alternateRefsPrefixes", &prefixes])?;
+        }
+        for (key, value) in config_pairs(git_opts) {
+            git::run(clone, &[OsString::from("config"), key, value])?;
+        }
+        git::run(clone, &["fetch", "--quiet", "origin"])?;
+
+        let head = format!("refs/remotes/{prefix}/HEAD");
+        if let Ok(target) = git::output(self.dir(), &["symbolic-ref", "--quiet", &head])
+            && let Some(branch) = target.trim().strip_prefix(&format!("refs/remotes/{prefix}/"))
+        {
+            let origin_head = format!("refs/remotes/origin/{branch}");
+            git::run(clone, &["symbolic-ref", "refs/remotes/origin/HEAD", &origin_head])?;
+        }
+        match start {
+            Start::Branch(branch) => {
+                let upstream = format!("origin/{branch}");
+                git::run(clone, &["switch", "--quiet", "--track", "--create", branch, &upstream])
+            }
+            Start::Detached(oid) => git::run(clone, &["switch", "--quiet", "--detach", oid]),
+        }
     }
 
     /// Run the maintenance tasks for `schedule` (`hourly`, `daily` or `weekly`).
@@ -392,6 +502,30 @@ impl Store {
         args.extend(tasks.iter().map(|task| format!("--task={task}")));
         git::run(self.dir(), &args)
     }
+}
+
+/// Remove what a failed [`Store::worktree`] made in `dir`: all of it, or only what is inside
+/// when the (empty) directory was there before.
+fn remove_checkout(dir: &Path, existed: bool) {
+    if !existed {
+        let _ = std::fs::remove_dir_all(dir);
+        return;
+    }
+    for entry in dir.read_dir().into_iter().flatten().flatten() {
+        let path = entry.path();
+        let _ = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => std::fs::remove_dir_all(&path),
+            _ => std::fs::remove_file(&path),
+        };
+    }
+}
+
+/// Where [`Store::worktree`] starts the clone it makes.
+enum Start {
+    /// A local branch of this name, tracking `origin/<name>`.
+    Branch(String),
+    /// A detached HEAD at this commit.
+    Detached(String),
 }
 
 /// Whether `reference` is a full or abbreviated object name, perhaps followed by a suffix such

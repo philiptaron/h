@@ -107,7 +107,7 @@ pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
 /// Fetching treats every ref of an alternate as history it already has and sends the server
 /// all of it until the server recognizes a commit, so a clone of something unrelated to the
 /// store would otherwise send every commit in the store first.
-fn alternate_refs_prefixes(names: &[String]) -> Option<String> {
+pub(crate) fn alternate_refs_prefixes(names: &[String]) -> Option<String> {
     let prefixes: Vec<String> = names
         .iter()
         .flat_map(|name| [format!("refs/remotes/{name}/"), format!("refs/tags/{name}/")])

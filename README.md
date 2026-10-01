@@ -84,7 +84,7 @@ h store list                                  # the upstreams' names
 h store show nixpkgs master:lib/default.nix   # a file, straight from the store
 h store show torvalds/linux v6.12             # a commit
 h store show nixpkgs 1f0e2d3:flake.nix         # commit hashes work too
-h store worktree nixpkgs staging              # a detached checkout in a temporary directory
+h store worktree nixpkgs staging              # a cheap clone at staging, in a temporary directory
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
 
@@ -97,6 +97,15 @@ fetch fails, so the store never holds one that was never fetched.
 Terms given to `store` commands match upstreams already in the store first, so a name as
 `h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and
 `nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub.
+
+`h store worktree <term> <ref> [DIR]` prints the one directory it made, so scripts and hooks can
+use it. The directory is a clone of that upstream alone that borrows the store's objects, with
+the names an ordinary clone has: its branches as `origin/*`, `origin/HEAD` at its default branch,
+and its tags as plain tags, so `git describe` and build tooling behave as usual and `git fetch`
+refreshes it from the store without the network. A branch (or `HEAD`) is checked out as a local
+branch tracking `origin/<branch>`, as `git clone --branch` does; a tag or commit is checked out
+detached. It cannot push to the store, and removing it is just `rm -rf`. A failure leaves no
+directory behind.
 
 The `h` binary takes `--root DIR` and `--store DIR`, or `$H_CODE_ROOT` and `$H_STORE`, so
 scripts and agents can run it without the shell function:

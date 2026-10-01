@@ -96,7 +96,9 @@ fn bash_h_changes_directory() {
            h nope; echo "ret=$?"; pwd"#,
     ));
     let project = tmp.path().join("github.com/owner/project");
-    assert_eq!(out.stdout, format!("ret=0\n{}\nret=1\n{}\n", project.display(), project.display()));
+    // On failure h prints the physical current directory (getcwd), so the shell ends up there.
+    let physical = canonical(&project);
+    assert_eq!(out.stdout, format!("ret=0\n{}\nret=1\n{physical}\n", project.display()));
     assert_eq!(out.stderr, "nope not found\n");
 }
 

@@ -200,10 +200,18 @@ pub fn have(program: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
-/// A shell command running `script` in `root`, with `$ROOT` and `$HOME` set to `root`.
+/// A shell command running `script` in `root`, with `$ROOT`, `$HOME` and `$PWD` set to `root`.
+///
+/// Setting `$PWD` keeps the shell on the logical path even where `root` is reached through a
+/// symlink (as macOS temporary directories are), instead of the shell resetting it to `getcwd`.
 pub fn shell(program: &str, args: &[&str], root: &Path, script: &str) -> Command {
     let mut cmd = command(program);
-    cmd.args(args).arg(script).current_dir(root).env("HOME", root).env("ROOT", root);
+    cmd.args(args)
+        .arg(script)
+        .current_dir(root)
+        .env("HOME", root)
+        .env("ROOT", root)
+        .env("PWD", root);
     cmd
 }
 

@@ -4,8 +4,9 @@
 
 use std::process::ExitCode;
 
-use h_core::shell::{Command, sibling_exe};
-use h_core::util::fail;
+use h_core::args::Command;
+use h_core::output::fail;
+use h_core::shell::sibling_exe;
 use up_cli::shell_init::{UP_USAGE, parse_up_init_args, render_up_init};
 
 fn main() -> ExitCode {

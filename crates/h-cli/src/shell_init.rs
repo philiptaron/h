@@ -2,7 +2,8 @@
 
 use std::ffi::OsString;
 
-use h_core::shell::{CdCommand, Command, Shell, unknown_option};
+use h_core::args::{Command, unknown_option};
+use h_core::shell::{CdCommand, Shell};
 
 pub const H_USAGE: &str =
     "Usage: eval \"$(h-shell-init [--pushd] [--name NAME] [--git-opts \"OPTIONS\"] [code-root])\"";

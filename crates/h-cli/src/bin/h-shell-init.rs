@@ -8,8 +8,10 @@ use std::process::ExitCode;
 use h_cli::shell_init::{
     CODE_ROOT_ENV, DEFAULT_CODE_ROOT, H_USAGE, parse_h_init_args, render_h_init,
 };
-use h_core::shell::{Command, Shell, sibling_exe};
-use h_core::util::{expand_tilde, fail};
+use h_core::args::Command;
+use h_core::output::fail;
+use h_core::path::expand_tilde;
+use h_core::shell::{Shell, sibling_exe};
 
 fn main() -> ExitCode {
     let opts = match parse_h_init_args(std::env::args_os().skip(1)) {

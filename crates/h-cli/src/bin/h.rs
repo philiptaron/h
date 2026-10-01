@@ -7,7 +7,8 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use h_core::util::{expand_tilde, fail_with_cwd, print_cwd, print_path};
+use h_core::output::{fail_with_cwd, print_cwd, print_path};
+use h_core::path::expand_tilde;
 use h_git::clone::clone_repo;
 use h_git::github;
 use h_git::resolve::resolve;

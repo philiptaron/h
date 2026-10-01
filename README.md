@@ -35,7 +35,7 @@ eval "$(up-shell-init [--pushd])"
 
 The code is a Cargo workspace:
 
-- `crates/h-core` - helpers shared by both tools (output, shell detection, `cd`/`pushd`)
+- `crates/h-core` - pieces shared by both tools: output, argument parsing, paths, shell detection
 - `crates/h-git` - resolving names, `user/repo` and URLs, GitHub lookups, cloning
 - `crates/h-cli` - the `h` and `h-shell-init` binaries
 - `crates/up-cli` - the `up` and `up-shell-init` binaries

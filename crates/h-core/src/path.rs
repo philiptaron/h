@@ -1,10 +1,8 @@
-//! Small helpers shared by the binaries.
+//! Interpreting paths given on the command line.
 
 use std::ffi::{OsStr, OsString};
-use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::path::PathBuf;
 
 /// Expand a leading `~` (alone or followed by `/`) to `$HOME`.
 pub fn expand_tilde(path: &OsStr) -> PathBuf {
@@ -26,35 +24,6 @@ pub fn expand_tilde_with(path: &OsStr, home: Option<&OsStr>) -> PathBuf {
         }
         _ => PathBuf::from(path),
     }
-}
-
-/// Print `msg` to stderr and return a failing exit code.
-pub fn fail(msg: &str) -> ExitCode {
-    eprintln!("{msg}");
-    ExitCode::FAILURE
-}
-
-/// Print the current directory to stdout and `msg` to stderr, then return a failing exit code.
-///
-/// The shell functions `cd` to whatever is printed on stdout, so printing the current directory
-/// keeps the user where they are.
-pub fn fail_with_cwd(msg: &str) -> ExitCode {
-    print_cwd();
-    fail(msg)
-}
-
-/// Print the current directory to stdout, if it can be determined.
-pub fn print_cwd() {
-    if let Ok(cwd) = std::env::current_dir() {
-        print_path(&cwd);
-    }
-}
-
-/// Print a path followed by a newline to stdout, preserving non-UTF-8 bytes.
-pub fn print_path(path: &Path) {
-    let mut out = std::io::stdout().lock();
-    let _ = out.write_all(path.as_os_str().as_bytes());
-    let _ = out.write_all(b"\n");
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
-//! Pieces shared by the `h-shell-init` and `up-shell-init` binaries.
+//! The shell that will run the generated functions, how they change directory, and the binary
+//! they call.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// The shell that will evaluate the generated code, which decides the completion code emitted.
@@ -45,18 +45,6 @@ impl CdCommand {
     }
 }
 
-/// What `h-shell-init` or `up-shell-init` was asked to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Command<T> {
-    Help,
-    Run(T),
-}
-
-/// The error message for an unrecognized command-line argument.
-pub fn unknown_option(arg: &OsStr) -> String {
-    format!("Unknown option: {}", arg.to_string_lossy())
-}
-
 /// The path of the executable `name` that sits next to the running executable.
 pub fn sibling_exe(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_else(|_| {
@@ -74,6 +62,7 @@ pub fn sibling_exe(name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn detects_shell_from_comm() {

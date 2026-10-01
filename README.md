@@ -44,7 +44,8 @@ A store is one bare repository holding many unrelated upstream repositories as r
 named by the path `h` would clone it to (with any part git cannot use in a ref escaped, so
 `.local` becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags under
 `refs/tags/<name>/`, so `github.com/NixOS/nixpkgs/master` and
-`github.com/torvalds/linux/v6.12` both resolve and nothing collides. An upstream whose name
+`github.com/torvalds/linux/v6.12` both resolve and nothing collides, and every fetch points
+`<name>/HEAD` at the upstream's current default branch. An upstream whose name
 another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps its
 refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
 the inner one moves the outer one's refs over. The store is never pushed

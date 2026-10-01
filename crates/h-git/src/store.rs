@@ -98,6 +98,11 @@ impl Store {
         for (key, value) in STORE_CONFIG {
             git::run(self.dir(), &["config", key, value])?;
         }
+        // Upstreams added before HEAD was followed follow it from now on.
+        for name in self.remotes()? {
+            let nested = self.is_nested(&name)?;
+            self.follow_remote_head(&name, nested)?;
+        }
         for (key, value) in config_pairs(git_opts) {
             git::run(self.dir(), &[OsString::from("config"), key, value])?;
         }
@@ -135,7 +140,17 @@ impl Store {
         for refspec in refspecs(name, nested) {
             git::run(dir, &["config", "--add", &key("fetch"), &refspec])?;
         }
+        self.follow_remote_head(name, nested)?;
         Ok(true)
+    }
+
+    /// Have each fetch of upstream `name` point `<name>/HEAD` at its default branch, even when
+    /// that changes, as git leaves an existing HEAD alone by default. A nested upstream's HEAD is
+    /// left to [`Store::set_head`]: git would look for the default branch directly under
+    /// `refs/remotes/<name>/`, where only an inner upstream's refs are.
+    fn follow_remote_head(&self, name: &str, nested: bool) -> Result<(), GitError> {
+        let key = format!("remote.{name}.followRemoteHEAD");
+        git::run(self.dir(), &["config", &key, if nested { "never" } else { "always" }])
     }
 
     /// Whether upstream `name` keeps its refs under `<name>/-/`.
@@ -152,8 +167,8 @@ impl Store {
     }
 
     /// Point `<name>/-/HEAD` of a nested upstream at the branch the upstream's HEAD names, as
-    /// `git clone` does for `origin/HEAD`. Fetching does this only for refs directly under
-    /// `refs/remotes/<name>/`, so it is done here, once, when the upstream is added. Returns
+    /// `git clone` does for `origin/HEAD`. Git does this only for refs directly under
+    /// `refs/remotes/<name>/`, so [`Store::fetch`] does it here, after every fetch. Returns
     /// whether HEAD was set.
     pub fn set_head(&self, name: &str) -> Result<bool, GitError> {
         let out = git::output(self.dir(), &["ls-remote", "--symref", name, "HEAD"])?;
@@ -225,26 +240,35 @@ impl Store {
         for refspec in refspecs(name, true) {
             git::run(dir, &["config", "--add", &key, &refspec])?;
         }
-        Ok(())
+        self.follow_remote_head(name, true)
     }
 
-    /// Fetch the named upstreams, or all of them when `names` is empty.
+    /// Fetch the named upstreams, or all of them when `names` is empty, then point the
+    /// `<name>/-/HEAD` of each nested one at its default branch. Returns the nested upstreams
+    /// with no default branch to point at, whose HEAD is left as it was.
     ///
     /// Tags are never pruned, even in stores made before [`STORE_CONFIG`] said so: git passes
     /// `--no-prune-tags` on to the fetch of each upstream.
-    pub fn fetch(&self, names: &[String], quiet: bool) -> Result<(), GitError> {
+    pub fn fetch(&self, names: &[String], quiet: bool) -> Result<Vec<String>, GitError> {
         let mut args = vec!["fetch", "--prune", "--no-prune-tags", "--no-write-fetch-head"];
         if quiet {
             args.push("--quiet");
         }
         if names.is_empty() {
             args.push("--all");
-            git::run(self.dir(), &args)
         } else {
             args.push("--multiple");
             args.extend(names.iter().map(String::as_str));
-            git::run(self.dir(), &args)
         }
+        git::run(self.dir(), &args)?;
+        let fetched = if names.is_empty() { self.remotes()? } else { names.to_vec() };
+        let mut headless = Vec::new();
+        for name in fetched {
+            if self.is_nested(&name)? && !self.set_head(&name)? {
+                headless.push(name);
+            }
+        }
+        Ok(headless)
     }
 
     /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or

@@ -306,6 +306,40 @@ fn an_outer_upstream_added_later_is_nested_from_the_start() {
 }
 
 #[test]
+fn heads_follow_a_renamed_default_branch() {
+    let sb = Sandbox::new();
+    let sub_url = add_sub_source(&sb);
+    let sub = sb.tmp.path().join("src/sub");
+    sb.ok(&["add", PROJ_URL, sub_url]);
+    let follow = |name: &str| sb.store_config(&format!("remote.{name}.followRemoteHEAD"));
+    let inner = format!("{PROJ}/sub");
+    assert_eq!((follow(PROJ), follow(&inner)), ("never".into(), "always".into()));
+
+    // Both upstreams rename their default branch; the old one is pruned away.
+    for src in [&sb.src, &sub] {
+        assert!(sb.git(src).args(["branch", "-m", "main", "trunk"]).status().unwrap().success());
+    }
+    sb.ok(&["fetch", "-q"]);
+    let head = |head: &str| run(sb.git(&sb.store).args(["symbolic-ref", head])).stdout;
+    let outer_head = head(&format!("refs/remotes/{PROJ}/-/HEAD"));
+    assert_eq!(outer_head, format!("refs/remotes/{PROJ}/-/trunk\n"));
+    assert_eq!(
+        head(&format!("refs/remotes/{inner}/HEAD")),
+        format!("refs/remotes/{inner}/trunk\n")
+    );
+    assert_eq!(sb.ok(&["show", PROJ_URL, "HEAD:README"]).stdout, "hello\n");
+    assert_eq!(sb.ok(&["show", "sub", "HEAD:README"]).stdout, "sub\n");
+
+    // Upstreams added before HEAD was followed follow it once `h store init` runs again.
+    for name in [PROJ, &inner] {
+        let key = format!("remote.{name}.followRemoteHEAD");
+        assert!(sb.git(&sb.store).args(["config", "--unset", &key]).status().unwrap().success());
+    }
+    sb.ok(&["init"]);
+    assert_eq!((follow(PROJ), follow(&inner)), ("never".into(), "always".into()));
+}
+
+#[test]
 fn add_accepts_file_urls() {
     let sb = Sandbox::new();
     // Git rejects remote names with a segment starting with `.`, so the store escapes them.

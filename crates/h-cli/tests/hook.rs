@@ -238,7 +238,7 @@ fn bad_input_is_refused() {
     let out = run(sb.h(&["hook"]));
     assert_eq!(
         (out.code, out.stderr.as_str()),
-        (Some(1), "Usage: h hook worktree-create < hook-input.json\n")
+        (Some(1), "Usage: h hook (worktree-create | worktree-remove) < hook-input.json\n")
     );
 
     let out = with_input(sb.h(&["hook", "worktree-create"]), "not json");
@@ -257,4 +257,159 @@ fn bad_input_is_refused() {
     let out = with_input(sb.h(&["hook", "worktree-create"]), &create_input("taken", &repo));
     assert_eq!(out.code, Some(1), "{out:?}");
     assert!(out.stderr.contains("exists and is not a worktree of"), "{out:?}");
+}
+
+/// The JSON Claude Code sends the WorktreeRemove hook.
+fn remove_input(path: &Path) -> String {
+    format!(
+        r#"{{"session_id":"s","transcript_path":"/t.jsonl","cwd":"/","permission_mode":"default","hook_event_name":"WorktreeRemove","worktree_path":{:?}}}"#,
+        path.to_str().unwrap()
+    )
+}
+
+impl Sandbox {
+    /// `h hook worktree-remove` for the worktree at `path`.
+    fn remove(&self, path: &Path) -> Run {
+        with_input(self.h(&["hook", "worktree-remove"]), &remove_input(path))
+    }
+
+    /// A clone of [`URL`] with the hook's worktree `agent-a1`: the clone, and the worktree.
+    fn clone_with_worktree(&self) -> (PathBuf, PathBuf) {
+        self.publish();
+        self.ok(self.go(false, &[URL]));
+        let clone = self.home().join("code/example.com/owner/proj");
+        let (path, _) = self.create(&clone, "agent-a1", &clone);
+        (clone, path)
+    }
+
+    /// Whether the clone still lists the worktree at `path`.
+    fn lists(&self, clone: &Path, path: &Path) -> bool {
+        let listed = self.git(clone, &["worktree", "list", "--porcelain"]);
+        listed.contains(&format!("worktree {}\n", path.display()))
+    }
+}
+
+#[test]
+fn removing_a_worktree_commits_what_was_left_in_it() {
+    let sb = Sandbox::new();
+    let (clone, path) = sb.clone_with_worktree();
+    let base = sb.git(&path, &["rev-parse", "HEAD"]);
+    fs::write(path.join("README"), "changed\n").unwrap();
+    fs::create_dir_all(path.join("dir")).unwrap();
+    fs::write(path.join("dir/new.txt"), "untracked\n").unwrap();
+    // Neither a hook that refuses every commit nor a signing key that cannot sign stops it.
+    let hooks = sb.home().join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    for hook in ["pre-commit", "commit-msg", "prepare-commit-msg"] {
+        fs::write(hooks.join(hook), "#!/bin/sh\nexit 1\n").unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        fs::set_permissions(hooks.join(hook), mode).unwrap();
+    }
+    sb.git(&clone, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    sb.git(&clone, &["config", "commit.gpgsign", "true"]);
+    sb.git(&clone, &["config", "gpg.program", "/nonexistent/gpg"]);
+
+    let out = sb.remove(&path);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_eq!(out.stdout, "");
+    assert!(!path.exists());
+    assert!(!sb.lists(&clone, &path));
+    let branch = "worktree-agent-a1";
+    assert!(out.stderr.contains(&format!("uncommitted work is on {branch}")), "{out:?}");
+    assert_eq!(sb.git(&clone, &["show", &format!("{branch}:README")]), "changed");
+    assert_eq!(sb.git(&clone, &["show", &format!("{branch}:dir/new.txt")]), "untracked");
+    assert_eq!(sb.git(&clone, &["rev-parse", &format!("{branch}^")]), base);
+    let subject = sb.git(&clone, &["log", "-1", "--format=%s", branch]);
+    assert!(subject.starts_with("WIP: what was left uncommitted in "), "{subject}");
+
+    // Asked for again, the worktree comes back with that work.
+    let (again, _) = sb.create(&clone, "agent-a1", &clone);
+    assert_eq!(fs::read_to_string(again.join("dir/new.txt")).unwrap(), "untracked\n");
+}
+
+#[test]
+fn removing_a_clean_worktree_keeps_its_branch_as_it_is() {
+    let sb = Sandbox::new();
+    let (clone, path) = sb.clone_with_worktree();
+    let work = sb.commit(&path, "work");
+    let out = sb.remove(&path);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert!(out.stderr.contains("its work is on worktree-agent-a1"), "{out:?}");
+    assert!(!path.exists());
+    assert_eq!(sb.git(&clone, &["rev-parse", "worktree-agent-a1"]), work, "no commit added");
+}
+
+#[test]
+fn a_detached_head_with_commits_of_its_own_gets_a_branch() {
+    let sb = Sandbox::new();
+    let (clone, path) = sb.clone_with_worktree();
+    let base = sb.git(&path, &["rev-parse", "HEAD"]);
+    sb.git(&path, &["switch", "--quiet", "--detach"]);
+    let detached = sb.commit(&path, "detached work");
+    fs::write(path.join("loose.txt"), "loose\n").unwrap();
+
+    let out = sb.remove(&path);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert!(!path.exists());
+    // worktree-agent-a1 is still at the base, so the work gets a branch beside it, named for the
+    // commit it ends at: the one that keeps the loose file.
+    assert_eq!(sb.git(&clone, &["rev-parse", "worktree-agent-a1"]), base);
+    let pattern = "refs/heads/worktree-agent-a1-*";
+    let branch = sb.git(&clone, &["for-each-ref", "--format=%(refname:short)", pattern]);
+    let tip = sb.git(&clone, &["rev-parse", &branch]);
+    assert_eq!(branch, format!("worktree-agent-a1-{}", &tip[..12]));
+    assert_eq!(sb.git(&clone, &["rev-parse", &format!("{branch}^")]), detached);
+    assert_eq!(sb.git(&clone, &["show", &format!("{branch}:loose.txt")]), "loose");
+
+    // A detached HEAD with nothing of its own gets no branch.
+    let (path, _) = sb.create(&clone, "agent-b2", &clone);
+    sb.git(&path, &["switch", "--quiet", "--detach"]);
+    let before = sb.git(&clone, &["for-each-ref", "--format=%(refname)", "refs/heads"]);
+    assert_eq!(sb.remove(&path).code, Some(0));
+    let after = sb.git(&clone, &["for-each-ref", "--format=%(refname)", "refs/heads"]);
+    assert_eq!(before, after);
+}
+
+#[test]
+fn what_cannot_be_kept_or_is_not_a_worktree_is_left_alone() {
+    let sb = Sandbox::new();
+    let (clone, path) = sb.clone_with_worktree();
+
+    // A locked worktree stays, though its work is committed.
+    fs::write(path.join("work.txt"), "work\n").unwrap();
+    sb.git(&clone, &["worktree", "lock", path.to_str().unwrap()]);
+    let out = sb.remove(&path);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert!(path.join("work.txt").is_file());
+    assert!(sb.lists(&clone, &path));
+    assert_eq!(sb.git(&clone, &["show", "worktree-agent-a1:work.txt"]), "work");
+    sb.git(&clone, &["worktree", "unlock", path.to_str().unwrap()]);
+
+    // Work git cannot commit, here a repository inside the worktree with no commits, stays.
+    let nested = path.join("nested");
+    sb.git(&path, &["init", "-q", "nested"]);
+    fs::write(nested.join("f"), "f\n").unwrap();
+    let out = sb.remove(&path);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert!(nested.join("f").is_file());
+    fs::remove_dir_all(&nested).unwrap();
+
+    for (dir, why) in [
+        (clone.clone(), "is a repository's main working tree"),
+        (path.join("dir"), "is not the top of a git worktree"),
+        (sb.home().join("plain"), "is not the top of a git worktree"),
+    ] {
+        fs::create_dir_all(&dir).unwrap();
+        let out = sb.remove(&dir);
+        assert_eq!(out.code, Some(1), "{}: {out:?}", dir.display());
+        assert!(out.stderr.contains(why), "{out:?}");
+        assert!(out.stderr.contains("so it is left in place"), "{out:?}");
+        assert!(dir.is_dir());
+    }
+    assert!(clone.join("README").is_file());
+
+    // Nothing there is nothing to do.
+    let out = sb.remove(&sb.home().join("missing"));
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), ""));
+    assert!(sb.lists(&clone, &path));
 }

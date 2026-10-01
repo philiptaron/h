@@ -1,10 +1,14 @@
-//! Claude Code's WorktreeCreate hook: the worktrees that agents and `claude --worktree` work in,
-//! made in the user's own clone and started from the store's copy of the upstream's default
-//! branch, without the network.
+//! Claude Code's WorktreeCreate and WorktreeRemove hooks: the worktrees that agents and `claude
+//! --worktree` work in, made in the user's own clone and started from the store's copy of the
+//! upstream's default branch, without the network.
 //!
-//! Claude Code hands the hook a JSON object on stdin with `name` (the worktree's slug, already
-//! checked by Claude Code) and `cwd`, and takes the last line the hook prints on stdout as the
-//! worktree's absolute path.
+//! Claude Code hands each hook a JSON object on stdin. WorktreeCreate's has `name` (the
+//! worktree's slug, already checked by Claude Code) and `cwd`, and Claude Code takes the last line
+//! the hook prints on stdout as the worktree's absolute path. WorktreeRemove's has
+//! `worktree_path`. Claude Code sends it when an agent finishes and `git status` in its worktree
+//! is clean, whatever commits the worktree's branch has, and when the user discards a session
+//! outright, changes and all. Either way the work is kept: removing a worktree commits what is
+//! left in it to its branch first, and never deletes a branch.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +27,16 @@ pub struct Created {
     pub branch: String,
     /// What the branch started from, for people reading the hook's stderr.
     pub base: String,
+}
+
+/// What [`remove`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removed {
+    /// There was nothing at the path.
+    Missing,
+    /// The worktree is gone. Its work is on `branch`, when it had a branch or commits of its own,
+    /// and `saved` says whether uncommitted work had to be committed there first.
+    Removed { branch: Option<String>, saved: bool },
 }
 
 /// One field of the hook's JSON input.
@@ -225,6 +239,113 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     Ok(Created { path, branch, base: from })
 }
 
+/// What `git status` reports in the worktree at `path`, untracked files and changes inside
+/// submodules included.
+fn status(path: &Path) -> Result<String, GitError> {
+    let args = ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"];
+    git::output(Some(path), &args)
+}
+
+/// Commit everything uncommitted in the worktree at `path`, untracked files included, onto
+/// whatever HEAD is. Hooks and signing are turned off for this one commit: it only keeps work
+/// from being lost, so it must neither fail because a hook objects nor wait for a signing key's
+/// passphrase with nobody there to type it. Returns whether there was anything to commit.
+fn save(path: &Path) -> Result<bool, GitError> {
+    if status(path)?.is_empty() {
+        return Ok(false);
+    }
+    git::run(Some(path), &["add", "--all"])?;
+    if git::output(Some(path), &["diff", "--cached", "--quiet"]).is_ok() {
+        return Ok(false);
+    }
+    let message = format!(
+        "WIP: what was left uncommitted in {}\n\n\
+         Claude Code removed this worktree, so h committed what was still uncommitted in it, \
+         untracked files included, rather than lose it.\n",
+        path.display()
+    );
+    let commit = [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--no-verify",
+        "-m",
+        &message,
+    ];
+    git::run(Some(path), &commit)?;
+    Ok(true)
+}
+
+/// The branch the worktree at `path` is on. A detached HEAD with commits that no branch, tag or
+/// remote-tracking branch has is given a branch of its own first: `worktree-<directory>`, or
+/// `worktree-<directory>-<commit>` when a branch of that name already has other work.
+fn branch(path: &Path) -> Result<Option<String>, GitError> {
+    if let Some(branch) = query(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        return Ok(Some(branch));
+    }
+    let Some(head) = commit(path, "HEAD") else {
+        return Ok(None);
+    };
+    let unique =
+        ["rev-list", "--max-count=1", "HEAD", "--not", "--branches", "--tags", "--remotes"];
+    if query(path, &unique).is_none() {
+        return Ok(None);
+    }
+    let dir = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut name = format!("worktree-{dir}");
+    if commit(path, &format!("refs/heads/{name}")).is_some() {
+        name = format!("{name}-{}", &head[..head.len().min(12)]);
+    }
+    git::run(Some(path), &["branch", &name, &head])?;
+    Ok(Some(name))
+}
+
+/// WorktreeRemove: remove the worktree at `worktree_path`, keeping its work.
+///
+/// Whatever is uncommitted there, untracked files included, is committed to the worktree's
+/// branch, a detached HEAD with commits of its own gets a branch, and only then is the worktree
+/// removed, with `git worktree remove --force`. No branch is ever deleted, so [`create`] picks the
+/// work up again under the same name. Anything that is not the top of a linked worktree is left
+/// alone, and so is a worktree whose work could not all be committed, such as changes inside a
+/// submodule, or one that is locked.
+pub fn remove(input: &str) -> Result<Removed, GitError> {
+    let json = parse(input)?;
+    let path = PathBuf::from(field(&json, "worktree_path")?);
+    if !path.exists() {
+        return Ok(Removed::Missing);
+    }
+    let leave = |why: &str| {
+        let msg = format!("{} {why}, so it is left in place", path.display());
+        Err(GitError::Invalid(msg))
+    };
+    let top = query(&path, &["rev-parse", "--show-toplevel"]).map(PathBuf::from);
+    if top.and_then(|top| top.canonicalize().ok()) != path.canonicalize().ok() {
+        return leave("is not the top of a git worktree");
+    }
+    let dirs = ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"];
+    let dirs = query(&path, &dirs).unwrap_or_default();
+    let (git_dir, common) = match dirs.lines().collect::<Vec<_>>().as_slice() {
+        [git_dir, common] => (PathBuf::from(git_dir), PathBuf::from(common)),
+        _ => return leave("has no git directory that git reports"),
+    };
+    if git_dir == common {
+        return leave("is a repository's main working tree, not one of its worktrees");
+    }
+
+    let saved = save(&path)?;
+    let branch = branch(&path)?;
+    let left = status(&path)?;
+    if !left.is_empty() {
+        return leave(&format!("still has changes that could not be committed:\n{left}"));
+    }
+    let target = path.to_string_lossy().into_owned();
+    git::run(Some(&repository_root(&common)), &["worktree", "remove", "--force", &target])?;
+    Ok(Removed::Removed { branch, saved })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +388,9 @@ mod tests {
         assert_eq!(err.to_string(), "hook input has no name");
         let err = create(r#"{"name": "../x", "cwd": "/"}"#, None).unwrap_err();
         assert!(err.to_string().starts_with("Invalid worktree name ../x: "), "{err}");
+        let err = remove("{}").unwrap_err();
+        assert_eq!(err.to_string(), "hook input has no worktree_path");
+        let missing = r#"{"worktree_path": "/nonexistent/h-test-worktree"}"#;
+        assert_eq!(remove(missing).unwrap(), Removed::Missing);
     }
 }

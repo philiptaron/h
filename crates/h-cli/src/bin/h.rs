@@ -46,6 +46,8 @@ Commands:
                               run the store's maintenance tasks (default: daily)
   hook worktree-create        Claude Code's WorktreeCreate hook: read its JSON on stdin, add a
                               worktree to the session's clone, and print the worktree's path
+  hook worktree-remove        Claude Code's WorktreeRemove hook: commit what is left in the
+                              worktree to its branch, then remove the worktree
 
 A term is a project name, <user>/<repo> on GitHub, or a git URL. The code root defaults to
 $H_CODE_ROOT, then ~/src; the store to $H_STORE. Git options after `--` (`-c key=value`) are
@@ -487,25 +489,39 @@ fn fetch_result(report: FetchReport) -> Result<(), String> {
 /// `h hook <event>`: a Claude Code hook, reading the hook's JSON input on stdin. Failures exit
 /// with 1, never 2, which Claude Code reads as a missing hook script.
 fn hook_cmd(config: &Config, args: &[OsString]) -> ExitCode {
-    const USAGE: &str = "Usage: h hook worktree-create < hook-input.json";
+    const USAGE: &str = "Usage: h hook (worktree-create | worktree-remove) < hook-input.json";
     let event = match args {
         [event] => event.to_str(),
         _ => None,
     };
-    let Some(event @ "worktree-create") = event else {
+    let Some(event @ ("worktree-create" | "worktree-remove")) = event else {
         return fail(USAGE);
     };
     let mut input = String::new();
     if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
         return fail(&format!("h hook {event}: cannot read the hook input: {err}"));
     }
-    match hook::create(&input, config.store.as_ref()) {
-        Ok(created) => {
+    let result = if event == "worktree-create" {
+        hook::create(&input, config.store.as_ref()).map(|created| {
             let path = created.path.display();
             eprintln!("{path}: on {}, from {}", created.branch, created.base);
             print_path(&created.path);
-            ExitCode::SUCCESS
-        }
+        })
+    } else {
+        hook::remove(&input).map(|removed| match removed {
+            hook::Removed::Missing => eprintln!("nothing to remove"),
+            hook::Removed::Removed { branch, saved } => {
+                let kept = match (branch, saved) {
+                    (Some(branch), true) => format!("; its uncommitted work is on {branch}"),
+                    (Some(branch), false) => format!("; its work is on {branch}"),
+                    (None, _) => String::new(),
+                };
+                eprintln!("removed the worktree{kept}");
+            }
+        })
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(err) => fail(&format!("h hook {event}: {err}")),
     }
 }

@@ -7,28 +7,52 @@
   outputs =
     inputs:
     let
-      eachSystem = inputs.nixpkgs.lib.genAttrs (import inputs.systems);
+      eachSystem =
+        f:
+        inputs.nixpkgs.lib.genAttrs (import inputs.systems) (
+          system: f inputs.nixpkgs.legacyPackages.${system}
+        );
       drv =
         {
-          stdenv,
-          curl,
-          cjson,
-          pkg-config,
+          lib,
+          rustPlatform,
+          bashInteractive,
+          git,
+          zsh,
         }:
-        stdenv.mkDerivation {
-          name = "h";
-          src = ./src;
-          buildInputs = [
-            curl
-            cjson
+        rustPlatform.buildRustPackage {
+          pname = "h";
+          version = (lib.importTOML ./Cargo.toml).package.version;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./src
+              ./tests
+            ];
+          };
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeCheckInputs = [
+            bashInteractive
+            git
+            zsh
           ];
-          nativeBuildInputs = [ pkg-config ];
-          makeFlags = [ "PREFIX=$(out)" ];
         };
     in
     {
-      packages = eachSystem (system: {
-        default = inputs.nixpkgs.legacyPackages.${system}.callPackage drv { };
+      packages = eachSystem (pkgs: {
+        default = pkgs.callPackage drv { };
+      });
+      devShells = eachSystem (pkgs: {
+        default = pkgs.mkShell {
+          inputsFrom = [ (pkgs.callPackage drv { }) ];
+          packages = with pkgs; [
+            clippy
+            rustfmt
+            rust-analyzer
+          ];
+        };
       });
     };
 }

@@ -2,7 +2,7 @@
 
 Fast shell navigation for projects organized as `~/code/<domain>/<path>`.
 
-Rewritten in C from [zimbatm/h](https://github.com/zimbatm/h). Depends on libcurl and cJSON for GitHub API queries.
+Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Queries the GitHub API to get the canonical casing of `user/repo`.
 
 ## Setup
 
@@ -30,6 +30,16 @@ Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.env
 ```bash
 eval "$(up-shell-init [--pushd])"
 ```
+
+## Development
+
+```bash
+nix develop     # cargo, clippy, rustfmt, plus git, bash and zsh for the tests
+cargo test      # unit tests, plus end-to-end tests that run the shell functions in bash and zsh
+nix build       # builds and runs the test suite in the sandbox
+```
+
+The tests never touch the network: `H_GITHUB_API` points the GitHub lookup at a local mock server.
 
 ## License
 

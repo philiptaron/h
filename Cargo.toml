@@ -1,0 +1,14 @@
+[package]
+name = "h"
+version = "0.1.0"
+edition = "2024"
+description = "Fast shell navigation for projects organized as ~/code/<domain>/<path>"
+license = "MIT"
+publish = false
+
+[dependencies]
+serde_json = "1.0.151"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -217,6 +217,36 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         .map_err(GitError::Spawn)
 }
 
+/// Detach the HEAD of the container clone at `path`, if it is one, at `origin/HEAD` again.
+///
+/// A container's HEAD is where `git worktree add <dir>` starts a new branch. It is detached at
+/// `origin/HEAD` when the container is cloned, but fetching moves only `origin/HEAD`, so new
+/// branches would start from the commit the container was cloned at. `h` calls this whenever it
+/// goes to an existing directory, which keeps HEAD as fresh as the last fetch. Only refs are
+/// read and written, without the network, and nothing is printed. A HEAD the user made symbolic
+/// is left alone, and so is HEAD when `origin/HEAD` is missing.
+pub fn refresh_container_head(path: &Path) {
+    let bare = path.join(BARE_DIR);
+    if !bare.is_dir() {
+        return;
+    }
+    let dir = Some(bare.as_path());
+    if git::output(dir, &["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
+        return;
+    }
+    let commit = |rev: &str| {
+        let out = git::output(dir, &["rev-parse", "--verify", "--quiet", rev]).ok()?;
+        Some(out.trim().to_string())
+    };
+    let (Some(new), Some(old)) = (commit("refs/remotes/origin/HEAD^{commit}"), commit("HEAD"))
+    else {
+        return;
+    };
+    if new != old {
+        let _ = git::output(dir, &["update-ref", "--no-deref", "HEAD", &new, &old]);
+    }
+}
+
 /// The remote's HEAD: the commit it names and, when the server says, its branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteHead {

@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
-use h_git::clone::{CloneRequest, clone_repo};
+use h_git::clone::{CloneRequest, clone_repo, refresh_container_head};
 use h_git::github;
 use h_git::resolve::{Resolution, Target, escape_segment, parse_term, remote_name, resolve};
 use h_git::store::Store;
@@ -161,6 +161,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
         Err(msg) => return fail_with_cwd(&msg),
     };
     if resolution.path.is_dir() {
+        refresh_container_head(&resolution.path);
         print_path(&resolution.path);
         return ExitCode::SUCCESS;
     }

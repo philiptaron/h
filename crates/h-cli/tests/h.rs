@@ -617,6 +617,57 @@ fn container_clones_take_the_remote_object_format() {
 }
 
 #[test]
+fn going_to_a_container_brings_its_head_up_to_origin_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    make_git_repo(&src);
+    let root = tmp.path().join("code");
+    let url = "https://example.com/owner/proj.git";
+    rewrite_url(tmp.path(), url, &src);
+    let path = root.join("example.com/owner/proj");
+    let go = || {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, tmp.path());
+        let args = ["go", url, "--container"];
+        assert_resolved(
+            &run(cmd.current_dir(tmp.path()).arg("--root").arg(&root).args(args)),
+            &path,
+        );
+    };
+    let git = |dir: &Path, args: &[&str]| {
+        let out = run(git_command(tmp.path()).arg("-C").arg(dir).args(args));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout.trim().to_string()
+    };
+    let upstream_moves_on = || {
+        git(&src, &["commit", "-q", "--allow-empty", "-m", "upstream moves on"]);
+        git(&path, &["fetch", "-q"]);
+    };
+    go();
+
+    // After a fetch, HEAD is still where the container was cloned, until `h` goes there again.
+    upstream_moves_on();
+    let tip = git(&path, &["rev-parse", "origin/main"]);
+    assert_ne!(git(&path, &["rev-parse", "HEAD"]), tip);
+    go();
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), tip);
+    git(&path, &["worktree", "add", "--quiet", "topic"]);
+    assert_eq!(git(&path, &["rev-parse", "topic"]), tip, "new branches start from the fetch");
+
+    // Without origin/HEAD, HEAD stays put.
+    upstream_moves_on();
+    git(&path, &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+    go();
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), tip);
+
+    // A HEAD the user made symbolic is left alone.
+    git(&path, &["remote", "set-head", "origin", "main"]);
+    git(&path, &["symbolic-ref", "HEAD", "refs/heads/topic"]);
+    go();
+    assert_eq!(git(&path, &["symbolic-ref", "HEAD"]), "refs/heads/topic");
+}
+
+#[test]
 fn container_clones_can_be_moved_with_their_worktrees() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");

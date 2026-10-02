@@ -248,6 +248,39 @@ fn a_fork_brings_its_upstream_into_the_store() {
 }
 
 #[test]
+fn remotes_the_store_cannot_fetch_from_are_named() {
+    let sb = Sandbox::new();
+    let clone = sb.clone_without_store("other");
+    // An SSH host alias, which only ssh's own configuration says is github.com.
+    sb.git(&clone, &["remote", "add", "upstream", "me.github.com:up/other"]);
+
+    let out = sb.h(&["store", "ingest", clone.to_str().unwrap()]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    let git_dir = fs::canonicalize(clone.join(".git")).unwrap();
+    let skipped = format!(
+        "could not add remote upstream of {}: the store cannot fetch from me.github.com:up/other\n",
+        git_dir.display()
+    );
+    assert!(out.stderr.contains(&skipped), "{out:?}");
+    // Everything else is done all the same.
+    assert_eq!(sb.ok(&["store", "list"]).stdout, "example.com/o/other\n");
+    assert_eq!(sb.alternates(&clone.join(".git")), sb.store_objects());
+
+    // A submodule's remote is named too.
+    let app = sb.clone_without_store("app");
+    let lib = app.join("lib");
+    sb.git(&lib, &["remote", "set-url", "origin", "/elsewhere/lib"]);
+    let out = sb.h(&["store", "ingest", app.to_str().unwrap()]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    let git_dir = fs::canonicalize(app.join(".git/modules/lib")).unwrap();
+    let skipped = format!(
+        "could not add remote origin of {}: the store cannot fetch from /elsewhere/lib\n",
+        git_dir.display()
+    );
+    assert!(out.stderr.contains(&skipped), "{out:?}");
+}
+
+#[test]
 fn ingest_needs_a_checkout() {
     let sb = Sandbox::new();
     let out = sb.h(&["store", "ingest", sb.home().join("nowhere").to_str().unwrap()]);

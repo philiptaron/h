@@ -117,9 +117,11 @@ and give up their own copies of them (`git repack -a -d -l --cruft`, so nothing 
 lost, reachable or not). An upstream new to the store is fetched from the checkout first, its
 remote-tracking branches and tags but never its local branches, so its history is not downloaded
 again; the fetch from its URL that follows brings only what changed. A shallow or partial clone is
-not fetched from and keeps its objects. A checkout that borrows from another store already, as one
-made with another identity's `h` function does, is ingested into that one, with its own identity.
-Like `h store fetch`, it does what it can and names what it could not.
+not fetched from and keeps its objects. A remote the store cannot fetch from, such as a local path
+or an SSH host alias like `me.github.com:owner/repo`, is named and left out, and counts as something
+it could not do. A checkout that borrows from another store already, as one made with another
+identity's `h` function does, is ingested into that one, with its own identity. Like `h store
+fetch`, it does what it can and names what it could not.
 
 `h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
 accessible) keeps none of the others from being fetched. Git names each one that failed, and

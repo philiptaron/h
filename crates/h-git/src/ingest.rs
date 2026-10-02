@@ -71,6 +71,9 @@ struct Repo {
     /// a complete repository is fetched from, and only a complete one gives up objects.
     complete: bool,
     sources: Vec<Source>,
+    /// Its remotes the store cannot fetch from, as `(remote, URL)`: a local path, say, or an SSH
+    /// host alias such as `me.github.com:owner/repo`.
+    unusable: Vec<(String, String)>,
 }
 
 /// The repository's own configuration settings for the identity it was cloned with, `user.*`
@@ -122,6 +125,15 @@ pub fn ingest(
         repos.extend(submodule_repos(&worktree));
     }
     let mut repos: Vec<Repo> = repos.into_iter().flatten().collect();
+    for repo in &repos {
+        for (remote, url) in &repo.unusable {
+            let msg = format!(
+                "could not add remote {remote} of {}: the store cannot fetch from {url}",
+                display(repo)
+            );
+            report.failures.push(msg);
+        }
+    }
 
     // The upstreams, in the store or put there.
     let mut names = Vec::new();
@@ -250,21 +262,33 @@ fn display(repo: &Repo) -> String {
 /// and, for a fork, its upstream.
 fn repository(root: &Path, common: &Path) -> Option<Repo> {
     let (upstream, own) = remotes(root);
-    let mut sources = Vec::new();
+    let mut repo = Repo {
+        git_dir: common.to_path_buf(),
+        complete: is_complete(common),
+        sources: Vec::new(),
+        unusable: Vec::new(),
+    };
     for (remote, tags) in [(own, true), (upstream, false)] {
-        if let Some(source) = remote.and_then(|remote| source(root, &remote, tags)) {
-            sources.push(source);
+        if let Some(remote) = remote {
+            add_source(&mut repo, root, &remote, tags);
         }
     }
-    Some(Repo { git_dir: common.to_path_buf(), complete: is_complete(common), sources })
+    Some(repo)
 }
 
-/// The remote `remote` of the repository at `dir` as an upstream, named as the store would add
-/// it. Its URL is read from the configuration as it is written, before any `insteadOf`.
-fn source(dir: &Path, remote: &str, tags: bool) -> Option<Source> {
-    let url = query(dir, &["config", "--get", &format!("remote.{remote}.url")])?;
-    let (name, url) = store_upstream(&url)?;
-    Some(Source { name, url, remote: remote.to_string(), tags })
+/// Add the remote `remote` of the repository at `dir` to `repo`'s sources as an upstream, named
+/// as the store would add it, or to its unusable remotes when the store cannot fetch from its
+/// URL. Its URL is read from the configuration as it is written, before any `insteadOf`.
+fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
+    let Some(url) = query(dir, &["config", "--get", &format!("remote.{remote}.url")]) else {
+        return;
+    };
+    match store_upstream(&url) {
+        Some((name, url)) => {
+            repo.sources.push(Source { name, url, remote: remote.to_string(), tags });
+        }
+        None => repo.unusable.push((remote.to_string(), url)),
+    }
 }
 
 /// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
@@ -293,9 +317,13 @@ fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
         .map(|dir| {
             let dir = Path::new(dir);
             let common = common_dir(dir).ok()?;
-            let (_, own) = remotes(dir);
-            let sources = own.and_then(|remote| source(dir, &remote, true)).into_iter().collect();
-            Some(Repo { complete: is_complete(&common), git_dir: common, sources })
+            let complete = is_complete(&common);
+            let mut repo =
+                Repo { git_dir: common, complete, sources: Vec::new(), unusable: Vec::new() };
+            if let (_, Some(own)) = remotes(dir) {
+                add_source(&mut repo, dir, &own, true);
+            }
+            Some(repo)
         })
         .collect()
 }

@@ -86,12 +86,12 @@ into the store itself first: its upstream, and a fork's parent, are added to the
 there, and the clone then borrows everything. Afterwards, the submodules it cloned that the store
 lacked are put there too, from the clone itself, so nothing is downloaded twice; what fails there is
 only warned about, since the clone is whole either way. A clone limited by `--depth`,
-`--shallow-since`, `--shallow-exclude` or `--filter` does not bring its history into the store. For
-a submodule added later, run `h store ingest` (below). A clone given its own `--reference` with
-submodules uses only that, as git does. A store keeps its refs in a reftable, where names that
-differ only in case coexist even on macOS and pruning one ref does not rewrite the rest, so anything
-that reads the store's refs, including the git of a clone that borrows from it, needs git 2.45 or
-later.
+`--shallow-since`, `--shallow-exclude` or `--filter`, among its own options or the git options after
+`--`, does not bring its history into the store. For a submodule added later, run `h store ingest`
+(below). A clone given its own `--reference` with submodules uses only that, as git does. A store
+keeps its refs in a reftable, where names that differ only in case coexist even on macOS and pruning
+one ref does not rewrite the rest, so anything that reads the store's refs, including the git of a
+clone that borrows from it, needs git 2.45 or later.
 
 ```bash
 h store init                                  # create it
@@ -117,11 +117,13 @@ and give up their own copies of them (`git repack -a -d -l --cruft`, so nothing 
 lost, reachable or not). An upstream new to the store is fetched from the checkout first, its
 remote-tracking branches and tags but never its local branches, so its history is not downloaded
 again; the fetch from its URL that follows brings only what changed. A shallow or partial clone is
-not fetched from and keeps its objects. A remote the store cannot fetch from, such as a local path
-or an SSH host alias like `me.github.com:owner/repo`, is named and left out, and counts as something
-it could not do. A checkout that borrows from another store already, as one made with another
-identity's `h` function does, is ingested into that one, with its own identity. Like `h store
-fetch`, it does what it can and names what it could not.
+not fetched from and keeps its objects, and its upstream is left out of the store, and named, unless
+the store has it already, since fetching it there would download all the history the clone was made
+without. A remote the store cannot fetch from, such as a local path or an SSH host alias like
+`me.github.com:owner/repo`, is named and left out, and counts as something it could not do. A
+checkout that borrows from another store already, as one made with another identity's `h` function
+does, is ingested into that one, with its own identity. Like `h store fetch`, it does what it can
+and names what it could not.
 
 `h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
 accessible) keeps none of the others from being fetched. Git names each one that failed, and

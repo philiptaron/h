@@ -248,6 +248,35 @@ fn a_fork_brings_its_upstream_into_the_store() {
 }
 
 #[test]
+fn a_shallow_checkout_brings_nothing_into_the_store() {
+    let sb = Sandbox::new();
+    sb.git(&sb.src("other"), &["commit", "-q", "--allow-empty", "-m", "second"]);
+    let clone = sb.home().join("code/other");
+    let out = run(git_command(sb.home())
+        .args(["clone", "-q", "--depth", "1", &url("other")])
+        .arg(&clone));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    sb.ok(&["store", "init"]);
+
+    // Fetching it into the store would download all the history the clone was made without.
+    let out = sb.ok(&["store", "ingest", clone.to_str().unwrap()]);
+    let left_out =
+        "left example.com/o/other out of the store, since only part of its history is here\n";
+    assert!(out.stderr.contains(left_out), "{out:?}");
+    assert_eq!(sb.ok(&["store", "list"]).stdout, "");
+    assert_eq!(sb.alternates(&clone.join(".git")), "");
+
+    // Once the store has the upstream, the checkout borrows from it, and keeps its own objects.
+    sb.ok(&["store", "add", &url("other")]);
+    let before = sb.local_objects(&clone);
+    let out = sb.ok(&["store", "ingest", clone.to_str().unwrap()]);
+    assert!(!out.stderr.contains("left"), "{out:?}");
+    assert_eq!(sb.alternates(&clone.join(".git")), sb.store_objects());
+    assert_eq!(sb.local_objects(&clone), before);
+    assert_eq!(sb.git(&clone, &["rev-parse", "--is-shallow-repository"]), "true");
+}
+
+#[test]
 fn remotes_the_store_cannot_fetch_from_are_named() {
     let sb = Sandbox::new();
     let clone = sb.clone_without_store("other");

@@ -43,6 +43,9 @@ pub struct Report {
     /// The upstreams it put in the store and took out again, because nothing could be fetched
     /// for them, from the checkout or from their URL.
     pub removed_again: Vec<String>,
+    /// The upstreams of shallow or partial repositories that it left out of the store, since
+    /// fetching them there would download all the history those repositories were made without.
+    pub left_out: Vec<String>,
     /// How fetching into the store went.
     pub fetch: FetchReport,
     /// Everything else that failed, said for people.
@@ -135,10 +138,16 @@ pub fn ingest(
         }
     }
 
-    // The upstreams, in the store or put there.
+    // The upstreams, in the store or put there. A shallow or partial repository's upstream is
+    // only used when the store has it already, or a whole repository brings it there.
     let mut names = Vec::new();
+    let mut partial_only = Vec::new();
     for repo in &mut repos {
         for source in &mut repo.sources {
+            if !repo.complete && store.find(&source.name).is_none() {
+                partial_only.push(source.name.clone());
+                continue;
+            }
             match upstream(store, source, &mut report.added) {
                 Ok(name) if !names.contains(&name) => {
                     source.name = name.clone();
@@ -147,6 +156,11 @@ pub fn ingest(
                 Ok(name) => source.name = name,
                 Err(err) => report.failures.push(format!("could not add {}: {err}", source.name)),
             }
+        }
+    }
+    for name in partial_only {
+        if !names.contains(&name) && !report.left_out.contains(&name) {
+            report.left_out.push(name);
         }
     }
     // An upstream the store has no history of yet gets the checkout's first.

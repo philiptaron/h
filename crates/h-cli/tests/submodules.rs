@@ -390,6 +390,24 @@ fn clones_go_into_the_store_and_are_downloaded_once() {
 }
 
 #[test]
+fn shallow_clones_stay_out_of_the_store() {
+    let sb = Sandbox::new();
+    sb.ok(true, &["store", "init"]);
+    // A shallow clone, asked for among the clone options or among the git options, as the
+    // shell function's `--git-opts` passes them.
+    for args in [&["--depth", "1"][..], &["--", "-c", "user.name=Me", "--depth", "1"]] {
+        let mut go = vec!["go".to_string(), url("app")];
+        go.extend(args.iter().map(|arg| arg.to_string()));
+        let go: Vec<&str> = go.iter().map(String::as_str).collect();
+        sb.ok(true, &go);
+        let app = sb.app();
+        assert_eq!(sb.git(&app, &["rev-parse", "--is-shallow-repository"]).trim(), "true");
+        assert_eq!(sb.ok(true, &["store", "list"]).stdout, "", "{args:?}");
+        fs::remove_dir_all(&sb.root).unwrap();
+    }
+}
+
+#[test]
 fn worktrees_made_by_the_hook_get_their_submodules_from_the_store() {
     use std::io::Write;
     let sb = Sandbox::new();

@@ -596,6 +596,8 @@ fn single_branch_forks_fetch_only_the_upstreams_default_branch() {
         (&["--depth", "1"][..], "refs/remotes/upstream/main\n", "1"),
         (&["--single-branch"], "refs/remotes/upstream/main\n", "2"),
         (&["--depth", "1", "--no-single-branch"], all, "1"),
+        // So does one asked for among the git options.
+        (&["--", "-c", "user.name=Me", "--depth", "1"], "refs/remotes/upstream/main\n", "1"),
         (&[], all, "2"),
     ] {
         let mut cmd = command(H);

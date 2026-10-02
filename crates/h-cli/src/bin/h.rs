@@ -191,8 +191,10 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
 
     let store = config.store.as_ref().filter(|s| s.exists());
     // A clone with all of its history goes into the store first, and then borrows it all; one
-    // limited to some history, as asked, does not bring the rest of it into the store.
-    let ingests = store.filter(|_| !limits_history(&extra));
+    // limited to some history, as asked here or among the git options, does not bring the rest
+    // of it into the store.
+    let limited = limits_history(&[config.git_opts.as_slice(), &extra].concat());
+    let ingests = store.filter(|_| !limited);
     if let Some(store) = ingests {
         let mut urls = vec![url.as_str()];
         urls.extend(resolution.upstream_url.as_deref());
@@ -557,6 +559,9 @@ fn ingest_result(report: ingest::Report) -> Result<(), String> {
     }
     for name in &report.removed_again {
         eprintln!("removed {name} again, since it could not be fetched");
+    }
+    for name in &report.left_out {
+        eprintln!("left {name} out of the store, since only part of its history is here");
     }
     for failure in &report.failures {
         eprintln!("{failure}");

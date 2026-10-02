@@ -39,6 +39,13 @@ pub struct CloneRequest<'a> {
     pub upstream_url: Option<&'a str>,
 }
 
+impl CloneRequest<'_> {
+    /// Every option `git clone` gets: the shell function's, then the user's.
+    fn clone_opts(&self) -> Vec<OsString> {
+        [self.git_opts, self.extra].concat()
+    }
+}
+
 /// How a plain clone deals with its submodules and the store.
 struct Plan<'a> {
     submodules: SubmoduleOptions,
@@ -133,7 +140,7 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
         // A container's origin has every branch, however much history it has.
         clone_container(req).and_then(|()| match req.upstream_url {
             Some(url) => {
-                add_upstream(&req.path.join(BARE_DIR), url, &history_opts(req.extra), false)
+                add_upstream(&req.path.join(BARE_DIR), url, &history_opts(&req.clone_opts()), false)
             }
             None => Ok(()),
         })
@@ -161,7 +168,8 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
     }
     let upstream = match req.upstream_url {
         Some(url) => {
-            add_upstream(req.path, url, &history_opts(req.extra), single_branch(req.extra))
+            let opts = req.clone_opts();
+            add_upstream(req.path, url, &history_opts(&opts), single_branch(&opts))
         }
         None => Ok(()),
     };

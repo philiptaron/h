@@ -324,12 +324,10 @@ fn is_complete(common: &Path) -> bool {
 /// The submodules checked out in the working tree `worktree`, nested ones included, each with its
 /// own remote.
 fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
-    let args = ["submodule", "foreach", "--quiet", "--recursive", "pwd"];
-    let dirs = git::output(Some(worktree), &args).unwrap_or_default();
-    dirs.lines()
-        .filter(|dir| !dir.is_empty())
+    submodules::checked_out(worktree)
+        .into_iter()
         .map(|dir| {
-            let dir = Path::new(dir);
+            let dir = dir.as_path();
             let common = common_dir(dir).ok()?;
             let complete = is_complete(&common);
             let mut repo =
@@ -394,9 +392,31 @@ fn clone_missing(
             eprintln!("submodule {name}: the fork has no copy of it, so it comes from {url}");
         }
     }
-    git::run(Some(worktree), &["submodule", "init"])?;
-    let paths: Vec<(String, String)> = submodule_paths(worktree);
-    let status = git::output(Some(worktree), &["submodule", "status"])?;
+    // A gitlink `.gitmodules` does not map is no submodule, to git or to h, but `git submodule`
+    // stops at one unless given only the others.
+    let (paths, unmapped) = submodules::gitlinks(worktree);
+    for path in &unmapped {
+        eprintln!(
+            "left {path} in {} as it is, since .gitmodules names no submodule there",
+            worktree.display()
+        );
+    }
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mapped = || paths.iter().map(|(_, path)| OsString::from(path));
+    // Without a pathspec, `git submodule init` initializes every submodule, or only the active
+    // ones when `submodule.active` is set, which leaves the unmapped out too; given paths, it
+    // initializes them active or not, so they are given only when nothing else leaves those out.
+    let active = query(worktree, &["config", "--get-all", "submodule.active"]).is_some();
+    let mut init: Vec<OsString> = ["submodule", "init", "--"].map(OsString::from).into();
+    if !unmapped.is_empty() && !active {
+        init.extend(mapped());
+    }
+    git::run(Some(worktree), &init)?;
+    let mut args: Vec<OsString> = ["submodule", "status", "--"].map(OsString::from).into();
+    args.extend(mapped());
+    let status = git::output(Some(worktree), &args)?;
     let mut missing = Vec::new();
     let mut present = Vec::new();
     for line in status.lines() {
@@ -438,22 +458,6 @@ fn clone_missing(
         result = result.and(clone_missing(store, &dir, identity, None));
     }
     result
-}
-
-/// The submodules `.gitmodules` in `worktree` names, as `(name, path)`.
-fn submodule_paths(worktree: &Path) -> Vec<(String, String)> {
-    let file = worktree.join(".gitmodules");
-    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
-    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.path$".into()]].concat();
-    let out = git::output(Some(worktree), &args).unwrap_or_default();
-    // NUL-terminated `<key>\n<value>` entries, since names and paths may contain spaces.
-    out.split('\0')
-        .filter_map(|entry| {
-            let (key, path) = entry.split_once('\n')?;
-            let name = key.strip_prefix("submodule.")?.strip_suffix(".path")?;
-            Some((name.to_string(), path.to_string()))
-        })
-        .collect()
 }
 
 /// Point the repository whose git directory is `git_dir` at `store` for objects, beside any

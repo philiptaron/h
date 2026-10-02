@@ -467,6 +467,31 @@ fn submodules_get_the_identity_the_clone_is_made_with() {
 }
 
 #[test]
+fn gitlinks_gitmodules_does_not_name_are_no_submodules() {
+    let sb = Sandbox::new();
+    // A commit of a nested checkout, added to app by mistake, with no submodule for it.
+    let src = sb.src("app");
+    let commit = sb.git(&sb.src("lib"), &["rev-parse", "HEAD"]);
+    let cacheinfo = format!("160000,{},stray/agent", commit.trim());
+    sb.git(&src, &["update-index", "--add", "--cacheinfo", &cacheinfo]);
+    sb.git(&src, &["commit", "-qm", "add stray/agent"]);
+    let identity = ["--", "-c", "user.name=Q"];
+
+    for store in [false, true] {
+        let out = sb.ok(store, &[&["go", &url("app")][..], &identity].concat());
+        let app = sb.app();
+        assert_eq!(fs::read_to_string(app.join("lib/deep/README")).unwrap(), "deep\n", "{out:?}");
+        assert_eq!(fs::read_to_string(app.join("other/README")).unwrap(), "other\n");
+        assert_eq!(fs::read_dir(app.join("stray/agent")).unwrap().count(), 0);
+        for dir in [app.join("lib"), app.join("lib/deep"), app.join("other")] {
+            assert_eq!(sb.config(&dir, "user.name"), "Q", "store {store}: {dir:?}");
+        }
+        fs::remove_dir_all(&sb.root).unwrap();
+        sb.fill_store();
+    }
+}
+
+#[test]
 fn empty_repositories_clone_with_a_store() {
     let sb = Sandbox::new();
     sb.fill_store();

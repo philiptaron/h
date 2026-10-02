@@ -13,7 +13,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::git::{self, GitError};
 use crate::resolve::store_upstream;
@@ -224,16 +224,74 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
     if identity.is_empty() {
         return Ok(());
     }
-    let dirs = git::output(Some(path), &["submodule", "foreach", "--quiet", "--recursive", "pwd"])?;
-    for dir in dirs.lines().filter(|dir| !dir.is_empty()) {
+    for dir in checked_out(path) {
         for (key, value) in identity {
-            git::run(
-                Some(Path::new(dir)),
-                &[OsString::from("config"), key.clone(), value.clone()],
-            )?;
+            git::run(Some(&dir), &[OsString::from("config"), key.clone(), value.clone()])?;
         }
     }
     Ok(())
+}
+
+/// The gitlinks in the index of the working tree at `path`, in its order: those `.gitmodules`
+/// maps to a submodule, as `(name, path)`, and the paths of those it does not. Git counts only
+/// the first as submodules. A clone leaves each of the rest an empty directory, as it does a
+/// submodule it does not clone, but `git submodule init` without a pathspec, `status` and
+/// `foreach` stop at one, saying there is no submodule mapping for it.
+pub fn gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
+    let named = paths(path);
+    let out = git::output(Some(path), &["ls-files", "--stage", "-z"]).unwrap_or_default();
+    let mut mapped: Vec<(String, String)> = Vec::new();
+    let mut unmapped: Vec<String> = Vec::new();
+    // NUL-terminated `<mode> <object> <stage>\t<path>` entries; a conflicted gitlink has one for
+    // each stage.
+    for entry in out.split('\0') {
+        let Some((meta, link)) = entry.split_once('\t') else { continue };
+        if !meta.starts_with("160000 ") {
+            continue;
+        }
+        match named.iter().find(|(_, p)| p == link) {
+            Some(sub) if !mapped.contains(sub) => mapped.push(sub.clone()),
+            Some(_) => {}
+            None if !unmapped.iter().any(|u| u == link) => unmapped.push(link.to_string()),
+            None => {}
+        }
+    }
+    (mapped, unmapped)
+}
+
+/// The submodules checked out in the working tree at `path`, nested ones included, each before
+/// its own: what `git submodule foreach --recursive` visits, except that a gitlink `.gitmodules`
+/// does not map, at which `foreach` stops, is passed over.
+pub fn checked_out(path: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for (_, sub) in gitlinks(path).0 {
+        let dir = path.join(sub);
+        if dir.join(".git").exists() {
+            let nested = checked_out(&dir);
+            dirs.push(dir);
+            dirs.extend(nested);
+        }
+    }
+    dirs
+}
+
+/// The submodules `.gitmodules` in the working tree at `path` names, as `(name, path)`.
+pub fn paths(path: &Path) -> Vec<(String, String)> {
+    let file = path.join(".gitmodules");
+    if !file.is_file() {
+        return Vec::new();
+    }
+    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
+    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.path$".into()]].concat();
+    let out = git::output(Some(path), &args).unwrap_or_default();
+    // NUL-terminated `<key>\n<value>` entries, since names and paths may contain spaces.
+    out.split('\0')
+        .filter_map(|entry| {
+            let (key, path) = entry.split_once('\n')?;
+            let name = key.strip_prefix("submodule.")?.strip_suffix(".path")?;
+            Some((name.to_string(), path.to_string()))
+        })
+        .collect()
 }
 
 /// The submodules `.gitmodules` in the checkout at `path` names, as `(name, url)`.

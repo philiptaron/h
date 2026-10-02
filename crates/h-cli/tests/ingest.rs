@@ -207,6 +207,49 @@ fn submodules_are_put_under_the_store_at_every_level() {
 }
 
 #[test]
+fn gitlinks_gitmodules_does_not_name_are_left_as_they_are() {
+    let sb = Sandbox::new();
+    // A commit of a nested checkout, added to app by mistake, with no submodule for it.
+    let src = sb.src("app");
+    let commit = sb.git(&sb.src("lib"), &["rev-parse", "HEAD"]);
+    sb.git(
+        &src,
+        &["update-index", "--add", "--cacheinfo", &format!("160000,{commit},stray/agent")],
+    );
+    sb.git(&src, &["commit", "-qm", "add stray/agent"]);
+
+    // Cloned without its submodules, as git leaves `submodule.active` unset, where `git
+    // submodule init` alone would stop at the stray gitlink, and recursively, as git records it.
+    for recursive in [false, true] {
+        let app = sb.home().join("code").join(format!("app-{recursive}"));
+        let mut clone = git_command(sb.home());
+        clone.args(["clone", "-q"]).args(recursive.then_some("--recursive")).arg(url("app"));
+        let out = run(clone.arg(&app));
+        assert_eq!(out.code, Some(0), "{out:?}");
+
+        let out = sb.ok(&["store", "ingest", app.to_str().unwrap()]);
+        let left = format!(
+            "left stray/agent in {} as it is, since .gitmodules names no submodule there\n",
+            canonical(&app)
+        );
+        assert!(out.stderr.contains(&left), "recursive {recursive}: {out:?}");
+        assert_eq!(fs::read_to_string(app.join("lib/deep/README")).unwrap(), "deep\n");
+        assert_eq!(fs::read_to_string(app.join("other/README")).unwrap(), "other\n");
+        let modules = app.join(".git/modules");
+        for git_dir in
+            [modules.join("lib"), modules.join("lib/modules/deep"), modules.join("other")]
+        {
+            assert_eq!(sb.alternates(&git_dir), sb.store_objects(), "{git_dir:?}");
+        }
+        assert_eq!(fs::read_dir(app.join("stray/agent")).unwrap().count(), 0);
+        let urls = sb.git(&app, &["config", "--get-regexp", r"^submodule\..*\.url$"]);
+        assert_eq!(urls.lines().count(), 2, "only lib and other are submodules: {urls}");
+        // Nothing is left to do the next time.
+        sb.ok(&["store", "ingest", app.to_str().unwrap()]);
+    }
+}
+
+#[test]
 fn submodules_at_paths_with_spaces_are_cloned_from_the_store() {
     let sb = Sandbox::new();
     let app = sb.clone_without_store("app");

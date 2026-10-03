@@ -69,7 +69,7 @@ and its worktrees can be moved together; the first such worktree turns on the
 
 A store is one bare repository holding many unrelated upstream repositories as remotes, each named
 by the path `h` would clone it to (with any part git cannot use in a ref escaped, so `.local`
-becomes `_.local`). Branches live under `refs/remotes/<name>/` and tags under `refs/tags/<name>/`,
+becomes `_.local`, and a GitHub repository as GitHub names it, as described below). Branches live under `refs/remotes/<name>/` and tags under `refs/tags/<name>/`,
 so `github.com/NixOS/nixpkgs/master` and `github.com/torvalds/linux/v6.12` both resolve and nothing
 collides, and every fetch points `<name>/HEAD` at the upstream's current default branch. An upstream
 whose name another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps
@@ -134,7 +134,20 @@ fetch fails, so the store never holds one that was never fetched.
 
 Terms given to `store` commands match upstreams already in the store first, so a name as
 `h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and
-`nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub.
+`nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub. Only `h store add` asks
+GitHub about a `user/repo` the store has in another casing, to name it as below.
+
+A GitHub repository is named in the store as GitHub names it: in its casing, and under its
+current owner and name if it was renamed or transferred, whatever form its remote's URL takes
+(`https://github.com/...`, `ssh://git@github.com/...` or `git@github.com:...`), and it is fetched
+over HTTPS. Cloning, `h store add` and `h store ingest` ask GitHub, as `h` does before cloning,
+whenever the store does not have the name spelled exactly so. What the store has under another
+casing, or under the name a renamed repository had, is then renamed in place, its branches, tags
+and HEAD with it, or dropped when the store has the repository under its new name as well (no
+objects go either way). So `h store add nixos/nixpkgs` puts right a store that says
+`github.com/nixos/nixpkgs`. A clone that borrowed under the old name is pointed at the new one the
+next time `h store ingest`, or the WorktreeCreate hook, touches it. When GitHub cannot be asked, a
+casing the store has already does, and nothing is renamed.
 
 `h store worktree <term> <ref> [DIR]` prints the one directory it made, so scripts and hooks can
 use it. The directory is a clone of that upstream alone that borrows the store's objects, with

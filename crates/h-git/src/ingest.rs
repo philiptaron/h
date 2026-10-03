@@ -16,8 +16,9 @@ use std::path::{Path, PathBuf};
 
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, GitError};
+use crate::github::Lookup;
 use crate::hook::{borrowed_store, common_dir, query, remotes, repository_root};
-use crate::resolve::store_upstream;
+use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, config_args, negotiation_args};
 
@@ -40,6 +41,10 @@ pub enum Scope {
 pub struct Report {
     /// The upstreams it put in the store.
     pub added: Vec<String>,
+    /// The upstreams it renamed, as `(old, new)`: a GitHub repository the store had under
+    /// another casing, or under the name it had before GitHub renamed or transferred it. When
+    /// the store had the new name too, the old one was dropped instead.
+    pub renamed: Vec<(String, String)>,
     /// The upstreams it put in the store and took out again, because nothing could be fetched
     /// for them, from the checkout or from their URL.
     pub removed_again: Vec<String>,
@@ -113,6 +118,7 @@ pub fn ingest(
     let common = common_dir(dir)?;
     let root = repository_root(&common);
     let identity = if identity.is_empty() { local_identity(&root) } else { identity.to_vec() };
+    let lookup = Lookup::new(&identity);
     let mut report = Report::default();
     let mut repos = Vec::new();
     if scope == Scope::Everything {
@@ -148,7 +154,7 @@ pub fn ingest(
                 partial_only.push(source.name.clone());
                 continue;
             }
-            match upstream(store, source, &mut report.added) {
+            match upstream(store, &lookup, source, &mut report) {
                 Ok(name) if !names.contains(&name) => {
                     source.name = name.clone();
                     names.push(name);
@@ -157,6 +163,11 @@ pub fn ingest(
                 Err(err) => report.failures.push(format!("could not add {}: {err}", source.name)),
             }
         }
+    }
+    // A name taken as the store spelled it may have been renamed for a later remote since.
+    names = follow_renames(&report.renamed, names);
+    for source in repos.iter_mut().flat_map(|repo| repo.sources.iter_mut()) {
+        source.name = follow_renames(&report.renamed, vec![source.name.clone()]).remove(0);
     }
     for name in partial_only {
         if !names.contains(&name) && !report.left_out.contains(&name) {
@@ -179,6 +190,11 @@ pub fn ingest(
     }
     take_back_unfetched(store, &mut report);
 
+    // A clone made before an upstream was renamed still names it the old way. Those borrowing
+    // below are repaired as they borrow; this is for the repository itself in every scope.
+    if let Err(err) = repair_prefixes(store, &common) {
+        report.failures.push(format!("could not update {}: {err}", common.display()));
+    }
     // Borrowing, then giving up what the store has.
     for repo in &repos {
         let names: Vec<String> = repo
@@ -204,8 +220,8 @@ pub fn ingest(
 /// Put the repositories at `urls` in the store if they are not there, and bring them up to date
 /// there, so that a clone of them made next borrows nearly everything instead of downloading it.
 /// One that cannot be fetched is taken out of the store again, and the clone simply gets less
-/// from the store.
-pub fn prefetch(store: &Store, urls: &[&str]) -> Report {
+/// from the store. GitHub is asked for their names through `lookup`, as [`ingest`] asks it.
+pub fn prefetch(store: &Store, urls: &[&str], lookup: &Lookup) -> Report {
     let mut report = Report::default();
     let mut names = Vec::new();
     for url in urls {
@@ -213,12 +229,13 @@ pub fn prefetch(store: &Store, urls: &[&str]) -> Report {
             continue;
         };
         let source = Source { name, url, remote: String::new(), tags: false };
-        match upstream(store, &source, &mut report.added) {
+        match upstream(store, lookup, &source, &mut report) {
             Ok(name) if !names.contains(&name) => names.push(name),
             Ok(_) => {}
             Err(err) => report.failures.push(format!("could not add {}: {err}", source.name)),
         }
     }
+    let names = follow_renames(&report.renamed, names);
     if !names.is_empty() {
         match store.fetch(&names, false) {
             Ok(fetched) => report.fetch = fetched,
@@ -352,14 +369,99 @@ fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
 }
 
 /// The name `source` has in the store, putting it there if it is not, from its URL.
-fn upstream(store: &Store, source: &Source, added: &mut Vec<String>) -> Result<String, GitError> {
-    if let Some(name) = store.find(&source.name) {
-        return Ok(name);
+///
+/// A name the store has spelled exactly so is taken as it is, without the network. Otherwise a
+/// GitHub repository is named as GitHub names it, in its casing and under its current owner and
+/// name, and whatever the store has under another casing of that name, or of the name the remote
+/// gives, is renamed to it, or dropped when the store has both. When GitHub cannot be asked, a
+/// casing the store has already will do, and nothing is renamed.
+fn upstream(
+    store: &Store,
+    lookup: &Lookup,
+    source: &Source,
+    report: &mut Report,
+) -> Result<String, GitError> {
+    if store.remotes()?.contains(&source.name) {
+        return Ok(source.name.clone());
     }
-    if store.add_remote(&source.name, &source.url)? {
-        added.push(source.name.clone());
+    let (name, url) = match canonical(lookup, &source.url) {
+        Some(canonical) => canonical,
+        None => match store.find(&source.name) {
+            Some(name) => return Ok(name),
+            None => (source.name.clone(), source.url.clone()),
+        },
+    };
+    let same = |r: &String| {
+        *r != name && (r.eq_ignore_ascii_case(&name) || r.eq_ignore_ascii_case(&source.name))
+    };
+    for other in store.remotes()?.into_iter().filter(same) {
+        store.rename_remote(&other, &name, &url)?;
+        report.renamed.push((other, name.clone()));
     }
-    Ok(source.name.clone())
+    if store.add_remote(&name, &url)? {
+        report.added.push(name.clone());
+    }
+    Ok(name)
+}
+
+/// `names` as they are after the renames `renamed`, each once.
+fn follow_renames(renamed: &[(String, String)], names: Vec<String>) -> Vec<String> {
+    let mut followed: Vec<String> = Vec::new();
+    for mut name in names {
+        while let Some((_, new)) = renamed.iter().find(|(old, _)| *old == name) {
+            name = new.clone();
+        }
+        if !followed.contains(&name) {
+            followed.push(name);
+        }
+    }
+    followed
+}
+
+/// The store's name for the GitHub repository a remote fetches from at `url`, and the URL to
+/// fetch it from, as GitHub names it now. `None` for another host, or when GitHub cannot say.
+fn canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
+    let Ok(Target::GitHub { user, repo }) = parse_term(url) else {
+        return None;
+    };
+    let info = lookup.repo(&user, &repo)?;
+    let full = format!("{}/{}", info.owner, info.name);
+    Some((remote_name("github.com", &full), format!("https://github.com/{full}.git")))
+}
+
+/// Point the `core.alternateRefsPrefixes` of the repository whose git directory is `git_dir` at
+/// the store's names for its upstreams as they are now: a prefix naming an upstream the store
+/// has only under another casing, as one renamed since does, is spelled as the store spells it,
+/// and one naming an upstream the store no longer has is dropped. Prefixes for anything but a
+/// store upstream are left alone.
+pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
+    let key = "core.alternateRefsPrefixes";
+    let Some(configured) = query(git_dir, &["config", "--get", key]) else {
+        return Ok(());
+    };
+    let existing = store.remotes()?;
+    let mut prefixes: Vec<String> = Vec::new();
+    for prefix in configured.split_whitespace() {
+        let parsed = ["refs/remotes/", "refs/tags/"].into_iter().find_map(|namespace| {
+            let name = prefix.strip_prefix(namespace)?.strip_suffix('/')?;
+            Some((namespace, name))
+        });
+        let repaired = match parsed {
+            None => Some(prefix.to_string()),
+            Some((_, name)) if existing.iter().any(|r| r == name) => Some(prefix.to_string()),
+            Some((namespace, name)) => store.find(name).map(|found| format!("{namespace}{found}/")),
+        };
+        if let Some(repaired) = repaired.filter(|p| !prefixes.contains(p)) {
+            prefixes.push(repaired);
+        }
+    }
+    if prefixes.join(" ") == configured.trim() {
+        return Ok(());
+    }
+    if prefixes.is_empty() {
+        return git::run(Some(git_dir), &["config", "--unset", key]);
+    }
+    git::run(Some(git_dir), &["config", key, &prefixes.join(" ")])
 }
 
 /// Fetch upstream `source` into `store` from the repository whose git directory is `git_dir`:
@@ -491,6 +593,7 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
         std::fs::create_dir_all(objects.join("info")).map_err(GitError::Spawn)?;
         std::fs::write(&file, content).map_err(GitError::Spawn)?;
     }
+    repair_prefixes(store, git_dir)?;
     let key = "core.alternateRefsPrefixes";
     let configured = query(git_dir, &["config", "--get", key]).unwrap_or_default();
     let mut prefixes: Vec<String> = configured.split_whitespace().map(String::from).collect();

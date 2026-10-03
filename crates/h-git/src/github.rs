@@ -1,5 +1,7 @@
 //! GitHub API lookups used to canonicalize the casing of `owner/repo`.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -140,6 +142,34 @@ pub fn fetch_repo_info(
     }
     let body = response.body_mut().read_to_string().ok()?;
     parse_repo_info(&body)
+}
+
+/// GitHub lookups for one run of h, as [`fetch_repo_info`] makes them, with the token for the
+/// identity in `config` (the `-c` pairs h is given) when one could help. Each repository is asked
+/// about once, whatever casing it is asked in.
+pub struct Lookup {
+    api: String,
+    config: Vec<(OsString, OsString)>,
+    answers: RefCell<HashMap<String, Option<RepoInfo>>>,
+}
+
+impl Lookup {
+    pub fn new(config: &[(OsString, OsString)]) -> Lookup {
+        Lookup { api: api_base(), config: config.to_vec(), answers: RefCell::default() }
+    }
+
+    /// GitHub's canonical owner and name for `user/repo`, its current one if it was renamed or
+    /// transferred. `None` when GitHub could not be asked or does not know it.
+    pub fn repo(&self, user: &str, repo: &str) -> Option<RepoInfo> {
+        let key = format!("{user}/{repo}").to_ascii_lowercase();
+        if let Some(answer) = self.answers.borrow().get(&key) {
+            return answer.clone();
+        }
+        let token = || credential_token(&self.api, &self.config);
+        let answer = fetch_repo_info(&self.api, user, repo, token);
+        self.answers.borrow_mut().insert(key, answer.clone());
+        answer
+    }
 }
 
 /// Whether a token could change GitHub's answer `status`: a 404, which is also what a private

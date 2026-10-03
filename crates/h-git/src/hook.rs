@@ -237,6 +237,11 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
         git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])?;
         Created { path, branch, base: from }
     };
+    if let Some(store) = borrowed_store(&common, None)
+        && let Err(err) = ingest::repair_prefixes(&store, &common)
+    {
+        eprintln!("warning: could not update {}: {err}", common.display());
+    }
     clone_submodules(&created.path, &common, fallback);
     Ok(created)
 }

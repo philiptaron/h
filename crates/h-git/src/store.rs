@@ -212,6 +212,70 @@ impl Store {
         git::run(dir, &["config", "--remove-section", &format!("remote.{name}")])
     }
 
+    /// Call upstream `old` `new` from now on, fetching it from `url`: its branches, tags and HEAD
+    /// move under the new name, as an upstream added under it would have them, nested or not.
+    /// When the store has `new` already, which is the same repository under two names, `old` is
+    /// simply removed, as [`Store::remove_remote`] does. No objects are touched either way.
+    ///
+    /// The refs move through a namespace of their own, `refs/h-rename/`, in two transactions,
+    /// since a name that differs only in case is the same file to the files ref backend on a
+    /// case-insensitive filesystem; a reftable has no such trouble, but it is one way for both.
+    pub fn rename_remote(&self, old: &str, new: &str, url: &str) -> Result<(), GitError> {
+        if self.remotes()?.iter().any(|r| r == new) {
+            return self.remove_remote(old);
+        }
+        self.add_remote(new, url)?;
+        let dir = self.dir();
+        let (from, to) = (self.prefix(old)?, self.prefix(new)?);
+        let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, old)).collect();
+        let namespaces =
+            [("remotes", format!("refs/remotes/{from}/")), ("tags", format!("refs/tags/{from}/"))];
+        let format = "--format=%(refname)%00%(objectname)%00%(symref)";
+        let mut args = vec!["for-each-ref", format];
+        args.extend(namespaces.iter().map(|(_, ns)| ns.as_str()));
+        let refs = git::output(dir, &args)?;
+        let (mut away, mut back, mut heads) = (String::new(), String::new(), Vec::new());
+        for line in refs.lines() {
+            let mut fields = line.split('\0');
+            let (Some(refname), Some(oid), Some(symref)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let inner_ref = |r: &String| {
+                refname.starts_with(&format!("refs/remotes/{r}/"))
+                    || refname.starts_with(&format!("refs/tags/{r}/"))
+            };
+            if inner.iter().any(inner_ref) {
+                continue;
+            }
+            let Some((kind, rest)) =
+                namespaces.iter().find_map(|(kind, ns)| Some((*kind, refname.strip_prefix(ns)?)))
+            else {
+                continue;
+            };
+            let moved = format!("refs/{kind}/{to}/{rest}");
+            if symref.is_empty() {
+                let temporary = format!("refs/h-rename/{kind}/{rest}");
+                away.push_str(&format!("create {temporary} {oid}\ndelete {refname} {oid}\n"));
+                back.push_str(&format!("create {moved} {oid}\ndelete {temporary} {oid}\n"));
+            } else {
+                away.push_str(&format!("delete {refname}\n"));
+                if let Some(target) = symref.strip_prefix(&format!("refs/{kind}/{from}/")) {
+                    heads.push((moved, format!("refs/{kind}/{to}/{target}")));
+                }
+            }
+        }
+        for input in [away, back].iter().filter(|input| !input.is_empty()) {
+            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+        }
+        for (head, target) in heads {
+            git::run(dir, &["symbolic-ref", &head, &target])?;
+        }
+        // What is left of `old` is its configuration, and any HEAD whose branch was gone.
+        self.remove_remote(old)
+    }
+
     /// Have each fetch of upstream `name` point `<name>/HEAD` at its default branch, even when
     /// that changes, as git leaves an existing HEAD alone by default. A nested upstream's HEAD is
     /// left to [`Store::set_head`]: git would look for the default branch directly under

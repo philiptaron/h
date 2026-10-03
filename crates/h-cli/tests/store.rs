@@ -904,7 +904,8 @@ fn clones_offer_only_the_history_they_share_with_the_store() {
 fn forks_offer_their_parents_history_from_the_store() {
     let tmp = tempfile::tempdir().unwrap();
     let fork = Fork::publish(tmp.path(), &["dev"]);
-    // The store spells the parent's owner its own way; GitHub names ignore case.
+    // The store spells the parent's owner its own way, since the mock API knows no `UP/proj`;
+    // GitHub names ignore case, and GitHub's own spelling, `up/proj`, wins once it is asked.
     let parent = "https://github.com/UP/proj.git";
     let key = format!("url.file://{}.insteadOf", fork.upstream.display());
     let out = run(git_command(tmp.path()).args(["config", "--global", "--add", &key, parent]));
@@ -930,18 +931,19 @@ fn forks_offer_their_parents_history_from_the_store() {
 
     let out = h(&["go", "me/proj"]);
     assert_eq!(out.code, Some(0), "{out:?}");
+    assert!(out.stderr.contains("renamed github.com/UP/proj in the store to github.com/up/proj"));
     let clone = root.join("github.com/me/proj");
     let git = |args: &[&str]| run(git_command(tmp.path()).arg("-C").arg(&clone).args(args)).stdout;
     assert_eq!(
         git(&["config", "core.alternateRefsPrefixes"]),
         "refs/remotes/github.com/me/proj/ refs/tags/github.com/me/proj/ \
-         refs/remotes/github.com/UP/proj/ refs/tags/github.com/UP/proj/\n"
+         refs/remotes/github.com/up/proj/ refs/tags/github.com/up/proj/\n"
     );
     // The fork goes into the store first, whose fetch offers the server the parent's commits, so
     // only the fork's own commit is downloaded, into the store, and the clone borrows it all.
     assert!(haves(&trace) > 0, "the parent's commits are offered");
     let listed = h(&["store", "list"]).stdout;
-    assert_eq!(listed, "github.com/UP/proj\ngithub.com/me/proj\n");
+    assert_eq!(listed, "github.com/me/proj\ngithub.com/up/proj\n");
     let objects = git(&["count-objects", "-v"]);
     assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
 }

@@ -149,14 +149,20 @@ fn utf8(arg: &OsStr) -> Result<&str, String> {
     arg.to_str().ok_or_else(|| format!("Unknown pattern for {}", arg.to_string_lossy()))
 }
 
-/// Resolve `term` against the code root, asking GitHub for the canonical casing when `casing`
-/// calls for it, with the token git keeps for github.com for this identity.
-fn resolve_term(config: &Config, term: &str, casing: Casing) -> Result<Resolution, String> {
-    let api = github::api_base();
-    resolve(&config.root, term, casing, |user, repo| {
-        let token = || github::credential_token(&api, &config_pairs(&config.git_opts));
-        github::fetch_repo_info(&api, user, repo, token)
-    })
+/// Resolve `term` against the code root, asking GitHub through `lookup` for the canonical casing
+/// when `casing` calls for it.
+fn resolve_term(
+    config: &Config,
+    term: &str,
+    casing: Casing,
+    lookup: &github::Lookup,
+) -> Result<Resolution, String> {
+    resolve(&config.root, term, casing, |user, repo| lookup.repo(user, repo))
+}
+
+/// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
+fn lookup(config: &Config) -> github::Lookup {
+    github::Lookup::new(&config_pairs(&config.git_opts))
 }
 
 /// `h go <term> [clone options] [--container]`: print the directory, cloning if needed.
@@ -176,7 +182,8 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     let container = args[1..].iter().any(|a| a == "--container");
     let extra: Vec<OsString> = args[1..].iter().filter(|a| *a != "--container").cloned().collect();
 
-    let resolution = match resolve_term(config, term, Casing::Local) {
+    let lookup = lookup(config);
+    let resolution = match resolve_term(config, term, Casing::Local, &lookup) {
         Ok(resolution) => resolution,
         Err(msg) => return fail_with_cwd(&msg),
     };
@@ -198,7 +205,8 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     if let Some(store) = ingests {
         let mut urls = vec![url.as_str()];
         urls.extend(resolution.upstream_url.as_deref());
-        let report = ingest::prefetch(store, &urls);
+        let report = ingest::prefetch(store, &urls, &lookup);
+        say_renamed(&report);
         for name in &report.added {
             eprintln!("added {name} to the store");
         }
@@ -228,6 +236,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
                 let scope = ingest::Scope::CheckedOut;
                 match ingest::ingest(store, &resolution.path, &identity, scope) {
                     Ok(report) => {
+                        say_renamed(&report);
                         for name in &report.added {
                             eprintln!("added {name} to the store");
                         }
@@ -243,6 +252,13 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
             print_cwd();
             ExitCode::from(code)
         }
+    }
+}
+
+/// Say which upstreams an ingest renamed to the names GitHub gives them.
+fn say_renamed(report: &ingest::Report) {
+    for (old, new) in &report.renamed {
+        eprintln!("renamed {old} in the store to {new}, as GitHub names it");
     }
 }
 
@@ -301,28 +317,49 @@ fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
 struct Upstream {
     name: String,
     url: Option<String>,
+    /// The names the store has it under that are not GitHub's, to rename to `name`.
+    renames: Vec<String>,
 }
 
 /// The store's name for `term`, preferring an upstream already in the store over a GitHub
 /// lookup, and finding a bare project name among the upstreams' last path segments. A name as
 /// `h store list` prints it is taken as it is.
-fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, String> {
+///
+/// With `ask`, a GitHub repository is named as GitHub names it even when the store has it in
+/// another casing, or under the name GitHub has since renamed it from; those are to be renamed.
+fn upstream_for(config: &Config, store: &Store, term: &str, ask: bool) -> Result<Upstream, String> {
     let existing = match store.exists() {
         true => store.remotes().map_err(|e| e.to_string())?,
         false => Vec::new(),
     };
     if existing.iter().any(|r| r == term) {
-        return Ok(Upstream { name: term.to_string(), url: None });
+        return Ok(Upstream { name: term.to_string(), url: None, renames: Vec::new() });
     }
     let target = parse_term(term).map_err(|_| format!("Unknown pattern for {term}"))?;
     let candidate = match &target {
         Target::GitHub { user, repo } => Some(remote_name("github.com", &format!("{user}/{repo}"))),
         Target::Remote { .. } | Target::Name(_) => None,
     };
+    if ask
+        && let (Target::GitHub { user, repo }, Some(candidate)) = (&target, &candidate)
+        && let Some(info) = lookup(config).repo(user, repo)
+    {
+        let full = format!("{}/{}", info.owner, info.name);
+        let name = remote_name("github.com", &full);
+        let renames: Vec<String> = existing
+            .iter()
+            .filter(|r| **r != name)
+            .filter(|r| r.eq_ignore_ascii_case(&name) || r.eq_ignore_ascii_case(candidate))
+            .cloned()
+            .collect();
+        let known = existing.contains(&name) || !renames.is_empty();
+        let url = (!known).then(|| format!("https://github.com/{full}.git"));
+        return Ok(Upstream { name, url, renames });
+    }
     if let Some(candidate) = candidate
         && let Some(name) = existing.iter().find(|r| r.eq_ignore_ascii_case(&candidate))
     {
-        return Ok(Upstream { name: name.clone(), url: None });
+        return Ok(Upstream { name: name.clone(), url: None, renames: Vec::new() });
     }
     if let Target::Name(name) = &target {
         let name = &escape_segment(name);
@@ -335,7 +372,7 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
             })
             .collect();
         return match matches.as_slice() {
-            [one] => Ok(Upstream { name: (*one).clone(), url: None }),
+            [one] => Ok(Upstream { name: (*one).clone(), url: None, renames: Vec::new() }),
             [] => Err(format!("{term} is not in the store")),
             many => {
                 let names: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
@@ -343,18 +380,19 @@ fn upstream_for(config: &Config, store: &Store, term: &str) -> Result<Upstream, 
             }
         };
     }
-    let resolution = resolve_term(config, term, Casing::GitHub)?;
+    let resolution = resolve_term(config, term, Casing::GitHub, &lookup(config))?;
+    let renames = Vec::new();
     match (resolution.remote, resolution.clone_url) {
-        (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None }),
-        (Some(name), url @ Some(_)) => Ok(Upstream { name, url }),
+        (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None, renames }),
+        (Some(name), url @ Some(_)) => Ok(Upstream { name, url, renames }),
         _ => Err(format!("{term} cannot be added to the store")),
     }
 }
 
 /// The name of the upstream `term` names, which must be in the store.
 fn upstream_in_store(config: &Config, store: &Store, term: &str) -> Result<String, String> {
-    match upstream_for(config, store, term)? {
-        Upstream { name, url: None } => Ok(name),
+    match upstream_for(config, store, term, false)? {
+        Upstream { name, url: None, .. } => Ok(name),
         Upstream { url: Some(_), .. } => Err(format!("{term} is not in the store")),
     }
 }
@@ -386,7 +424,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         Some("remove") => store_remove(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
         Some("remote") => match terms.as_slice() {
-            [term] => upstream_for(config, store, term).map(|u| println!("{}", u.name)),
+            [term] => upstream_for(config, store, term, false).map(|u| println!("{}", u.name)),
             _ => Err("Usage: h store remote <term>".into()),
         },
         Some("show") => match terms.as_slice() {
@@ -437,7 +475,7 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     // Every term is checked before anything changes.
     let mut upstreams: Vec<Upstream> = Vec::new();
     for term in terms {
-        let upstream = upstream_for(config, store, term)?;
+        let upstream = upstream_for(config, store, term, true)?;
         if !upstreams.iter().any(|u| u.name == upstream.name) {
             upstreams.push(upstream);
         }
@@ -445,8 +483,15 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     if !store.exists() {
         store.init(&config.git_opts).map_err(|e| e.to_string())?;
     }
+    for Upstream { name, renames, .. } in &upstreams {
+        let url = format!("https://{name}.git");
+        for old in renames {
+            store.rename_remote(old, name, &url).map_err(|e| e.to_string())?;
+            eprintln!("renamed {old} in the store to {name}, as GitHub names it");
+        }
+    }
     let mut added = Vec::new();
-    for Upstream { name, url } in &upstreams {
+    for Upstream { name, url, .. } in &upstreams {
         let Some(url) = url else {
             eprintln!("{name} is already in the store");
             continue;
@@ -554,6 +599,7 @@ fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<
 
 /// Say what an ingest added to the store and could not do, and fail when it did not do everything.
 fn ingest_result(report: ingest::Report) -> Result<(), String> {
+    say_renamed(&report);
     for name in &report.added {
         eprintln!("added {name}");
     }

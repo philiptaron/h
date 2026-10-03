@@ -86,7 +86,9 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
     if let Some((user, repo)) = github_repo("github.com", term) {
         Ok(Target::GitHub { user, repo })
     } else if let Some((_, rest)) = term.split_once("://") {
-        let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        // The user (`ssh://git@github.com/...`) is how to log in, not where the repository is.
+        let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
         Ok(remote(host, path))
     } else if term.starts_with("git@") || term.starts_with("gitea@") {
         let (_, rest) = term.split_once('@').expect("term starts with user@");
@@ -312,6 +314,9 @@ mod tests {
         assert_eq!(parse_term("git://github.com/zimbatm/h"), github("zimbatm", "h"));
         assert_eq!(parse_term("git@github.com:zimbatm/h.git"), github("zimbatm", "h"));
         assert_eq!(parse_term("git@GITHUB.com:zimbatm/h"), github("zimbatm", "h"));
+        assert_eq!(parse_term("ssh://git@github.com/zimbatm/h"), github("zimbatm", "h"));
+        assert_eq!(parse_term("ssh://git@github.com/zimbatm/h.git"), github("zimbatm", "h"));
+        assert_eq!(parse_term("https://me:tok@github.com/zimbatm/h"), github("zimbatm", "h"));
     }
 
     #[test]
@@ -326,8 +331,11 @@ mod tests {
     fn parses_other_urls() {
         let url = "https://GitLab.com/group/sub/project.git";
         assert_eq!(parse_term(url), remote(url, "gitlab.com", "group/sub/project.git"));
-        let url = "ssh://git@github.com/zimbatm/h";
-        assert_eq!(parse_term(url), remote(url, "git@github.com", "zimbatm/h"));
+        // The user is no part of the host, so it is no part of the name either.
+        let url = "ssh://git@git.lix.systems/me/lix";
+        assert_eq!(parse_term(url), remote(url, "git.lix.systems", "me/lix"));
+        let url = "git+ssh://me@git.launchpad.net/ubuntu/+source/x";
+        assert_eq!(parse_term(url), remote(url, "git.launchpad.net", "ubuntu/+source/x"));
         let url = "https://example.com";
         assert_eq!(parse_term(url), remote(url, "example.com", ""));
         let url = "file:///srv/git/repo.git";

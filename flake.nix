@@ -37,6 +37,9 @@
             git
             zsh
           ];
+          # The tests serve a mock GitHub API on 127.0.0.1, which the macOS sandbox forbids
+          # without this.
+          __darwinAllowLocalNetworking = true;
         };
     in
     {

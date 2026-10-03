@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.3.1 (2026-10-02)
+
+Fixes found by putting two hundred existing checkouts under the store with `h store ingest`.
+
+### Fixes
+
+- **Repositories with a stray gitlink**, one that `.gitmodules` names no submodule for (such as a
+  nested checkout committed by mistake), get their submodules again. `h store ingest`, `h go` and
+  the WorktreeCreate hook all used to stop at it, so no submodule was cloned and, with an identity
+  in the git options, `h go` failed. Like git, `h` now leaves such a gitlink as it is, and says so.
+- **Shallow and partial clones stay out of the store**, as 0.3.0 meant them to:
+  - `--depth`, `--shallow-*` and `--filter` given among the git options after `--`, as
+    `h-shell-init --git-opts` passes them, used to put the clone's upstream in the store and fetch
+    all of its history there. A fork's `upstream` remote was fetched in full beside a shallow clone
+    in the same way.
+  - `h store ingest` of a shallow or partial checkout no longer adds its upstream to the store,
+    which downloaded at once all the history the checkout was made without. It names each upstream
+    it leaves out. The checkout still borrows from an upstream the store has already.
+- **Store names for GitHub repositories are GitHub's own**: `github.com/NixOS/nixpkgs` however a
+  remote spells it, and a renamed or transferred repository under its current name.
+  - `h store ingest` used to take the casing a remote's URL was written in, and the wrong name then
+    stuck, since the store matches GitHub names whatever their case.
+  - An upstream already in the store under a wrong or old name is renamed in place, with its
+    branches, tags and default branch. When the right name is there too, the wrong one is dropped.
+    Clones that borrow from the store are fixed up as `h` comes to them. `h store add <term>`
+    renames one at once.
+  - GitHub is only asked when the store does not already have the name, with no token first, as
+    elsewhere.
+- **`ssh://user@host/...` URLs** no longer keep the user in the name: `ssh://git@github.com/o/r` is
+  the store's `github.com/o/r`, fetched over HTTPS, and `h go` clones it to `github.com/o/r`.
+- **`h store ingest` puts every remote in the store**, whatever it is called, for the checkout and
+  for each submodule. It used to take only `origin` (or a sole remote) and `upstream`, so a second
+  fork, or linux's `stable`, stayed out, and a checkout whose remotes had other names had nothing
+  put in the store at all. Only the own remote's tags count as the checkout's; the store fetches
+  the others' tags from their URLs.
+- **`h store ingest` names the remotes it cannot put in the store**, such as an SSH host alias like
+  `me.github.com:owner/repo` or a local path, and exits nonzero. Before, it skipped them without a
+  word.
+
+### Under the hood
+
+- **Tests:** 246 unit and end-to-end tests.
+- **macOS builds** with Nix's sandbox no longer fail the tests that serve a mock GitHub API on
+  localhost.
+
 ## 0.3.0 (2026-10-01)
 
 `h` gains a shared object store that keeps the upstream history of big projects in one place,

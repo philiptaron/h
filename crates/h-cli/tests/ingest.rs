@@ -291,6 +291,57 @@ fn a_fork_brings_its_upstream_into_the_store() {
 }
 
 #[test]
+fn every_remote_goes_into_the_store_whatever_it_is_called() {
+    let sb = Sandbox::new();
+    let clone = sb.clone_without_store("other");
+    // No `origin` and no `upstream`: two remotes the user named for what they are.
+    sb.git(&clone, &["remote", "rename", "origin", "public"]);
+    sb.git(&clone, &["remote", "add", "internal", &url("lib")]);
+    sb.git(&clone, &["fetch", "-q", "internal"]);
+    // Packed, as it would be after any repack: loose objects the store holds loose as well stay.
+    sb.git(&clone, &["repack", "-a", "-d", "-q"]);
+
+    let out = sb.ok(&["store", "ingest", clone.to_str().unwrap()]);
+    for name in ["example.com/o/other", "example.com/o/lib"] {
+        assert!(out.stderr.contains(&format!("added {name}\n")), "{out:?}");
+    }
+    assert_eq!(sb.ok(&["store", "list"]).stdout, "example.com/o/lib\nexample.com/o/other\n");
+    let revs = [
+        "example.com/o/other/main",
+        "example.com/o/other/other-1.0",
+        "example.com/o/lib/main",
+        "example.com/o/lib/lib-1.0",
+    ];
+    for rev in revs {
+        assert!(sb.succeeds(&sb.store, &["rev-parse", "--verify", "--quiet", rev]), "{rev}");
+    }
+    assert_eq!(sb.alternates(&clone.join(".git")), sb.store_objects());
+    let prefixes = sb.git(&clone, &["config", "core.alternateRefsPrefixes"]);
+    for name in ["example.com/o/other", "example.com/o/lib"] {
+        assert!(prefixes.contains(&format!("refs/remotes/{name}/ refs/tags/{name}/")), "{name}");
+    }
+    assert_eq!(sb.local_objects(&clone), 0, "both remotes' history is in the store");
+    assert!(sb.succeeds(&clone, &["fsck", "--connectivity-only", "--no-dangling"]));
+}
+
+#[test]
+fn a_remote_that_cannot_be_fetched_is_taken_out_again() {
+    let sb = Sandbox::new();
+    let clone = sb.clone_without_store("other");
+    // A second remote that has gone away, which the checkout never fetched from.
+    rewrite_url(sb.home(), &url("gone"), &sb.home().join("nowhere"));
+    sb.git(&clone, &["remote", "add", "old-fork", &url("gone")]);
+
+    let out = sb.h(&["store", "ingest", clone.to_str().unwrap()]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    let removed = "removed example.com/o/gone again, since it could not be fetched\n";
+    assert!(out.stderr.contains(removed), "{out:?}");
+    // Everything else is done all the same.
+    assert_eq!(sb.ok(&["store", "list"]).stdout, "example.com/o/other\n");
+    assert_eq!(sb.alternates(&clone.join(".git")), sb.store_objects());
+}
+
+#[test]
 fn a_shallow_checkout_brings_nothing_into_the_store() {
     let sb = Sandbox::new();
     sb.git(&sb.src("other"), &["commit", "-q", "--allow-empty", "-m", "second"]);
@@ -301,13 +352,21 @@ fn a_shallow_checkout_brings_nothing_into_the_store() {
     assert_eq!(out.code, Some(0), "{out:?}");
     sb.ok(&["store", "init"]);
 
-    // Fetching it into the store would download all the history the clone was made without.
+    // A remote besides its own, which is no more whole in a shallow repository.
+    sb.git(&clone, &["remote", "add", "extra", &url("lib")]);
+    sb.git(&clone, &["fetch", "-q", "--depth", "1", "extra"]);
+
+    // Fetching them into the store would download all the history the clone was made without.
     let out = sb.ok(&["store", "ingest", clone.to_str().unwrap()]);
-    let left_out =
-        "left example.com/o/other out of the store, since only part of its history is here\n";
-    assert!(out.stderr.contains(left_out), "{out:?}");
+    for name in ["other", "lib"] {
+        let left_out = format!(
+            "left example.com/o/{name} out of the store, since only part of its history is here\n"
+        );
+        assert!(out.stderr.contains(&left_out), "{out:?}");
+    }
     assert_eq!(sb.ok(&["store", "list"]).stdout, "");
     assert_eq!(sb.alternates(&clone.join(".git")), "");
+    sb.git(&clone, &["remote", "remove", "extra"]);
 
     // Once the store has the upstream, the checkout borrows from it, and keeps its own objects.
     sb.ok(&["store", "add", &url("other")]);

@@ -1,9 +1,9 @@
 //! Putting a checkout under the store: `h store ingest`.
 //!
-//! Ingesting a checkout puts the history of its upstreams, and of its submodules' upstreams at
-//! every nesting level, into the store, points it and each of its submodules at the store for
-//! their objects, clones any submodules that are missing from the store, and drops the local
-//! copies of objects the store now has. A clone made before the store, or a submodule a pull
+//! Ingesting a checkout puts the history of all its remotes, and of its submodules' remotes at
+//! every nesting level, into the store as upstreams, points it and each of its submodules at the
+//! store for their objects, clones any submodules that are missing from the store, and drops the
+//! local copies of objects the store now has. A clone made before the store, or a submodule a pull
 //! brought in, ends up as if it had been cloned with the store in the first place.
 //!
 //! History the checkout already has is not downloaded again: an upstream new to the store is
@@ -272,22 +272,35 @@ fn display(repo: &Repo) -> String {
     repo.git_dir.display().to_string()
 }
 
-/// The repository whose common git directory is `common`, held in `root`, with its own remote
-/// and, for a fork, its upstream.
+/// The repository whose common git directory is `common`, held in `root`, with every one of its
+/// remotes.
 fn repository(root: &Path, common: &Path) -> Option<Repo> {
-    let (upstream, own) = remotes(root);
     let mut repo = Repo {
         git_dir: common.to_path_buf(),
         complete: is_complete(common),
         sources: Vec::new(),
         unusable: Vec::new(),
     };
-    for (remote, tags) in [(own, true), (upstream, false)] {
-        if let Some(remote) = remote {
-            add_source(&mut repo, root, &remote, tags);
-        }
-    }
+    add_sources(&mut repo, root);
     Some(repo)
+}
+
+/// Add every remote of the repository at `dir` to `repo`'s sources: its own first (`origin`, or
+/// its only remote besides `upstream`), whose tags are the repository's, then `upstream`, for a
+/// fork, then the rest, in the order the configuration has them. Tags fetched from any of the
+/// others share one namespace with the own remote's in the repository, so they are not counted
+/// as theirs; the store gets each one's tags from its URL.
+fn add_sources(repo: &mut Repo, dir: &Path) {
+    let (upstream, own) = remotes(dir);
+    let all: Vec<String> =
+        query(dir, &["remote"]).unwrap_or_default().lines().map(String::from).collect();
+    let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
+    if let Some(own) = &own {
+        add_source(repo, dir, own, true);
+    }
+    for remote in upstream.iter().chain(others) {
+        add_source(repo, dir, remote, false);
+    }
 }
 
 /// Add the remote `remote` of the repository at `dir` to `repo`'s sources as an upstream, named
@@ -321,8 +334,8 @@ fn is_complete(common: &Path) -> bool {
     !common.join("shallow").exists() && !partial
 }
 
-/// The submodules checked out in the working tree `worktree`, nested ones included, each with its
-/// own remote.
+/// The submodules checked out in the working tree `worktree`, nested ones included, each with
+/// every one of its remotes.
 fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
     submodules::checked_out(worktree)
         .into_iter()
@@ -332,9 +345,7 @@ fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
             let complete = is_complete(&common);
             let mut repo =
                 Repo { git_dir: common, complete, sources: Vec::new(), unusable: Vec::new() };
-            if let (_, Some(own)) = remotes(dir) {
-                add_source(&mut repo, dir, &own, true);
-            }
+            add_sources(&mut repo, dir);
             Some(repo)
         })
         .collect()

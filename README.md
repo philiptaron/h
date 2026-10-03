@@ -110,8 +110,8 @@ h store maintain daily                        # commit-graph, incremental repack
 
 `h store ingest [DIR]` (by default, the checkout here) puts a checkout under the store, as if it had
 been cloned with the store in the first place: a clone made before the store, or one whose
-submodules a pull has changed. Its remote and, for a fork, its upstream, become upstreams in the
-store, and so does every submodule's repository, at every level. Submodules not yet cloned are
+submodules a pull has changed. Every one of its remotes becomes an upstream in the store, whatever
+it is called, and so does every remote of every submodule's repository, at every level. Submodules not yet cloned are
 cloned, borrowing from the store. A gitlink `.gitmodules` names no submodule for, such as a nested
 checkout committed by mistake, is no submodule to git, and is named and left as it is. The
 checkout and each submodule then borrow the store's objects and give up their own copies of them

@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "h-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "h-core",
  "h-git",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "h-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libc",
  "tempfile",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "h-git"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -565,7 +565,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "up-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "h-core",
  "tempfile",

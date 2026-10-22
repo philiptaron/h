@@ -758,6 +758,10 @@ fn clones_borrow_from_an_existing_store() {
     let fetch = [
         "-C",
         store,
+        "-c",
+        "remote.example.com/proj.negotiationRestrict=",
+        "-c",
+        "remote.example.com/proj.negotiationRestrict=refs/remotes/example.com/proj/HEAD",
         "fetch",
         "--prune",
         "--no-prune-tags",

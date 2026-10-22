@@ -235,6 +235,68 @@ fn adding_an_unrelated_upstream_offers_few_commits() {
     assert!(haves < 50, "offered {haves} of the store's 500 commits");
 }
 
+#[test]
+fn fetches_offer_only_the_commits_of_upstreams_of_the_same_name() {
+    let sb = Sandbox::new();
+    // An upstream with many branches, none of which the source repository shares.
+    let many = sb.tmp.path().join("src/many");
+    assert!(git_command(sb.root()).args(["init", "-q"]).arg(&many).status().unwrap().success());
+    let mut stream = String::new();
+    for i in 0..100 {
+        let time = 1_600_000_000 + i * 60;
+        stream.push_str(&format!(
+            "commit refs/heads/b{i}\ncommitter T <t@e> {time} +0000\ndata {}\nb{i}\n",
+            format!("b{i}").len() + 1
+        ));
+    }
+    let mut import =
+        sb.git(&many).args(["fast-import", "--quiet"]).stdin(Stdio::piped()).spawn().unwrap();
+    import.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(import.wait().unwrap().success());
+    let many_url = "https://example.org/x/many.git";
+    rewrite_url(sb.root(), many_url, &many);
+    sb.ok(&["add", many_url]);
+    assert_eq!(
+        sb.store_config("remote.example.org/x/many.negotiationRestrict"),
+        "refs/remotes/*/many/*"
+    );
+
+    let add = |url: &str, trace: &Path| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        let out = run(cmd
+            .current_dir(sb.root())
+            .env("GIT_TRACE_PACKET", trace)
+            .arg("--store")
+            .arg(&sb.store)
+            .args(["store", "add", url]));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        assert!(!out.stderr.contains("negotiation"), "{}", out.stderr);
+    };
+    // The source repository is like nothing in the store, so its fetch offers nothing.
+    let trace = sb.tmp.path().join("packets");
+    add(PROJ_URL, &trace);
+    assert_eq!(haves(&trace), 0, "offered the unrelated upstream's commits");
+
+    // A fork of it elsewhere offers the commits of the upstream of the same name.
+    let fork = sb.tmp.path().join("src/fork");
+    let out = run(git_command(sb.root()).args(["clone", "-q"]).arg(&sb.src).arg(&fork));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let commit = ["commit", "-q", "--allow-empty", "-m", "fork"];
+    assert!(sb.git(&fork).args(commit).status().unwrap().success());
+    let fork_url = "https://example.net/me/proj.git";
+    rewrite_url(sb.root(), fork_url, &fork);
+    let trace = sb.tmp.path().join("fork-packets");
+    add(fork_url, &trace);
+    assert!(haves(&trace) > 0, "offered nothing of the upstream it was forked from");
+
+    // Upstreams added before negotiation was restricted are restricted by `h store init`.
+    let key = "remote.example.org/x/many.negotiationRestrict";
+    assert!(sb.git(&sb.store).args(["config", "--unset-all", key]).status().unwrap().success());
+    sb.ok(&["init"]);
+    assert_eq!(sb.store_config(key), "refs/remotes/*/many/*");
+}
+
 /// A second source repository, published as `<PROJ_URL minus .git>/sub.git`.
 fn add_sub_source(sb: &Sandbox) -> &'static str {
     let sub = sb.tmp.path().join("src/sub");

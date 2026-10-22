@@ -37,8 +37,9 @@ pub const STORE_CONFIG: &[(&str, &str)] = &[
     // only 100ms for by default, so on a slow disk an upstream's fetch could fail just for having
     // waited its turn.
     ("reftable.lockTimeout", "10000"),
-    // Every upstream's commits are offered to every fetch, and git offers all of them until the
-    // server recognizes one, which an unrelated upstream never does. Skipping offers a few.
+    // Git offers the server the commits of every branch it has until the server recognizes one,
+    // which an unrelated upstream never does. Each upstream's fetch offers only its relatives'
+    // commits (see `negotiation_restrict`), and skipping offers few even of those.
     ("fetch.negotiationAlgorithm", "skipping"),
     // `h store worktree` makes clones, but a worktree of the store made by hand is throwaway too:
     // forget it as soon as it is gone.
@@ -120,10 +121,12 @@ impl Store {
         for (key, value) in STORE_CONFIG {
             git::run(self.dir(), &["config", key, value])?;
         }
-        // Upstreams added before HEAD was followed follow it from now on.
+        // Upstreams added before HEAD was followed, or before negotiation was restricted, are
+        // fetched as new ones are from now on.
         for name in self.remotes()? {
             let nested = self.is_nested(&name)?;
             self.follow_remote_head(&name, nested)?;
+            self.restrict_negotiation(&name)?;
         }
         for (key, value) in config_pairs(git_opts) {
             git::run(self.dir(), &[OsString::from("config"), key, value])?;
@@ -173,6 +176,7 @@ impl Store {
             git::run(dir, &["config", "--add", &key("fetch"), &refspec])?;
         }
         self.follow_remote_head(name, nested)?;
+        self.restrict_negotiation(name)?;
         Ok(true)
     }
 
@@ -285,6 +289,31 @@ impl Store {
         git::run(self.dir(), &["config", &key, if nested { "never" } else { "always" }])
     }
 
+    /// Have each fetch of upstream `name` offer the server only the commits of its relatives'
+    /// branches, as [`negotiation_restrict`] picks them, rather than every upstream's (git 2.55;
+    /// older versions ignore it and offer everything).
+    fn restrict_negotiation(&self, name: &str) -> Result<(), GitError> {
+        let key = format!("remote.{name}.negotiationRestrict");
+        git::run(self.dir(), &["config", "--replace-all", &key, &negotiation_restrict(name)])
+    }
+
+    /// The upstreams among `names` whose fetches have no relative's branch to offer the server,
+    /// as a new upstream unlike any other has none: [`negotiation_restrict`] matches nothing.
+    fn without_relatives(&self, names: &[String]) -> Result<Vec<String>, GitError> {
+        let format = "--format=%(refname)";
+        let branches = git::output(self.dir(), &["for-each-ref", format, "refs/remotes/"])?;
+        let branches: Vec<&str> =
+            branches.lines().filter_map(|r| r.strip_prefix("refs/remotes/")).collect();
+        Ok(names
+            .iter()
+            .filter(|name| {
+                let segment = format!("/{}/", last_segment(name));
+                !branches.iter().any(|branch| branch.contains(&segment))
+            })
+            .cloned()
+            .collect())
+    }
+
     /// Whether upstream `name` keeps its refs under `<name>/-/`.
     pub fn is_nested(&self, name: &str) -> Result<bool, GitError> {
         let key = format!("remote.{name}.fetch");
@@ -391,20 +420,31 @@ impl Store {
     /// Tags are never pruned, even in stores made before [`STORE_CONFIG`] said so: git passes
     /// `--no-prune-tags` on to the fetch of each upstream.
     pub fn fetch(&self, names: &[String], quiet: bool) -> Result<FetchReport, GitError> {
-        let mut args = vec!["fetch", "--prune", "--no-prune-tags", "--no-write-fetch-head"];
+        let fetched = if names.is_empty() { self.remotes()? } else { names.to_vec() };
+        let mut args: Vec<String> = Vec::new();
+        // An upstream with no relatives offers nothing, but git warns that its pattern matches
+        // no branch. A branch that does not exist yet is passed over in silence, so it is
+        // restricted to its own HEAD instead, after an empty value drops the pattern.
+        for name in self.without_relatives(&fetched)? {
+            let key = format!("remote.{name}.negotiationRestrict");
+            let head = format!("refs/remotes/{}/HEAD", self.prefix(&name)?);
+            args.extend(["-c".into(), format!("{key}="), "-c".into(), format!("{key}={head}")]);
+        }
+        args.extend(
+            ["fetch", "--prune", "--no-prune-tags", "--no-write-fetch-head"].map(String::from),
+        );
         if quiet {
-            args.push("--quiet");
+            args.push("--quiet".into());
         }
         if names.is_empty() {
-            args.push("--all");
+            args.push("--all".into());
         } else {
-            args.push("--multiple");
-            args.extend(names.iter().map(String::as_str));
+            args.push("--multiple".into());
+            args.extend(names.iter().cloned());
         }
         // Git fetches every upstream it can, names those it cannot, and then fails.
         let mut report =
             FetchReport { failed: git::run(self.dir(), &args).err(), ..Default::default() };
-        let fetched = if names.is_empty() { self.remotes()? } else { names.to_vec() };
         for name in fetched {
             match self.is_nested(&name).and_then(|nested| Ok(nested && !self.set_head(&name)?)) {
                 Ok(true) => report.headless.push(name),
@@ -618,6 +658,31 @@ fn extends(inner: &str, outer: &str) -> bool {
     inner.strip_prefix(outer).is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The last segment of upstream `name`: `nixpkgs` for `github.com/NixOS/nixpkgs`.
+fn last_segment(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
+}
+
+/// The branches whose commits a fetch of upstream `name` offers the server: those of every
+/// upstream with the same last segment, its own included. So a fork offers its parent's commits
+/// (`github.com/philiptaron/nixpkgs`, `github.com/NixOS/nixpkgs`'s), as does a mirror on another
+/// host, while a fetch of a repository unlike any other offers nothing. Offering every branch in
+/// the store instead takes long enough to look hung: the server, sharing nothing, recognizes
+/// none of them, and git offers them all, again in each round.
+///
+/// Git matches the pattern with `*` taking in `/` too, which [`Store::without_relatives`]
+/// relies on.
+fn negotiation_restrict(name: &str) -> String {
+    let mut segment = String::new();
+    for c in last_segment(name).chars() {
+        if matches!(c, '*' | '?' | '[' | '\\') {
+            segment.push('\\');
+        }
+        segment.push(c);
+    }
+    format!("refs/remotes/*/{segment}/*")
+}
+
 /// The fetch refspecs of upstream `name`: its branches and tags, directly under `<name>/`, or
 /// under `<name>/-/` when it is nested. No name has a `-` segment, so the two never overlap.
 fn refspecs(name: &str, nested: bool) -> [String; 2] {
@@ -671,6 +736,13 @@ mod tests {
         assert!(!extends("g/proj2", "g/proj"));
         assert!(!extends("g/proj", "g/proj"));
         assert!(!extends("g/proj", "g/proj/sub"));
+    }
+
+    #[test]
+    fn fetches_negotiate_with_every_upstream_of_the_same_name() {
+        assert_eq!(negotiation_restrict("github.com/NixOS/nixpkgs"), "refs/remotes/*/nixpkgs/*");
+        assert_eq!(negotiation_restrict("gitlab.com/g/proj/sub"), "refs/remotes/*/sub/*");
+        assert_eq!(negotiation_restrict("example.com/o/a*b[c]"), r"refs/remotes/*/a\*b\[c]/*");
     }
 
     #[test]

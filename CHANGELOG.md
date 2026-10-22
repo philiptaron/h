@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.2 (2026-10-22)
+
+A fix for adding an upstream to a store that already holds many others.
+
+### Fixes
+
+- **Adding an upstream unlike anything in the store no longer looks hung.** Git offers the
+  server every commit it has until the server recognizes one, and a repository sharing nothing
+  with the store recognizes none, so its first fetch offered the whole store, again in each
+  round: adding `github.com/NixOS/moderation` to a store of 251 upstreams sent 91 MB and took
+  over a minute. Now each upstream's fetches offer only the branches of upstreams with the same
+  name, its own included. A fork or a mirror still finds the history it shares with its original
+  (`github.com/philiptaron/nixpkgs` offers `github.com/NixOS/nixpkgs`'s commits), and a
+  repository unlike any other offers nothing.
+  - It takes git 2.55 or later; older versions fetch as before.
+  - Upstreams already in the store get it from `h store init`.
+  - A fork under another name than its original's downloads its whole history the first time, as
+    a fresh clone would.
+
+### Under the hood
+
+- **Tests:** 248 unit and end-to-end tests.
+
 ## 0.3.1 (2026-10-02)
 
 Fixes found by putting two hundred existing checkouts under the store with `h store ingest`.

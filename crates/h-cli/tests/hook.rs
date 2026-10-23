@@ -262,36 +262,35 @@ fn bad_input_is_refused() {
 }
 
 #[test]
-fn leftovers_of_a_removed_worktree_are_taken_back() {
+fn leftovers_of_a_removed_worktree_are_set_aside() {
     let sb = Sandbox::new();
     let repo = sb.home().join("repo");
     make_git_repo(&repo);
-    let tracked = sb.git(&repo, &["ls-files"]);
-    let tracked = tracked.lines().next().expect("a tracked file");
     let (path, _) = sb.create(&repo, "agent-a1", &repo);
+    let aside = |n: u32| path.with_file_name(format!("agent-a1~{n}"));
+
+    // A build still running in the removed worktree writes into it again, each time; what is
+    // already aside is never touched.
+    fs::create_dir_all(aside(1)).unwrap();
+    fs::write(aside(1).join("mine"), "mine").unwrap();
+    for n in [2, 3] {
+        sb.git(&repo, &["worktree", "remove", path.to_str().unwrap()]);
+        fs::create_dir_all(path.join("site/.cache")).unwrap();
+        fs::write(path.join("site/.cache/generated"), n.to_string()).unwrap();
+        let (again, out) = sb.create(&repo, "agent-a1", &repo);
+        assert_eq!(again, path);
+        assert!(!path.join("site").exists());
+        let generated = fs::read_to_string(aside(n).join("site/.cache/generated")).unwrap();
+        assert_eq!(generated, n.to_string());
+        assert!(out.stderr.contains(&format!("it is now {}", aside(n).display())), "{out:?}");
+    }
+    assert_eq!(fs::read_to_string(aside(1).join("mine")).unwrap(), "mine");
+
+    // An empty directory is simply removed.
     sb.git(&repo, &["worktree", "remove", path.to_str().unwrap()]);
-
-    // A build still running in the removed worktree writes into it again.
-    fs::create_dir_all(path.join("site/.cache")).unwrap();
-    fs::write(path.join("site/.cache/generated"), "generated").unwrap();
-    fs::write(path.join(tracked), "stale").unwrap();
-
-    let (again, out) = sb.create(&repo, "agent-a1", &repo);
-    assert_eq!(again, path);
-    assert_eq!(fs::read_to_string(path.join("site/.cache/generated")).unwrap(), "generated");
-    // What would replace a file of the checkout is kept aside instead.
-    assert_ne!(fs::read_to_string(path.join(tracked)).unwrap(), "stale");
-    let aside = path.with_file_name("agent-a1~");
-    assert_eq!(fs::read_to_string(aside.join(tracked)).unwrap(), "stale");
-    assert!(out.stderr.contains("is left in"), "{out:?}");
-
-    // With nothing in the way, nothing is left aside.
-    let (path, _) = sb.create(&repo, "agent-b2", &repo);
-    sb.git(&repo, &["worktree", "remove", path.to_str().unwrap()]);
-    fs::create_dir_all(path.join("out")).unwrap();
-    sb.create(&repo, "agent-b2", &repo);
-    assert!(path.join("out").is_dir());
-    assert!(!path.with_file_name("agent-b2~").exists());
+    fs::create_dir_all(&path).unwrap();
+    sb.create(&repo, "agent-a1", &repo);
+    assert!(!aside(4).exists());
 }
 
 /// The JSON Claude Code sends the WorktreeRemove hook.

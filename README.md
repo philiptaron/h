@@ -182,9 +182,8 @@ through Claude Code's WorktreeCreate and WorktreeRemove hooks, reading the hook'
   from, whatever `--store` or `$H_STORE` say, so each identity's clones use their own store.
   Without it, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD. A worktree
   that is already there is handed back, and a branch left by a removed one is checked out again.
-  Files written into the directory after its worktree was removed, as by a build still running
-  there, are moved into the new worktree wherever its checkout has nothing; what would replace
-  something is kept in `<name>~`. The new worktree's submodules are cloned from that store, at every level, and those it lacks
+  A directory written into again after its worktree was removed, as by a build still running
+  there, is moved aside to the first free `<name>~1`, `<name>~2`, … and left there. The new worktree's submodules are cloned from that store, at every level, and those it lacks
   are put there, as `h store ingest` does, so the agent gets a tree it can build; what cannot be
   done there is only warned about, since the worktree is usable without it.
 - **worktree-remove** commits whatever is uncommitted in the worktree, untracked files included,

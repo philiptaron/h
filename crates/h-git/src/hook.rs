@@ -212,10 +212,9 @@ fn is_worktree_of(root: &Path, path: &Path) -> bool {
 /// used as it is.
 ///
 /// A directory already there that is not a worktree, such as one a build or a language server
-/// still running in a removed worktree wrote into again, is moved aside to `<name>~` while the
-/// worktree is added, and then moved back into it wherever the checkout has nothing. Whatever
-/// would replace something in the checkout stays in `<name>~`. A directory with a `.git` of its
-/// own belongs to some other repository, and is left alone.
+/// still running in a removed worktree wrote into again, is moved aside to the first of
+/// `<name>~1`, `<name>~2`, … that is free, and left there; an empty one is removed. A directory
+/// with a `.git` of its own belongs to some other repository, and is left alone.
 pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError> {
     let json = parse(input)?;
     let name = field(&json, "name")?;
@@ -231,14 +230,14 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
         if is_worktree_of(&root, &path) {
             return Ok(Created { path, branch, base: "the existing worktree".into() });
         }
-        let aside = root.join(WORKTREES_DIR).join(format!("{slug}~"));
-        if path.join(".git").symlink_metadata().is_ok() || aside.symlink_metadata().is_ok() {
+        if path.join(".git").symlink_metadata().is_ok() {
             let msg =
                 format!("{} exists and is not a worktree of {}", path.display(), root.display());
             return Err(GitError::Invalid(msg));
         }
-        rename(&path, &aside)?;
-        leftover = Some(aside);
+        if std::fs::remove_dir(&path).is_err() {
+            leftover = Some(set_aside(&path)?);
+        }
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
@@ -269,7 +268,8 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     }
     clone_submodules(&created.path, &common, fallback);
     if let Some(aside) = leftover {
-        restore(&aside, &created.path);
+        let (path, aside) = (created.path.display(), aside.display());
+        eprintln!("warning: {path} was already there and not a worktree; it is now {aside}");
     }
     Ok(created)
 }
@@ -280,33 +280,29 @@ fn rename(from: &Path, to: &Path) -> Result<(), GitError> {
     })
 }
 
-/// Move what is in `aside` into the new worktree at `path`, wherever the worktree has nothing,
-/// and remove `aside` if that empties it. What is left there is only said on stderr.
-fn restore(aside: &Path, path: &Path) {
-    fn merge(from: &Path, to: &Path) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            let (src, dst) = (entry.path(), to.join(entry.file_name()));
-            match dst.symlink_metadata() {
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::rename(&src, &dst)?
-                }
-                Ok(meta) if meta.is_dir() && entry.file_type()?.is_dir() => {
-                    merge(&src, &dst)?;
-                    let _ = std::fs::remove_dir(&src);
-                }
-                _ => {}
+/// Move the directory at `path` to the first of `<path>~1`, `<path>~2`, … that is free; returns
+/// where it went. Each name is claimed by making an empty directory there, which fails when
+/// anything has it already, and the rename then replaces only that, so nothing is overwritten.
+/// No worktree name has a `~`, so none of them is ever one.
+fn set_aside(path: &Path) -> Result<PathBuf, GitError> {
+    for n in 1.. {
+        let mut candidate = path.as_os_str().to_owned();
+        candidate.push(format!("~{n}"));
+        let candidate = PathBuf::from(candidate);
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => {
+                return rename(path, &candidate).map(|()| candidate.clone()).inspect_err(|_| {
+                    let _ = std::fs::remove_dir(&candidate);
+                });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                let msg = format!("could not make {}: {err}", candidate.display());
+                return Err(GitError::Invalid(msg));
             }
         }
-        Ok(())
     }
-    if let Err(err) = merge(aside, path) {
-        eprintln!("warning: could not move everything from {}: {err}", aside.display());
-    }
-    if std::fs::remove_dir(aside).is_err() {
-        let what = "what was already there and would replace something in the worktree";
-        eprintln!("warning: {what} is left in {}", aside.display());
-    }
+    unreachable!("some name ~<n> is free")
 }
 
 /// Clone the submodules of the new worktree at `path` from the store the repository (whose

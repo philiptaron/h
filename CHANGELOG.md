@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.3 (2026-10-23)
+
+A fix for Claude Code worktrees whose directory comes back after they are removed.
+
+### Fixes
+
+- **A worktree whose directory was written into again after its removal can be made again.** A
+  build or dev server still running in a removed worktree can recreate part of its directory, as
+  `astro dev` regenerating `site/.astro/icon.d.ts` did. The WorktreeCreate hook then refused that
+  name, since the directory was not a worktree. Now it moves such a directory aside to the first
+  free `<name>~1`, `<name>~2`, … and says where on stderr. Nothing already there is overwritten.
+  The worktree is then made as usual, from its branch if the removed one left it.
+  - An empty directory is just removed.
+  - A directory with a `.git` of its own is still refused, since it belongs to another repository.
+
+### Under the hood
+
+- **Tests:** 249 unit and end-to-end tests.
+
 ## 0.3.2 (2026-10-22)
 
 A fix for adding an upstream to a store that already holds many others.

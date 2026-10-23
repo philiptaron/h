@@ -250,13 +250,48 @@ fn bad_input_is_refused() {
     assert_eq!(out.code, Some(1), "{out:?}");
     assert!(out.stderr.contains("is not in a git repository"), "{out:?}");
 
-    // Something that is not a worktree where the worktree would go is left alone.
+    // Another repository where the worktree would go is left alone.
     let repo = sb.home().join("repo");
     make_git_repo(&repo);
-    fs::create_dir_all(repo.join(".claude/worktrees/taken")).unwrap();
+    let taken = repo.join(".claude/worktrees/taken");
+    make_git_repo(&taken);
     let out = with_input(sb.h(&["hook", "worktree-create"]), &create_input("taken", &repo));
     assert_eq!(out.code, Some(1), "{out:?}");
     assert!(out.stderr.contains("exists and is not a worktree of"), "{out:?}");
+    assert!(taken.join(".git").is_dir());
+}
+
+#[test]
+fn leftovers_of_a_removed_worktree_are_taken_back() {
+    let sb = Sandbox::new();
+    let repo = sb.home().join("repo");
+    make_git_repo(&repo);
+    let tracked = sb.git(&repo, &["ls-files"]);
+    let tracked = tracked.lines().next().expect("a tracked file");
+    let (path, _) = sb.create(&repo, "agent-a1", &repo);
+    sb.git(&repo, &["worktree", "remove", path.to_str().unwrap()]);
+
+    // A build still running in the removed worktree writes into it again.
+    fs::create_dir_all(path.join("site/.cache")).unwrap();
+    fs::write(path.join("site/.cache/generated"), "generated").unwrap();
+    fs::write(path.join(tracked), "stale").unwrap();
+
+    let (again, out) = sb.create(&repo, "agent-a1", &repo);
+    assert_eq!(again, path);
+    assert_eq!(fs::read_to_string(path.join("site/.cache/generated")).unwrap(), "generated");
+    // What would replace a file of the checkout is kept aside instead.
+    assert_ne!(fs::read_to_string(path.join(tracked)).unwrap(), "stale");
+    let aside = path.with_file_name("agent-a1~");
+    assert_eq!(fs::read_to_string(aside.join(tracked)).unwrap(), "stale");
+    assert!(out.stderr.contains("is left in"), "{out:?}");
+
+    // With nothing in the way, nothing is left aside.
+    let (path, _) = sb.create(&repo, "agent-b2", &repo);
+    sb.git(&repo, &["worktree", "remove", path.to_str().unwrap()]);
+    fs::create_dir_all(path.join("out")).unwrap();
+    sb.create(&repo, "agent-b2", &repo);
+    assert!(path.join("out").is_dir());
+    assert!(!path.with_file_name("agent-b2~").exists());
 }
 
 /// The JSON Claude Code sends the WorktreeRemove hook.

@@ -210,6 +210,12 @@ fn is_worktree_of(root: &Path, path: &Path) -> bool {
 /// worktrees. The branch starts at [`base`]. A branch of that name that already exists, as one a
 /// removed worktree left behind, is checked out again instead, and a worktree already there is
 /// used as it is.
+///
+/// A directory already there that is not a worktree, such as one a build or a language server
+/// still running in a removed worktree wrote into again, is moved aside to `<name>~` while the
+/// worktree is added, and then moved back into it wherever the checkout has nothing. Whatever
+/// would replace something in the checkout stays in `<name>~`. A directory with a `.git` of its
+/// own belongs to some other repository, and is left alone.
 pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError> {
     let json = parse(input)?;
     let name = field(&json, "name")?;
@@ -220,22 +226,41 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     let root = repository_root(&common);
     let path = root.join(WORKTREES_DIR).join(&slug);
 
+    let mut leftover = None;
     if path.exists() {
         if is_worktree_of(&root, &path) {
             return Ok(Created { path, branch, base: "the existing worktree".into() });
         }
-        let msg = format!("{} exists and is not a worktree of {}", path.display(), root.display());
-        return Err(GitError::Invalid(msg));
+        let aside = root.join(WORKTREES_DIR).join(format!("{slug}~"));
+        if path.join(".git").symlink_metadata().is_ok() || aside.symlink_metadata().is_ok() {
+            let msg =
+                format!("{} exists and is not a worktree of {}", path.display(), root.display());
+            return Err(GitError::Invalid(msg));
+        }
+        rename(&path, &aside)?;
+        leftover = Some(aside);
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
-    let created = if commit(&root, &format!("refs/heads/{branch}")).is_some() {
-        git::run(Some(&root), &["worktree", "add", "--quiet", &target, &branch])?;
-        Created { path, branch, base: "its existing branch".into() }
+    let added = if commit(&root, &format!("refs/heads/{branch}")).is_some() {
+        git::run(Some(&root), &["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
+            path,
+            branch,
+            base: "its existing branch".into(),
+        })
     } else {
-        let (start, from) = base(&root, &common, fallback)?;
-        git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])?;
-        Created { path, branch, base: from }
+        base(&root, &common, fallback).and_then(|(start, from)| {
+            git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])
+                .map(|()| Created { path, branch, base: from })
+        })
+    };
+    let created = match (added, &leftover) {
+        (Ok(created), _) => created,
+        (Err(err), Some(aside)) => {
+            rename(aside, Path::new(&target))?;
+            return Err(err);
+        }
+        (Err(err), None) => return Err(err),
     };
     if let Some(store) = borrowed_store(&common, None)
         && let Err(err) = ingest::repair_prefixes(&store, &common)
@@ -243,7 +268,45 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
         eprintln!("warning: could not update {}: {err}", common.display());
     }
     clone_submodules(&created.path, &common, fallback);
+    if let Some(aside) = leftover {
+        restore(&aside, &created.path);
+    }
     Ok(created)
+}
+
+fn rename(from: &Path, to: &Path) -> Result<(), GitError> {
+    std::fs::rename(from, to).map_err(|err| {
+        GitError::Invalid(format!("could not move {} to {}: {err}", from.display(), to.display()))
+    })
+}
+
+/// Move what is in `aside` into the new worktree at `path`, wherever the worktree has nothing,
+/// and remove `aside` if that empties it. What is left there is only said on stderr.
+fn restore(aside: &Path, path: &Path) {
+    fn merge(from: &Path, to: &Path) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let (src, dst) = (entry.path(), to.join(entry.file_name()));
+            match dst.symlink_metadata() {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::rename(&src, &dst)?
+                }
+                Ok(meta) if meta.is_dir() && entry.file_type()?.is_dir() => {
+                    merge(&src, &dst)?;
+                    let _ = std::fs::remove_dir(&src);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    if let Err(err) = merge(aside, path) {
+        eprintln!("warning: could not move everything from {}: {err}", aside.display());
+    }
+    if std::fs::remove_dir(aside).is_err() {
+        let what = "what was already there and would replace something in the worktree";
+        eprintln!("warning: {what} is left in {}", aside.display());
+    }
 }
 
 /// Clone the submodules of the new worktree at `path` from the store the repository (whose

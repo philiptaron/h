@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.3.3 (2026-10-23)
+## 0.3.4 (2026-10-23)
 
 A fix for Claude Code worktrees whose directory comes back after they are removed.
+
+This is what 0.3.3 was. Its release was withdrawn when its commits were rewritten, and GitHub
+does not let a release under that tag be made again. The code is the same.
 
 ### Fixes
 

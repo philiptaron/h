@@ -3,7 +3,7 @@
 Fast shell navigation for projects organized as `~/code/<domain>/<path>`, and a shared object
 store that keeps the upstream history of big projects in one place.
 
-Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Asks the GitHub API for the canonical casing of `user/repo` before cloning.
+Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h).
 
 ## Setup
 
@@ -11,87 +11,90 @@ Rewritten in Rust from [zimbatm/h](https://github.com/zimbatm/h). Asks the GitHu
 eval "$(h-shell-init [options] [code-root])"
 ```
 
-Options:
-- `--pushd` - use `pushd` instead of `cd`
-- `--name NAME` - use NAME as the shell function name (default: `h`)
-- `--store DIR` - the object store that clones borrow from and `h store` operates on
-- `--git-opts "OPTIONS"` - git options for every clone, typically `-c user.name=... -c user.email=...`
+| Option | Meaning |
+| --- | --- |
+| `--pushd` | use `pushd` instead of `cd` |
+| `--name NAME` | name the shell function NAME (default: `h`) |
+| `--store DIR` | the [object store](#the-object-store) that clones borrow from |
+| `--git-opts "OPTIONS"` | git options for every clone, typically `-c user.name=... -c user.email=...` |
 
-Tab completion for project names is set up automatically for both bash and zsh.
+Tab completion for project names works in bash and zsh.
 
-All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with `-V`/`--version`.
+All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
+`-V`/`--version`.
 
 ## Usage
 
-- `h <name>` - search for project matching `<name>` up to 3 levels deep
-- `h <user>/<repo>` - cd to `~/code/github.com/<user>/<repo>`, found in any casing, or clone it (asking the GitHub API first for the canonical casing, and whether the repository is a fork)
-- `h <url>` - cd to `~/code/<domain>/<path>` or clone it
-- `h <term> [clone options]` - extra options go to `git clone`; `--container` clones into
-  `<dir>/.bare` with a `.git` file beside it and no working tree, for projects worked on only
-  through `git worktree add`
-- `h store <command> ...` - the [object store](#the-object-store) commands; anything else after
-  `store`, or nothing, jumps to a project named `store`
+| Command | What it does |
+| --- | --- |
+| `h <name>` | go to the project matching `<name>`, up to 3 levels deep |
+| `h <user>/<repo>` | go to `~/code/github.com/<user>/<repo>`, in any casing, or clone it |
+| `h <url>` | go to `~/code/<domain>/<path>`, or clone it |
+| `h <term> [clone options]` | pass extra options to `git clone` |
+| `h <term> --container` | clone with no working tree, for [worktrees only](#container-clones) |
+| `h store <command>` | the [object store](#the-object-store) commands |
 
-GitHub API lookups go without a token first, so public repositories never touch git's credential
-helpers. Only when GitHub answers 404, as it does for a private repository, or reports a rate
-limit, does `h` ask `git credential fill` for the token git keeps for github.com, with the
-`credential.*` settings among the git options (so each identity's `credential.username` picks its
-own), and look again with it. Nothing ever prompts: with no stored credential, or one GitHub turns
-down, the lookup goes unanswered and the casing stays as typed. The token only ever goes to the
-host it is kept for: an API other than `https://api.github.com` (`$H_GITHUB_API`) is asked for its
-own host's credential, never github.com's.
+`h store` with no command, or one it doesn't know, goes to a project named `store`.
 
-Clones recurse into submodules unless an option says otherwise, and the identity in the git
-options (`-c credential.username=...`, `user.*`) reaches the submodules' clones and their
-configuration too. When GitHub says the repository is a fork, the clone gets an `upstream` remote
-that can be fetched but not pushed to (its push URL is `no_push`) and the fork's remote
-(`origin`, or whatever `--origin` or `clone.defaultRemoteName` calls it) becomes the default push
-target. The upstream is added before the submodules are cloned, and even when one of them fails.
-It is fetched with the same `--depth`, `--shallow-since`, `--shallow-exclude` and `--filter` as
-the clone, and when the clone has a single branch (`--single-branch`, or any of the first three
-without `--no-single-branch`), so does the upstream: its default branch. A fork's submodule given
-relative to the project, as `../lib.git` is, comes from the fork's own copy when it has one (found
-in the store, or else asked for once) and otherwise from beside the upstream, where git alone
-would look only beside the fork.
+### Cloning from GitHub
 
-A container clone has `origin` with ordinary remote-tracking branches and no local branches,
-and its HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from
-the default branch. Fetching does not move HEAD, so `h` moves it to `origin/HEAD` again each
-time it goes to the container, unless the user has made HEAD a branch. Like `git clone`, it takes the remote's object format (SHA-1 or SHA-256)
-rather than the default for new repositories. A remote with no default branch, such as an
-empty one, cannot be cloned this way. Only clone options that `git fetch` shares are accepted;
-`--no-tags` keeps later fetches from bringing tags too, as it does for `git clone`. Worktrees
-added to a container link to it by relative paths (`worktree.useRelativePaths`), so a container
-and its worktrees can be moved together; the first such worktree turns on the
-`extensions.relativeWorktrees` repository extension, which git before 2.48 cannot read.
+Before cloning `user/repo`, `h` asks the GitHub API for the repository's canonical casing and
+whether it is a fork.
+
+When it is a fork:
+
+- The clone gets an `upstream` remote for the parent. It can be fetched but not pushed to (its
+  push URL is `no_push`).
+- The fork's own remote (`origin`, or whatever `--origin` or `clone.defaultRemoteName` names it)
+  becomes the default push target.
+- `upstream` is fetched as shallowly or partially as the clone (`--depth`, `--shallow-*`,
+  `--filter`), and only its default branch when the clone has a single branch.
+- A submodule given relative to the project, such as `../lib.git`, comes from the fork's copy if
+  it has one (in the store, or else asked for once), and otherwise from beside the parent. Git
+  alone would look only beside the fork.
+
+### GitHub credentials
+
+Lookups go without a token first, so public repositories never touch git's credential helpers.
+
+Only when GitHub answers 404 (as for a private repository) or reports a rate limit does `h` ask
+`git credential fill` for the token git keeps for github.com, and try again. The `credential.*`
+settings in the git options apply, so each identity's `credential.username` picks its own token.
+
+Nothing ever prompts. With no stored credential, or one GitHub turns down, the casing stays as
+typed. The token only goes to the host it was stored for: an API other than
+`https://api.github.com` (set with `$H_GITHUB_API`) gets its own host's credential, never
+github.com's.
+
+### Submodules
+
+Clones recurse into submodules unless an option says otherwise. The identity in the git options
+(`-c credential.username=...`, `user.*`) reaches the submodules' clones and their configuration
+too.
+
+### Container clones
+
+`h <term> --container` makes a clone for projects worked on only through `git worktree add`:
+
+- The repository is in `<dir>/.bare`, with a `.git` file beside it and no working tree.
+- It has `origin` with its remote-tracking branches, and no local branches.
+- HEAD is detached at `origin/HEAD`, so `git worktree add <dir>` starts a new branch from the
+  default branch. `h` moves HEAD to `origin/HEAD` again each time it goes to the container, unless
+  you have made HEAD a branch.
+- Like `git clone`, it takes the remote's object format (SHA-1 or SHA-256).
+- Worktrees link to it by relative paths (`worktree.useRelativePaths`), so the container and its
+  worktrees can be moved together. The first one turns on a repository extension that git before
+  2.48 can't read.
+
+Only the clone options that `git fetch` shares are accepted. `--no-tags` keeps later fetches from
+bringing tags, as with `git clone`. A remote with no default branch, such as an empty one, can't be
+cloned this way.
 
 ## The object store
 
-A store is one bare repository holding many unrelated upstream repositories as remotes, each named
-by the path `h` would clone it to (with any part git cannot use in a ref escaped, so `.local`
-becomes `_.local`, and a GitHub repository as GitHub names it, as described below). Branches live under `refs/remotes/<name>/` and tags under `refs/tags/<name>/`,
-so `github.com/NixOS/nixpkgs/master` and `github.com/torvalds/linux/v6.12` both resolve and nothing
-collides, and every fetch points `<name>/HEAD` at the upstream's current default branch. An upstream
-whose name another one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, keeps
-its refs under `<name>/-/` instead (`gitlab.com/g/proj/-/main`), so the two never overlap; adding
-the inner one moves the outer one's refs over, and they stay there if the inner one is removed
-again. The store is never pushed to and never pruned, and clones made with a store configured borrow
-its objects through `git clone --reference-if-able`, so a clone of a fork costs only the fork's own
-commits. A clone only tells the server about the store history it shares, its own upstream's and a
-fork's parent's (through `core.alternateRefsPrefixes`), so a store full of unrelated projects does
-not make every clone and fetch list all of their commits first. Their submodules borrow from it too:
-`h` clones them itself, with `git submodule update --init --recursive --reference <store>`, since
-git would look for them in the store's `modules/` directory. A clone with all of its history goes
-into the store itself first: its upstream, and a fork's parent, are added to the store and fetched
-there, and the clone then borrows everything. Afterwards, the submodules it cloned that the store
-lacked are put there too, from the clone itself, so nothing is downloaded twice; what fails there is
-only warned about, since the clone is whole either way. A clone limited by `--depth`,
-`--shallow-since`, `--shallow-exclude` or `--filter`, among its own options or the git options after
-`--`, does not bring its history into the store. For a submodule added later, run `h store ingest`
-(below). A clone given its own `--reference` with submodules uses only that, as git does. A store
-keeps its refs in a reftable, where names that differ only in case coexist even on macOS and pruning
-one ref does not rewrite the rest, so anything that reads the store's refs, including the git of a
-clone that borrows from it, needs git 2.45 or later.
+A store is one bare repository that holds many upstream repositories as remotes. Clones borrow
+its objects, so a clone of a fork costs only the fork's own commits, and a project's history is
+downloaded once however many clones and identities use it.
 
 ```bash
 h store init                                  # create it
@@ -102,64 +105,110 @@ h store fetch                                 # fetch everything (run this from 
 h store list                                  # the upstreams' names
 h store show nixpkgs master:lib/default.nix   # a file, straight from the store
 h store show torvalds/linux v6.12             # a commit
-h store show nixpkgs 1f0e2d3:flake.nix         # commit hashes work too
+h store show nixpkgs 1f0e2d3:flake.nix        # commit hashes work too
 h store worktree nixpkgs staging              # a cheap clone at staging, in a temporary directory
 h store ingest ~/code/github.com/me/project   # put a checkout and its submodules under the store
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
 
-`h store ingest [DIR]` (by default, the checkout here) puts a checkout under the store, as if it had
-been cloned with the store in the first place: a clone made before the store, or one whose
-submodules a pull has changed. Every one of its remotes becomes an upstream in the store, whatever
-it is called, and so does every remote of every submodule's repository, at every level. Submodules not yet cloned are
-cloned, borrowing from the store. A gitlink `.gitmodules` names no submodule for, such as a nested
-checkout committed by mistake, is no submodule to git, and is named and left as it is. The
-checkout and each submodule then borrow the store's objects and give up their own copies of them
-(`git repack -a -d -l --cruft`, so nothing the store lacks is lost, reachable or not). An upstream
-new to the store is fetched from the checkout first, its remote-tracking branches and tags but
-never its local branches, so its history is not downloaded again; the fetch from its URL that
-follows brings only what changed. A shallow or partial clone is not fetched from and keeps its
-objects, and its upstream is left out of the store, and named, unless the store has it already,
-since fetching it there would download all the history the clone was made without. A remote the
-store cannot fetch from, such as a local path or an SSH host alias like `me.github.com:owner/repo`,
-is named and left out, and counts as something it could not do. A checkout that borrows from
-another store already, as one made with another identity's `h` function does, is ingested into that
-one, with its own identity. Like `h store fetch`, it does what it can and names what it could not.
+The store needs git 2.45 or later, and so does any clone that borrows from it.
 
-`h store fetch` is best-effort: an upstream that cannot be fetched (gone, or no longer
-accessible) keeps none of the others from being fetched. Git names each one that failed, and
-the fetch then exits nonzero, so a timer running it shows the failure. `h store add` checks
-every term before it changes anything, and takes an upstream it added out again when its first
-fetch fails, so the store never holds one that was never fetched.
+### Names and refs
 
-Terms given to `store` commands match upstreams already in the store first, so a name as
-`h store list` prints it works, a bare name such as `nixpkgs` works when it is unambiguous, and
-`nixos/nixpkgs` matches `github.com/NixOS/nixpkgs` without asking GitHub. Only `h store add` asks
-GitHub about a `user/repo` the store has in another casing, to name it as below.
+Each upstream is named by the path `h` would clone it to, such as `github.com/NixOS/nixpkgs`.
 
-A GitHub repository is named in the store as GitHub names it: in its casing, and under its
-current owner and name if it was renamed or transferred, whatever form its remote's URL takes
-(`https://github.com/...`, `ssh://git@github.com/...` or `git@github.com:...`), and it is fetched
-over HTTPS. Cloning, `h store add` and `h store ingest` ask GitHub, as `h` does before cloning,
-whenever the store does not have the name spelled exactly so. What the store has under another
-casing, or under the name a renamed repository had, is then renamed in place, its branches, tags
-and HEAD with it, or dropped when the store has the repository under its new name as well (no
-objects go either way). So `h store add nixos/nixpkgs` puts right a store that says
-`github.com/nixos/nixpkgs`. A clone that borrowed under the old name is pointed at the new one the
-next time `h store ingest`, or the WorktreeCreate hook, touches it. When GitHub cannot be asked, a
-casing the store has already does, and nothing is renamed.
+- Branches are under `refs/remotes/<name>/` and tags under `refs/tags/<name>/`, so
+  `github.com/NixOS/nixpkgs/master` and `github.com/torvalds/linux/v6.12` both resolve.
+- Every fetch points `<name>/HEAD` at the upstream's current default branch.
+- Parts git can't use in a ref name are escaped: `.local` becomes `_.local`.
+- When one name extends another, as `gitlab.com/g/proj/sub` extends `gitlab.com/g/proj`, the
+  outer one's refs move under `<name>/-/` (`gitlab.com/g/proj/-/main`), so the two never overlap.
 
-`h store worktree <term> <ref> [DIR]` prints the one directory it made, so scripts and hooks can
-use it. The directory is a clone of that upstream alone that borrows the store's objects, with
-the names an ordinary clone has: its branches as `origin/*`, `origin/HEAD` at its default branch,
-and its tags as plain tags, so `git describe` and build tooling behave as usual and `git fetch`
-refreshes it from the store without the network. A branch (or `HEAD`) is checked out as a local
-branch tracking `origin/<branch>`, as `git clone --branch` does; a tag or commit is checked out
-detached. It cannot push to the store, and removing it is just `rm -rf`. A failure leaves no
-directory behind.
+A GitHub repository is named as GitHub names it, in its casing and under its current owner and
+name, whatever form its URL takes. It is always fetched over HTTPS. If the store has it under
+another casing, or under an old name from before a rename or transfer, it is renamed in place,
+branches, tags and HEAD with it, or dropped if the store has the new name as well. No objects
+go either way. So `h store add nixos/nixpkgs` fixes a store that says `github.com/nixos/nixpkgs`.
 
-The `h` binary takes `--root DIR` and `--store DIR`, or `$H_CODE_ROOT` and `$H_STORE`, so
-scripts and agents can run it without the shell function:
+- GitHub is asked only when the store doesn't already have the name spelled exactly so. When it
+  can't be asked, a casing the store already has is used, and nothing is renamed.
+- A clone that borrowed under the old name is pointed at the new one the next time
+  `h store ingest` or the WorktreeCreate hook touches it.
+
+Terms given to `store` commands match what the store already has first. A name as
+`h store list` prints it works, a bare name like `nixpkgs` works when it is unambiguous, and
+`nixos/nixpkgs` finds `github.com/NixOS/nixpkgs` without asking GitHub. Only `h store add` asks
+GitHub about a `user/repo` the store has in another casing, to rename it as above.
+
+The store is never pushed to and never pruned.
+
+### Clones and the store
+
+With a store configured, a clone:
+
+1. adds its upstream, and a fork's parent, to the store and fetches them there;
+2. borrows those objects (`git clone --reference-if-able`), so it downloads almost nothing itself;
+3. clones its submodules borrowing from the store too, then puts any the store lacked into it,
+   from the clone, so nothing is downloaded twice.
+
+A clone only tells servers about the store history it shares (its upstream's and a fork's
+parent's), so a store full of unrelated projects doesn't slow down every fetch.
+
+A shallow or partial clone (`--depth`, `--shallow-*` or `--filter`) still borrows from the store
+but doesn't add its history to it. A clone given its own `--reference` uses only that, as git
+does.
+
+### Putting existing checkouts under the store
+
+`h store ingest [DIR]` (by default, the checkout you're in) makes a checkout look as if it had been
+cloned with the store from the start. Use it for a clone made before the store, or after a pull
+brings in new submodules.
+
+- Every remote of the checkout becomes an upstream in the store, and so does every remote of
+  every submodule, at every level.
+- Submodules not yet cloned are cloned, borrowing from the store.
+- The checkout and its submodules then drop their own copies of the store's objects
+  (`git repack -a -d -l --cruft`). Nothing the store lacks is lost.
+- A new upstream is fetched from the checkout first (its remote-tracking branches and tags,
+  never its local branches), then from its URL, so its history isn't downloaded again.
+- A shallow or partial clone isn't fetched from, and keeps its objects.
+- A checkout that already borrows from another store, such as another identity's, is ingested
+  into that one.
+
+It does what it can and names what it couldn't, exiting nonzero if anything failed. It leaves out,
+and names:
+
+- a shallow or partial clone's upstream, unless the store has it already;
+- a remote the store can't fetch from, such as a local path or an SSH host alias like
+  `me.github.com:owner/repo`;
+- a gitlink that `.gitmodules` doesn't name as a submodule, such as a nested checkout committed
+  by mistake.
+
+### Fetching
+
+`h store fetch` keeps going when an upstream can't be fetched (it's gone, or no longer
+accessible), names each one that failed, and then exits nonzero, so a timer running it shows the
+failure.
+
+`h store add` checks every term before changing anything, and takes an upstream back out if its
+first fetch fails.
+
+### Worktrees from the store
+
+`h store worktree <term> <ref> [DIR]` makes a cheap clone of one upstream that borrows the store's
+objects, and prints its directory.
+
+- It looks like an ordinary clone: branches as `origin/*`, `origin/HEAD` at the default branch,
+  and tags as plain tags, so `git describe` and build tools behave as usual.
+- `git fetch` refreshes it from the store, without the network.
+- A branch is checked out as a local branch tracking `origin/<branch>`; a tag or commit is
+  checked out detached.
+- It can't push to the store. Remove it with `rm -rf`.
+
+## Running `h` without the shell function
+
+The `h` binary takes `--root DIR` and `--store DIR`, or `$H_CODE_ROOT` and `$H_STORE`, so scripts
+and agents can use it directly:
 
 ```bash
 h --store ~/.cache/git/me store fetch --quiet
@@ -168,31 +217,10 @@ h --root ~/code resolve nixpkgs
 
 ## Claude Code worktrees
 
-Claude Code gives agents with `isolation: "worktree"`, and `claude --worktree`, a git worktree of
-their own, by default branched from `origin/<default branch>`, which for a fork is the fork's
-own branch, usually behind. `h hook worktree-create` and `h hook worktree-remove` replace that
-through Claude Code's WorktreeCreate and WorktreeRemove hooks, reading the hook's JSON on stdin:
-
-- **worktree-create** adds the worktree to the clone the session is in (the main clone even from
-  one of its worktrees, and the container for a container clone) at
-  `<clone>/.claude/worktrees/<name>`, on the branch `worktree-<name>`, the same names Claude Code
-  uses itself, and prints its path. The branch starts from the store's copy of the upstream's
-  default branch, a fork's parent's or else the clone's own, as of the last `h store fetch`,
-  so it is fresh without touching the network. The store is the one the clone borrows objects
-  from, whatever `--store` or `$H_STORE` say, so each identity's clones use their own store.
-  Without it, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD. A worktree
-  that is already there is handed back, and a branch left by a removed one is checked out again.
-  A directory written into again after its worktree was removed, as by a build still running
-  there, is moved aside to the first free `<name>~1`, `<name>~2`, … and left there. The new worktree's submodules are cloned from that store, at every level, and those it lacks
-  are put there, as `h store ingest` does, so the agent gets a tree it can build; what cannot be
-  done there is only warned about, since the worktree is usable without it.
-- **worktree-remove** commits whatever is uncommitted in the worktree, untracked files included,
-  to its branch (with hooks and signing off for that commit), gives a detached HEAD with commits
-  of its own a branch, and only then removes the worktree. Branches are never deleted. It leaves
-  alone, and fails, anything that is not the top of a worktree, and a worktree that is locked or
-  holds work git cannot commit, such as a repository inside it.
-
-Run the `h` binary itself, not the shell function, from Claude Code's `settings.json`:
+Claude Code gives agents with `isolation: "worktree"`, and `claude --worktree`, a worktree of
+their own, branched by default from `origin/<default branch>`. For a fork, that is usually behind
+its parent. `h` replaces this through Claude Code's WorktreeCreate and WorktreeRemove hooks. Run
+the `h` binary itself, not the shell function, from `settings.json`:
 
 ```json
 {
@@ -207,10 +235,41 @@ Run the `h` binary itself, not the shell function, from Claude Code's `settings.
 }
 ```
 
+### worktree-create
+
+Adds the worktree at `<clone>/.claude/worktrees/<name>`, on the branch `worktree-<name>` (the
+names Claude Code uses itself), and prints its path.
+
+- It goes in the main clone, even when the session is in one of its worktrees, and in the
+  container for a container clone.
+- The branch starts from the store's copy of the upstream's default branch (a fork's parent's,
+  or else the clone's own) as of the last `h store fetch`, so it is fresh without touching the
+  network. The store is the one the clone borrows from, so each identity uses its own.
+- Without a store, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD.
+- Submodules are cloned from the store, at every level, and those the store lacks are put there.
+  What fails there is only warned about, since the worktree is usable without it.
+- A worktree that is already there is handed back, and a branch left by a removed one is checked
+  out again.
+- A directory that isn't a worktree, such as one a build still running in a removed worktree
+  wrote into again, is moved aside to the first free `<name>~1`, `<name>~2`, … and left there.
+
+### worktree-remove
+
+Removes the worktree without losing anything:
+
+- Whatever is uncommitted, untracked files included, is committed to the worktree's branch, with
+  hooks and signing turned off for that commit.
+- A detached HEAD with commits of its own gets a branch.
+- Branches are never deleted.
+
+It refuses, leaving everything in place, for anything that isn't the top of a worktree, a locked
+worktree, or one holding work git can't commit, such as a repository inside it.
+
 ## up
 
-Also includes `up` - navigate to project root (detected via `.git`, `.hg`, `.envrc`, or `Gemfile`).
-A `.git` file counts too, so worktrees, submodules and container clones are roots of their own.
+`up` goes to the root of the project you're in, found by its `.git`, `.hg`, `.envrc` or
+`Gemfile`. A `.git` file counts too, so worktrees, submodules and container clones are roots of
+their own.
 
 ```bash
 eval "$(up-shell-init [--pushd])"
@@ -221,7 +280,7 @@ eval "$(up-shell-init [--pushd])"
 The code is a Cargo workspace:
 
 - `crates/h-core` - pieces shared by both tools: output, argument parsing, paths, shell detection
-- `crates/h-git` - resolving names, `user/repo` and URLs, GitHub lookups, cloning
+- `crates/h-git` - resolving names, `user/repo` and URLs, GitHub lookups, cloning, the store
 - `crates/h-cli` - the `h` and `h-shell-init` binaries
 - `crates/up-cli` - the `up` and `up-shell-init` binaries
 

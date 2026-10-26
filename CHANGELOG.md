@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.5 (2026-10-26)
+
+A git identity for clones made by running the `h` binary directly.
+
+### Fixes
+
+- **`$H_GIT_OPTS` gives the binary an identity.** The shell function from `h-shell-init` passes
+  its `--git-opts` after `--`, but scripts, hooks and agents run the binary, which had no other
+  way to get them. Their clones came out without `user.name`, `user.email`, `user.signingkey` or
+  `credential.username`, and anything committed there went out unsigned or under the wrong name.
+  Now, when nothing follows `--`, `h` reads the git options from `$H_GIT_OPTS`, alongside
+  `$H_CODE_ROOT` and `$H_STORE`.
+  - It takes the same string as `--git-opts`, quotes included, and splits it as the shell
+    function would.
+  - Options after `--` still win, and an empty `--` leaves the identity out.
+
+### Under the hood
+
+- **Tests:** 252 unit and end-to-end tests.
+
 ## 0.3.4 (2026-10-23)
 
 A fix for Claude Code worktrees whose directory comes back after they are removed.

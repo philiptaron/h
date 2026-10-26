@@ -29,6 +29,7 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     for var in [
         "H_CODE_ROOT",
         "H_STORE",
+        "H_GIT_OPTS",
         "DIRENV_DIR",
         "http_proxy",
         "https_proxy",

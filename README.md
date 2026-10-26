@@ -215,6 +215,17 @@ h --store ~/.cache/git/me store fetch --quiet
 h --root ~/code resolve nixpkgs
 ```
 
+The identity comes from the git options after `--`, or else from `$H_GIT_OPTS`, which takes the
+same string as `--git-opts` and is split the way the shell function splits it. Set it alongside
+the other two so that clones made by scripts and agents get your name, signing key and
+credentials too:
+
+```bash
+export H_GIT_OPTS='-c user.name="Me" -c user.email="me@example.com" -c credential.username="me"'
+```
+
+An empty `--` leaves the identity out even when `$H_GIT_OPTS` is set.
+
 ## Claude Code worktrees
 
 Claude Code gives agents with `isolation: "worktree"`, and `claude --worktree`, a worktree of

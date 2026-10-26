@@ -136,6 +136,45 @@ fn root_comes_from_flag_env_or_default() {
 }
 
 #[test]
+fn git_options_come_from_after_the_separator_or_else_the_environment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let src = home.join("src/proj");
+    make_git_repo(&src);
+    rewrite_url(home, "https://example.com/owner/proj.git", &src);
+    let clone = home.join("code/example.com/owner/proj");
+    let env = r#"-c user.name="Env Me" -c user.signingkey='~/.ssh/my key.pub'"#;
+    for (args, want) in [
+        (&[][..], "user.name Env Me\nuser.signingkey ~/.ssh/my key.pub\n"),
+        (&["--", "-c", "user.name=Arg Me"], "user.name Arg Me\n"),
+        // An empty `--` turns the environment's off.
+        (&["--"], ""),
+    ] {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, home);
+        let out = run(cmd
+            .current_dir(home)
+            .env("H_GIT_OPTS", env)
+            .args(["--root", "code", "go", "https://example.com/owner/proj.git"])
+            .args(args));
+        assert_eq!(out.code, Some(0), "{args:?}: {out:?}");
+        let mut git = git_command(home);
+        let config =
+            run(git.arg("-C").arg(&clone).args(["config", "--local", "--get-regexp", "^user\\."]));
+        assert_eq!(config.stdout, want, "{args:?}");
+        fs::remove_dir_all(&clone).unwrap();
+    }
+
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, home);
+    let bad = r#"-c user.name="Env Me"#;
+    let out =
+        run(cmd.current_dir(home).env("H_GIT_OPTS", bad).args(["--root", "code", "go", "proj"]));
+    assert_failed_in(&out, home, &format!("H_GIT_OPTS: Unterminated quote in: {bad}\n"));
+    assert!(!clone.exists());
+}
+
+#[test]
 fn resolve_never_clones() {
     let tmp = tempfile::tempdir().unwrap();
     mkdirs(tmp.path(), &["github.com/owner/proj"]);

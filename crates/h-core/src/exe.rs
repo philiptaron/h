@@ -15,11 +15,11 @@ pub fn find_sibling(name: &str) -> PathBuf {
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let path = std::env::var_os("PATH").unwrap_or_default();
     let cwd = std::env::current_dir().ok();
-    sibling_of(current, &argv0, &path, cwd.as_deref(), name)
+    find_sibling_of(current, &argv0, &path, cwd.as_deref(), name)
 }
 
 /// [`find_sibling`], with the process state passed in.
-pub fn sibling_of(
+pub fn find_sibling_of(
     current_exe: Option<PathBuf>,
     argv0: &OsStr,
     path: &OsStr,
@@ -92,16 +92,16 @@ mod tests {
     #[test]
     fn prefers_the_current_exe() {
         let exe = Some(PathBuf::from("/nix/store/x/bin/h-shell-init"));
-        let got = sibling_of(exe, os("./elsewhere/h-shell-init"), os(""), None, "h");
+        let got = find_sibling_of(exe, os("./elsewhere/h-shell-init"), os(""), None, "h");
         assert_eq!(got, PathBuf::from("/nix/store/x/bin/h"));
     }
 
     #[test]
     fn falls_back_to_argv0_with_a_slash() {
         let cwd = Some(Path::new("/work"));
-        let got = sibling_of(None, os("/opt/bin/up-shell-init"), os(""), cwd, "up");
+        let got = find_sibling_of(None, os("/opt/bin/up-shell-init"), os(""), cwd, "up");
         assert_eq!(got, PathBuf::from("/opt/bin/up"));
-        let got = sibling_of(None, os("bin/up-shell-init"), os(""), cwd, "up");
+        let got = find_sibling_of(None, os("bin/up-shell-init"), os(""), cwd, "up");
         assert_eq!(got, PathBuf::from("/work/bin/up"));
     }
 
@@ -112,21 +112,22 @@ mod tests {
         install(&a, "h-shell-init", 0o644); // not executable, so skipped
         install(&b, "h-shell-init", 0o755);
         let path = path_list(&[&tmp.path().join("missing"), &a, &b]);
-        assert_eq!(sibling_of(None, os("h-shell-init"), &path, None, "h"), b.join("h"));
+        assert_eq!(find_sibling_of(None, os("h-shell-init"), &path, None, "h"), b.join("h"));
     }
 
     #[test]
     fn empty_path_entry_is_the_current_directory() {
         let tmp = tempfile::tempdir().unwrap();
         install(tmp.path(), "h-shell-init", 0o755);
-        let got = sibling_of(None, os("h-shell-init"), os("/nonexistent:"), Some(tmp.path()), "h");
+        let got =
+            find_sibling_of(None, os("h-shell-init"), os("/nonexistent:"), Some(tmp.path()), "h");
         assert_eq!(got, tmp.path().join("h"));
     }
 
     #[test]
     fn unknown_location_falls_back_to_the_bare_name() {
-        let got = sibling_of(None, os("h-shell-init"), os("/nonexistent"), None, "h");
+        let got = find_sibling_of(None, os("h-shell-init"), os("/nonexistent"), None, "h");
         assert_eq!(got, PathBuf::from("h"));
-        assert_eq!(sibling_of(None, os(""), os(""), None, "h"), PathBuf::from("h"));
+        assert_eq!(find_sibling_of(None, os(""), os(""), None, "h"), PathBuf::from("h"));
     }
 }

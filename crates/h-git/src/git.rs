@@ -131,9 +131,9 @@ pub const LOCAL_REPO_ENV: &[&str] = &[
 ];
 
 /// Git working on the repository in one directory, as `git -C <dir>` does, made by [`at`]. The
-/// functions [`run`], [`capture_output`] and [`prepare`] are git working on no repository in
-/// particular, as for `git init <dir>` and `git clone`. Either way, git runs free of the repository
-/// h was started in.
+/// functions [`run`], [`capture_output`] and [`prepare_command`] are git working on no repository
+/// in particular, as for `git init <dir>` and `git clone`. Either way, git runs free of the
+/// repository h was started in.
 #[derive(Debug, Clone, Copy)]
 pub struct Git<'a> {
     dir: Option<&'a Path>,
@@ -145,8 +145,8 @@ pub fn at(dir: &Path) -> Git<'_> {
 }
 
 /// Prepare a `git` command with `args`, its stdout redirected to stderr.
-pub fn prepare(args: &[impl AsRef<OsStr>]) -> Command {
-    Git { dir: None }.prepare(args)
+pub fn prepare_command(args: &[impl AsRef<OsStr>]) -> Command {
+    Git { dir: None }.prepare_command(args)
 }
 
 /// Run `git` with `args`.
@@ -163,7 +163,7 @@ impl Git<'_> {
     /// Prepare a `git` command with `args`, its stdout still attached to h's, free of the
     /// repository h was started in, so that it works on this one (or the repository it creates)
     /// and nothing else.
-    fn prepare_attached(self, args: &[impl AsRef<OsStr>]) -> Command {
+    fn prepare_attached_command(self, args: &[impl AsRef<OsStr>]) -> Command {
         let mut cmd = Command::new("git");
         for var in LOCAL_REPO_ENV {
             cmd.env_remove(var);
@@ -177,21 +177,21 @@ impl Git<'_> {
 
     /// Prepare a `git` command with `args`, its stdout redirected to stderr, so that h's stdout
     /// stays free for the directory it prints.
-    pub fn prepare(self, args: &[impl AsRef<OsStr>]) -> Command {
-        let mut cmd = self.prepare_attached(args);
+    pub fn prepare_command(self, args: &[impl AsRef<OsStr>]) -> Command {
+        let mut cmd = self.prepare_attached_command(args);
         cmd.stdout(stderr_as_stdout());
         cmd
     }
 
     /// Run `git` with `args`.
     pub fn run(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
-        let status = self.prepare(args).status().map_err(GitError::Spawn)?;
+        let status = self.prepare_command(args).status().map_err(GitError::Spawn)?;
         if status.success() { Ok(()) } else { Err(failed(args, status)) }
     }
 
     /// Run `git` with `args` and return what it printed on stdout.
     pub fn capture_output(self, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
-        let out = self.prepare_attached(args).output().map_err(GitError::Spawn)?;
+        let out = self.prepare_attached_command(args).output().map_err(GitError::Spawn)?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
@@ -220,7 +220,7 @@ impl Git<'_> {
     pub fn run_with_input(self, args: &[impl AsRef<OsStr>], input: &[u8]) -> Result<(), GitError> {
         use std::io::Write;
         let mut child =
-            self.prepare(args).stdin(Stdio::piped()).spawn().map_err(GitError::Spawn)?;
+            self.prepare_command(args).stdin(Stdio::piped()).spawn().map_err(GitError::Spawn)?;
         let written = child.stdin.take().expect("stdin is piped").write_all(input);
         let status = child.wait().map_err(GitError::Spawn)?;
         if status.success() { written.map_err(GitError::Spawn) } else { Err(failed(args, status)) }
@@ -228,7 +228,7 @@ impl Git<'_> {
 
     /// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
     pub fn run_attached(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
-        let status = self.prepare_attached(args).status().map_err(GitError::Spawn)?;
+        let status = self.prepare_attached_command(args).status().map_err(GitError::Spawn)?;
         if status.success() { Ok(()) } else { Err(failed(args, status)) }
     }
 }
@@ -370,7 +370,7 @@ mod tests {
         have.sort();
         assert_eq!(have, want, "LOCAL_REPO_ENV is out of date with this git");
 
-        let cmd = Git { dir: None }.prepare_attached(&["--version"]);
+        let cmd = Git { dir: None }.prepare_attached_command(&["--version"]);
         let removed: Vec<_> = cmd.get_envs().filter(|(_, value)| value.is_none()).collect();
         assert_eq!(removed.len(), LOCAL_REPO_ENV.len(), "{removed:?}");
     }

@@ -206,7 +206,7 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
             if cloned.is_ok() && has_submodules && submodules.checks_out() =>
         {
             let resolved = match req.upstream_url {
-                Some(upstream) => fork_submodule_urls(req, upstream, *store, &identity),
+                Some(upstream) => point_submodules_at_fork(req, upstream, *store, &identity),
                 None => Ok(()),
             };
             resolved
@@ -225,7 +225,7 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
 
 /// Point the relative submodule URLs of the fork cloned as `req` at the fork's copies where it has
 /// them and at the upstream's, at `upstream`, where it does not, saying which come from upstream.
-fn fork_submodule_urls(
+fn point_submodules_at_fork(
     req: &CloneRequest,
     upstream: &str,
     store: Option<&Path>,

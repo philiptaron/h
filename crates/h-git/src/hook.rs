@@ -356,10 +356,11 @@ fn save(path: &Path) -> Result<bool, GitError> {
     Ok(true)
 }
 
-/// The branch the worktree at `path` is on. A detached HEAD with commits that no branch, tag or
-/// remote-tracking branch has is given a branch of its own first: `worktree-<directory>`, or
-/// `worktree-<directory>-<commit>` when a branch of that name already has other work.
-fn branch(path: &Path) -> Result<Option<String>, GitError> {
+/// Give the worktree at `path` a branch when its work needs one, and say which branch it is on.
+/// A detached HEAD with commits that no branch, tag or remote-tracking branch has gets one of its
+/// own, `worktree-<directory>`, or `worktree-<directory>-<commit>` when a branch of that name
+/// already has other work. Any other detached HEAD is on no branch.
+fn ensure_branch(path: &Path) -> Result<Option<String>, GitError> {
     let repo = git::at(path);
     if let Some(branch) = repo.query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         return Ok(Some(branch));
@@ -415,7 +416,7 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
     }
 
     let saved = save(&path)?;
-    let branch = branch(&path)?;
+    let branch = ensure_branch(&path)?;
     let left = status(repo)?;
     if !left.is_empty() {
         return leave(&format!("still has changes that could not be committed:\n{left}"));

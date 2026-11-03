@@ -13,10 +13,10 @@ pub const MAX_DEPTH: usize = 3;
 /// The match is case-insensitive unless `term` contains an uppercase letter. Hidden directories
 /// are skipped. Deeper matches win, since `<domain>/<owner>/<repo>` is the usual layout; among
 /// matches at the same depth, the first in sorted order wins.
-pub fn search(root: &Path, term: &str) -> Option<PathBuf> {
+pub fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
     let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
     let mut best = None;
-    walk(root, term.as_bytes(), case_sensitive, 1, &mut best);
+    walk(root.as_ref(), term.as_bytes(), case_sensitive, 1, &mut best);
     best.map(|(_, path)| path)
 }
 
@@ -130,6 +130,6 @@ mod tests {
 
     #[test]
     fn missing_root_finds_nothing() {
-        assert_eq!(search(Path::new("/nonexistent/h-test-root"), "proj"), None);
+        assert_eq!(search("/nonexistent/h-test-root", "proj"), None);
     }
 }

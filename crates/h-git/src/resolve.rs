@@ -163,7 +163,8 @@ pub fn escape_segment(segment: &str) -> String {
 }
 
 /// Strip a trailing `.git` from a path, provided something precedes it.
-pub fn strip_git_extension(path: &Path) -> PathBuf {
+pub fn strip_git_extension(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
     let bytes = path.as_os_str().as_bytes();
     match bytes.strip_suffix(b".git") {
         Some(stem) if !stem.is_empty() => PathBuf::from(OsStr::from_bytes(stem)),
@@ -172,8 +173,8 @@ pub fn strip_git_extension(path: &Path) -> PathBuf {
 }
 
 /// Join `parts` onto `root` with `/`, without letting absolute or empty parts reset the path.
-fn concat_path(root: &Path, parts: &[&str]) -> PathBuf {
-    let mut bytes = root.as_os_str().to_owned().into_vec();
+fn concat_path(root: impl AsRef<Path>, parts: &[&str]) -> PathBuf {
+    let mut bytes = root.as_ref().as_os_str().to_owned().into_vec();
     for part in parts {
         bytes.push(b'/');
         bytes.extend_from_slice(part.as_bytes());
@@ -198,7 +199,11 @@ fn case_variants(dir: &Path, name: &str) -> Vec<String> {
 /// `code_root`, in any casing, since GitHub ignores case: the one spelled exactly as given when
 /// it exists, and otherwise the first in sorted order (which puts capitals first, as in the
 /// `NixOS/nixpkgs` an earlier lookup would have chosen over a typed `nixos/nixpkgs`).
-pub fn find_github_dir(code_root: &Path, user: &str, repo: &str) -> Option<(String, String)> {
+pub fn find_github_dir(
+    code_root: impl AsRef<Path>,
+    user: &str,
+    repo: &str,
+) -> Option<(String, String)> {
     let host = concat_path(code_root, &["github.com"]);
     let found: Vec<(String, String)> = case_variants(&host, user)
         .into_iter()
@@ -220,11 +225,12 @@ pub fn find_github_dir(code_root: &Path, user: &str, repo: &str) -> Option<(Stri
 /// no directory, is not found: cloning it could only fail. On failure, returns the message to
 /// show the user.
 pub fn resolve(
-    code_root: &Path,
+    code_root: impl AsRef<Path>,
     term: &str,
     casing: Casing,
     lookup: impl FnOnce(&str, &str) -> Answer,
 ) -> Result<Resolution, String> {
+    let code_root = code_root.as_ref();
     let not_found = || format!("{term} not found");
     let target = parse_term(term).map_err(|err| match err {
         ParseError::UnknownPattern => format!("Unknown pattern for {term}"),
@@ -260,7 +266,7 @@ pub fn resolve(
             })
         }
         Target::Remote { url, host, path } => Ok(Resolution {
-            path: strip_git_extension(&concat_path(code_root, &[&host, &path])),
+            path: strip_git_extension(concat_path(code_root, &[&host, &path])),
             clone_url: Some(url),
             remote: Some(remote_name(&host, &path)),
             upstream_url: None,
@@ -392,15 +398,13 @@ mod tests {
 
     #[test]
     fn concat_path_keeps_parts_under_root() {
-        let root = Path::new("/code");
-        assert_eq!(concat_path(root, &["host", "/abs"]), PathBuf::from("/code/host//abs"));
-        assert_eq!(concat_path(root, &["", "srv/x"]), PathBuf::from("/code//srv/x"));
+        assert_eq!(concat_path("/code", &["host", "/abs"]), PathBuf::from("/code/host//abs"));
+        assert_eq!(concat_path("/code", &["", "srv/x"]), PathBuf::from("/code//srv/x"));
     }
 
     #[test]
     fn resolves_github_with_lookup() {
-        let root = Path::new("/code");
-        let res = resolve(root, "zimbatm/H", Casing::Local, |user, repo| {
+        let res = resolve("/code", "zimbatm/H", Casing::Local, |user, repo| {
             assert_eq!((user, repo), ("zimbatm", "H"));
             Answer::Found(repo_info("ZimBatm/h", None))
         });
@@ -417,7 +421,7 @@ mod tests {
 
     #[test]
     fn resolves_github_without_lookup() {
-        let res = resolve(Path::new("/code"), "git@github.com:a/b.git", Casing::Local, unknown);
+        let res = resolve("/code", "git@github.com:a/b.git", Casing::Local, unknown);
         assert_eq!(
             res,
             Ok(Resolution {
@@ -469,7 +473,7 @@ mod tests {
         assert_eq!(found("Nixos", "Nixpkgs"), Some(("Nixos".into(), "Nixpkgs".into())));
         assert_eq!(found("NIXOS", "nixpkgs"), Some(("NixOS".into(), "nixpkgs".into())));
         assert_eq!(found("nixos", "other"), None);
-        assert_eq!(find_github_dir(Path::new("/nonexistent/h-root"), "a", "b"), None);
+        assert_eq!(find_github_dir("/nonexistent/h-root", "a", "b"), None);
     }
 
     #[test]
@@ -487,24 +491,24 @@ mod tests {
     #[test]
     fn resolves_forks_with_their_upstream() {
         let lookup = fork_of("me/nixpkgs", "NixOS/nixpkgs");
-        let res = resolve(Path::new("/code"), "me/nixpkgs", Casing::Local, lookup);
+        let res = resolve("/code", "me/nixpkgs", Casing::Local, lookup);
         assert_eq!(res.unwrap().upstream_url, Some("https://github.com/NixOS/nixpkgs.git".into()));
     }
 
     #[test]
     fn remote_names_have_no_empty_segments() {
-        let res = resolve(Path::new("/code"), "file:///srv/git/proj.git", Casing::Local, unknown);
+        let res = resolve("/code", "file:///srv/git/proj.git", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("srv/git/proj".into()));
-        let res = resolve(Path::new("/code"), "https://host//a/b/", Casing::Local, unknown);
+        let res = resolve("/code", "https://host//a/b/", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("host/a/b".into()));
     }
 
     #[test]
     fn remote_names_are_valid_in_refs() {
         let url = "file:///home/me/.local/x.lock.git";
-        let res = resolve(Path::new("/code"), url, Casing::Local, unknown);
+        let res = resolve("/code", url, Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("home/me/_.local/x.lock_".into()));
-        let res = resolve(Path::new("/code"), "owner/.github", Casing::Local, unknown);
+        let res = resolve("/code", "owner/.github", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("github.com/owner/_.github".into()));
         for (segment, escaped) in [
             ("plain-name_1.2", "plain-name_1.2"),
@@ -532,7 +536,7 @@ mod tests {
     #[test]
     fn resolves_remote_and_strips_git() {
         let url = "https://gitlab.com/group/project.git";
-        let res = resolve(Path::new("/code"), url, Casing::Local, not_asked);
+        let res = resolve("/code", url, Casing::Local, not_asked);
         assert_eq!(
             res,
             Ok(Resolution {
@@ -589,10 +593,10 @@ mod tests {
 
     #[test]
     fn strips_git_extension() {
-        assert_eq!(strip_git_extension(Path::new("/a/b.git")), PathBuf::from("/a/b"));
-        assert_eq!(strip_git_extension(Path::new("/a/b")), PathBuf::from("/a/b"));
-        assert_eq!(strip_git_extension(Path::new("/a/.git")), PathBuf::from("/a/"));
-        assert_eq!(strip_git_extension(Path::new(".git")), PathBuf::from(".git"));
+        assert_eq!(strip_git_extension("/a/b.git"), PathBuf::from("/a/b"));
+        assert_eq!(strip_git_extension("/a/b"), PathBuf::from("/a/b"));
+        assert_eq!(strip_git_extension("/a/.git"), PathBuf::from("/a/"));
+        assert_eq!(strip_git_extension(".git"), PathBuf::from(".git"));
     }
 
     #[test]

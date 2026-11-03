@@ -812,7 +812,7 @@ fn failed_worktrees_leave_nothing_behind() {
     // A failure part way through (here, writing a git option git rejects into the new clone)
     // removes what was made, but keeps a directory that was there.
     let bad_config = ["--", "-c", "nosection=x"];
-    let midway = "git config nosection x failed";
+    let midway = &format!("could not check out main of {PROJ}: git config exited with status 2");
     let dir = sb.tmp.path().join("midway");
     let args = [&["worktree", "proj", "main", dir.to_str().unwrap()][..], &bad_config].concat();
     fails(&args, midway);

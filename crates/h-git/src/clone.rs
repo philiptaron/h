@@ -153,9 +153,11 @@ pub fn clone_repo(req: &CloneRequest) -> u8 {
 fn clone_into(req: &CloneRequest) -> u8 {
     let result = if req.container {
         // A container's origin has every branch, however much history it has.
-        clone_container(req).and_then(|()| match req.upstream_url {
+        let cloned = clone_container(req).map_err(|err| err.context(cannot_clone(req)));
+        cloned.and_then(|()| match req.upstream_url {
             Some(url) => {
                 add_upstream(&req.path.join(BARE_DIR), url, &history_opts(&req.clone_opts()), false)
+                    .map_err(|err| err.context(cannot_add_upstream(url)))
             }
             None => Ok(()),
         })
@@ -171,13 +173,21 @@ fn clone_into(req: &CloneRequest) -> u8 {
     }
 }
 
+fn cannot_clone(req: &CloneRequest) -> String {
+    format!("could not clone {}", req.url)
+}
+
+fn cannot_add_upstream(url: &str) -> String {
+    format!("could not add the upstream {url}")
+}
+
 /// Clone as `req` asks: the superproject, then a fork's upstream, then the submodules when h
 /// clones them itself, and finally the identity into every submodule. The upstream is added even
 /// when git's own clone of the submodules fails, since git leaves the superproject in place then;
 /// the first failure is the one returned.
 fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
     let plan = plan(req);
-    let cloned = git::run(None, &git_clone_args(req));
+    let cloned = git::run(None, &git_clone_args(req)).map_err(|err| err.context(cannot_clone(req)));
     if cloned.is_err() && !req.path.join(".git").exists() {
         return cloned;
     }
@@ -185,6 +195,7 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
         Some(url) => {
             let opts = req.clone_opts();
             add_upstream(req.path, url, &history_opts(&opts), single_branch(&opts))
+                .map_err(|err| err.context(cannot_add_upstream(url)))
         }
         None => Ok(()),
     };
@@ -198,12 +209,17 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
                 Some(upstream) => fork_submodule_urls(req, upstream, *store, &identity),
                 None => Ok(()),
             };
-            resolved.and_then(|()| submodules::update(req.path, *store, submodules, &identity))
+            resolved
+                .and_then(|()| submodules::update(req.path, *store, submodules, &identity))
+                .map_err(|err| err.context("could not clone every submodule"))
         }
         _ => Ok(()),
     };
-    let identified =
-        if has_submodules { submodules::write_identity(req.path, &identity) } else { Ok(()) };
+    let identified = match has_submodules {
+        true => submodules::write_identity(req.path, &identity)
+            .map_err(|err| err.context("could not give the submodules the identity")),
+        false => Ok(()),
+    };
     cloned.and(upstream).and(cloned_submodules).and(identified)
 }
 

@@ -574,6 +574,9 @@ fn failed_clones_leave_no_directories_behind() {
         isolate_git(&mut cmd, home);
         let out = run(cmd.current_dir(home).arg("--root").arg(&root).args(["go", url]));
         assert_eq!(out.code, Some(128), "{out:?}");
+        // Git says why; h says what it could not do, and not the whole command it ran.
+        let said = format!("could not clone {url}: git clone exited with status 128\n");
+        assert!(out.stderr.ends_with(&said), "{out:?}");
     }
     // What was there before stays; only what the clones made is gone.
     let left: Vec<_> = fs::read_dir(root.join("example.com")).unwrap().flatten().collect();
@@ -919,7 +922,8 @@ fn missing_git_is_reported() {
         .args(["go", "https://example.com/proj"]));
     assert_eq!(out.code, Some(127));
     assert_eq!(out.stdout, format!("{}\n", canonical(tmp.path())));
-    assert!(out.stderr.starts_with("failed to run git: "), "{out:?}");
+    let said = "could not clone https://example.com/proj: failed to run git: ";
+    assert!(out.stderr.starts_with(said), "{out:?}");
 }
 
 #[test]

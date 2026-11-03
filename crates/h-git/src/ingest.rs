@@ -239,7 +239,9 @@ pub fn prefetch(store: &Store, urls: &[&str], lookup: &Lookup) -> Report {
     if !names.is_empty() {
         match store.fetch(&names, false) {
             Ok(fetched) => report.fetch = fetched,
-            Err(err) => report.failures.push(err.to_string()),
+            Err(err) => {
+                report.failures.push(err.context("could not fetch into the store").to_string())
+            }
         }
     }
     take_back_unfetched(store, &mut report);

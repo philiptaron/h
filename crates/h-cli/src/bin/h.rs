@@ -13,7 +13,7 @@ use h_core::args::split_words;
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
 use h_git::clone::{CloneRequest, clone_repo, limits_history, refresh_container_head};
-use h_git::git::config_pairs;
+use h_git::git::{GitError, config_pairs};
 use h_git::github;
 use h_git::hook;
 use h_git::ingest;
@@ -454,6 +454,9 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
                     store
                         .worktree(&name, reference, dir, &config.git_opts)
                         .map(|dir| print_path(&dir))
+                        .map_err(|e| {
+                            e.context(format!("could not check out {reference} of {name}"))
+                        })
                         .map_err(|e| e.to_string())
                 })
             }
@@ -496,7 +499,7 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
         }
     }
     if !store.exists() {
-        store.init(&config.git_opts).map_err(|e| e.to_string())?;
+        store.init(&config.git_opts).map_err(|e| cannot_make(store, e))?;
     }
     for Upstream { name, renames, .. } in &upstreams {
         let url = format!("https://{name}.git");
@@ -605,11 +608,16 @@ fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<
         Vec::new()
     };
     if !target.exists() {
-        target.init(&config.git_opts).map_err(|e| e.to_string())?;
+        target.init(&config.git_opts).map_err(|e| cannot_make(&target, e))?;
     }
     let report = ingest::ingest(&target, &dir, &identity, ingest::Scope::Everything)
         .map_err(|e| e.to_string())?;
     ingest_result(report)
+}
+
+/// Say that the store could not be made, because of `err`.
+fn cannot_make(store: &Store, err: GitError) -> String {
+    err.context(format!("could not make the store at {}", store.path.display())).to_string()
 }
 
 /// Say what an ingest added to the store and could not do, and fail when it did not do everything.
@@ -639,7 +647,7 @@ fn fetch_result(report: FetchReport) -> Result<(), String> {
         eprintln!("could not update {name}/-/HEAD: {err}");
     }
     match report.failed {
-        Some(err) => Err(err.to_string()),
+        Some(err) => Err(err.context("could not fetch every upstream").to_string()),
         None if report.heads_failed.is_empty() => Ok(()),
         None => Err("some upstreams' HEADs could not be updated".into()),
     }

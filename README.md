@@ -36,6 +36,9 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 
+When git fails, it says why, and `h` says what it could not do, such as `could not clone <url>:
+git clone exited with status 128`. Set `GIT_TRACE=1` to see every git command `h` runs in full.
+
 ### Cloning from GitHub
 
 Before cloning `user/repo`, `h` asks the GitHub API for the repository's canonical casing and

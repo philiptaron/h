@@ -20,6 +20,8 @@ pub enum GitError {
     Failed { args: Vec<OsString>, code: u8 },
     /// The request made no sense, so `git` was not run.
     Invalid(String),
+    /// What h could not do, because of `cause`.
+    Context { what: String, cause: Box<GitError> },
 }
 
 impl GitError {
@@ -29,19 +31,46 @@ impl GitError {
             GitError::Spawn(_) => 127,
             GitError::Failed { code, .. } => *code,
             GitError::Invalid(_) => 1,
+            GitError::Context { cause, .. } => cause.code(),
         }
     }
+
+    /// This error, said as what h could not do, `what`, because of it. Git has said why already,
+    /// as it went. An [`GitError::Invalid`] says it all for people already and stays as it is.
+    pub fn context(self, what: impl Into<String>) -> GitError {
+        match self {
+            GitError::Invalid(_) => self,
+            cause => GitError::Context { what: what.into(), cause: Box::new(cause) },
+        }
+    }
+}
+
+/// The git command `args` run: the first argument that is not one of git's own options, such as
+/// the `-c` settings of the identity, which say nothing about what failed.
+fn subcommand(args: &[OsString]) -> Option<&OsStr> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-c" || arg == "-C" {
+            iter.next();
+        } else if !arg.as_bytes().starts_with(b"-") {
+            return Some(arg);
+        }
+    }
+    None
 }
 
 impl fmt::Display for GitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GitError::Spawn(err) => write!(f, "failed to run git: {err}"),
-            GitError::Failed { args, code } => {
-                let shown: Vec<String> = args.iter().map(|a| a.to_string_lossy().into()).collect();
-                write!(f, "git {} failed with status {code}", shown.join(" "))
-            }
+            // Every argument would bury what failed under the identity and the options, and git
+            // has already said why; `GIT_TRACE=1` shows the whole command.
+            GitError::Failed { args, code } => match subcommand(args) {
+                Some(sub) => write!(f, "git {} exited with status {code}", sub.to_string_lossy()),
+                None => write!(f, "git exited with status {code}"),
+            },
             GitError::Invalid(msg) => f.write_str(msg),
+            GitError::Context { what, cause } => write!(f, "{what}: {cause}"),
         }
     }
 }
@@ -224,7 +253,22 @@ mod tests {
         let err = run(None, &["--no-such-option"]).unwrap_err();
         assert!(matches!(err, GitError::Failed { .. }), "{err:?}");
         assert_eq!(err.code(), 129);
-        assert_eq!(err.to_string(), "git --no-such-option failed with status 129");
+        assert_eq!(err.to_string(), "git exited with status 129");
+        let err = run(None, &["-c", "user.name=A B", "-C", "/", "no-such-command", "x"]);
+        assert_eq!(err.unwrap_err().to_string(), "git no-such-command exited with status 1");
+    }
+
+    #[test]
+    fn says_what_failed_in_context() {
+        let failed = GitError::Failed { args: vec!["clone".into(), "url".into()], code: 128 };
+        let err = failed.context("could not clone url");
+        assert_eq!(err.to_string(), "could not clone url: git clone exited with status 128");
+        assert_eq!(err.code(), 128);
+        let invalid = GitError::Invalid("--x cannot be used with --container".into());
+        assert_eq!(
+            invalid.context("could not clone url").to_string(),
+            "--x cannot be used with --container"
+        );
     }
 
     #[test]

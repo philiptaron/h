@@ -160,7 +160,7 @@ pub fn ingest(
                 partial_only.push(source.name.clone());
                 continue;
             }
-            match upstream(store, &lookup, source, &mut report) {
+            match ensure_upstream(store, &lookup, source, &mut report) {
                 Ok(name) if !names.contains(&name) => {
                     source.name = name.clone();
                     names.push(name);
@@ -237,7 +237,7 @@ pub fn prefetch(store: &Store, urls: &[&str], lookup: &Lookup) -> Report {
             continue;
         };
         let source = Source { name, url, remote: String::new(), tags: false };
-        match upstream(store, lookup, &source, &mut report) {
+        match ensure_upstream(store, lookup, &source, &mut report) {
             Ok(name) if !names.contains(&name) => names.push(name),
             Ok(_) => {}
             Err(err) => report.failures.push(format!("could not add {}: {err}", source.name)),
@@ -382,14 +382,15 @@ fn submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
         .collect()
 }
 
-/// The name `source` has in the store, putting it there if it is not, from its URL.
+/// Make sure `source` is in the store, putting it there from its URL if it is not, and say
+/// what the store calls it.
 ///
 /// A name the store has spelled exactly so is taken as it is, without the network. Otherwise a
 /// GitHub repository is named as GitHub names it, in its casing and under its current owner and
 /// name, and whatever the store has under another casing of that name, or of the name the remote
 /// gives, is renamed to it, or dropped when the store has both. When GitHub cannot be asked, a
 /// casing the store has already will do, and nothing is renamed.
-fn upstream(
+fn ensure_upstream(
     store: &Store,
     lookup: &Lookup,
     source: &Source,

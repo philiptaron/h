@@ -315,9 +315,9 @@ fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
     }
 }
 
-/// What `git status` reports in the worktree of `repo`, untracked files and changes inside
+/// Read what `git status` reports in the worktree of `repo`, untracked files and changes inside
 /// submodules included.
-fn status(repo: Git<'_>) -> Result<String, GitError> {
+fn read_status(repo: Git<'_>) -> Result<String, GitError> {
     let args = ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"];
     repo.capture(&args)
 }
@@ -328,7 +328,7 @@ fn status(repo: Git<'_>) -> Result<String, GitError> {
 /// passphrase with nobody there to type it. Returns whether there was anything to commit.
 fn save(path: &Path) -> Result<bool, GitError> {
     let repo = git::at(path);
-    if status(repo)?.is_empty() {
+    if read_status(repo)?.is_empty() {
         return Ok(false);
     }
     repo.run(&["add", "--all"])?;
@@ -417,7 +417,7 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
 
     let saved = save(&path)?;
     let branch = ensure_branch(&path)?;
-    let left = status(repo)?;
+    let left = read_status(repo)?;
     if !left.is_empty() {
         return leave(&format!("still has changes that could not be committed:\n{left}"));
     }

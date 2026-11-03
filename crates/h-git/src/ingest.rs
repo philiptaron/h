@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, Git, GitError, config_args};
 use crate::github::Lookup;
-use crate::hook::{common_dir, read_remotes, repository_root, store_of};
+use crate::hook::{find_common_dir, read_remotes, repository_root, store_of};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, negotiation_args};
@@ -103,7 +103,7 @@ pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
 
 /// The store the checkout at `dir` is a tenant of, else `fallback`, which need not exist yet.
 pub fn store_for(dir: &Path, fallback: Option<&Store>) -> Option<Store> {
-    let common = common_dir(dir).ok();
+    let common = find_common_dir(dir).ok();
     common.and_then(|common| store_of(&common, None)).or_else(|| fallback.cloned())
 }
 
@@ -120,7 +120,7 @@ pub fn ingest(
     identity: &[(OsString, OsString)],
     scope: Scope,
 ) -> Result<Report, GitError> {
-    let common = common_dir(dir)?;
+    let common = find_common_dir(dir)?;
     let root = repository_root(&common);
     let identity = if identity.is_empty() { local_identity(&root) } else { identity.to_vec() };
     let lookup = Lookup::new(&identity);
@@ -372,7 +372,7 @@ fn submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
         .into_iter()
         .map(|dir| {
             let dir = dir.as_path();
-            let common = common_dir(dir).ok()?;
+            let common = find_common_dir(dir).ok()?;
             let complete = is_complete(&common);
             let mut tenant =
                 Tenant { git_dir: common, complete, sources: Vec::new(), unusable: Vec::new() };

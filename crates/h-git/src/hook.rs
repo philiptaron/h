@@ -84,9 +84,9 @@ fn slug(name: &str) -> (String, String) {
     (slug, branch)
 }
 
-/// The repository `dir` belongs to: its common git directory, which is the main repository's
+/// Find the repository `dir` belongs to: its common git directory, which is the main repository's
 /// even from inside one of its worktrees.
-pub(crate) fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
+pub(crate) fn find_common_dir(dir: &Path) -> Result<PathBuf, GitError> {
     git::at(dir)
         .query(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .map(PathBuf::from)
@@ -209,7 +209,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     let cwd = PathBuf::from(field(&json, "cwd")?);
     check_name(&name)?;
     let (slug, branch) = slug(&name);
-    let common = common_dir(&cwd)?;
+    let common = find_common_dir(&cwd)?;
     let root = repository_root(&common);
     let repo = git::at(&root);
     let path = root.join(WORKTREES_DIR).join(&slug);

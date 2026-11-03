@@ -441,7 +441,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
         }
         Some("list") => print_upstreams(store),
         Some("add") => add_to_store(config, store, &terms),
-        Some("remove") => store_remove(config, store, &terms),
+        Some("remove") => remove_from_store(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
         Some("remote") => match terms.as_slice() {
             [term] => resolve_upstream(config, store, term, false).map(|u| println!("{}", u.name)),
@@ -558,7 +558,7 @@ fn remove_again(store: &Store, names: &[String], why: &str) {
     }
 }
 
-fn store_remove(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+fn remove_from_store(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
     if terms.is_empty() {
         return Err("Usage: h store remove <term>...".into());
     }

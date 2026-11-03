@@ -136,8 +136,8 @@ pub(crate) fn read_remotes(repo: Git<'_>) -> (Option<String>, Option<String>) {
     (upstream, own)
 }
 
-/// The store's name for the repository at `url`, spelled as the store spells it.
-fn store_name(store: &Store, url: &str) -> Option<String> {
+/// Find the store's name for the repository at `url`, spelled as the store spells it.
+fn find_store_name(store: &Store, url: &str) -> Option<String> {
     let name = match parse_term(url).ok()? {
         Target::GitHub { user, repo } => remote_name("github.com", &format!("{user}/{repo}")),
         Target::Remote { host, path, .. } => remote_name(&host, &path),
@@ -161,7 +161,7 @@ fn find_base(
     let (upstream, own) = read_remotes(repo);
     if let Some(store) = find_store(common, fallback) {
         let url = upstream.iter().chain(&own).find_map(|remote| repo.read_remote_url(remote));
-        if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
+        if let Some(name) = url.and_then(|url| find_store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
             let head = format!("refs/remotes/{name}{}/HEAD", if nested { "/-" } else { "" });
             if let Some(found) = git::at(&store.path).resolve_commit(&head)

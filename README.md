@@ -15,7 +15,7 @@ eval "$(h-shell-init [options] [code-root])"
 | --- | --- |
 | `--pushd` | use `pushd` instead of `cd` |
 | `--name NAME` | name the shell function NAME (default: `h`) |
-| `--store DIR` | the [object store](#the-object-store) that clones borrow from |
+| `--store DIR` | the [object store](#the-object-store) that clones are tenants of |
 | `--git-opts "OPTIONS"` | git options for every clone, typically `-c user.name=... -c user.email=...` |
 
 Tab completion for project names works in bash and zsh.
@@ -97,9 +97,10 @@ cloned this way.
 
 ## The object store
 
-A store is one bare repository that holds many upstream repositories as remotes. Clones borrow
-its objects, so a clone of a fork costs only the fork's own commits, and a project's history is
-downloaded once however many clones and identities use it.
+A store is one bare repository that holds many upstream repositories as remotes. Its *tenants*
+are the clones that borrow its objects: each names the store in its `objects/info/alternates`
+and keeps only the objects the store lacks. So a clone of a fork costs only the fork's own
+commits, and a project's history is downloaded once however many clones and identities use it.
 
 ```bash
 h store init                                  # create it
@@ -112,11 +113,11 @@ h store show nixpkgs master:lib/default.nix   # a file, straight from the store
 h store show torvalds/linux v6.12             # a commit
 h store show nixpkgs 1f0e2d3:flake.nix        # commit hashes work too
 h store worktree nixpkgs staging              # a cheap clone at staging, in a temporary directory
-h store ingest ~/code/github.com/me/project   # put a checkout and its submodules under the store
+h store ingest ~/code/github.com/me/project   # make a checkout and its submodules tenants
 h store maintain daily                        # commit-graph, incremental repack, prune worktrees
 ```
 
-The store needs git 2.45 or later, and so does any clone that borrows from it.
+The store needs git 2.45 or later, and so does every tenant.
 
 ### Names and refs
 
@@ -137,7 +138,7 @@ go either way. So `h store add nixos/nixpkgs` fixes a store that says `github.co
 
 - GitHub is asked only when the store doesn't already have the name spelled exactly so. When it
   can't be asked, a casing the store already has is used, and nothing is renamed.
-- A clone that borrowed under the old name is pointed at the new one the next time
+- A tenant that borrowed under the old name is pointed at the new one the next time
   `h store ingest` or the WorktreeCreate hook touches it.
 
 Terms given to `store` commands match what the store already has first. A name as
@@ -149,7 +150,7 @@ The store is never pushed to and never pruned.
 
 ### Clones and the store
 
-With a store configured, a clone:
+With a store configured, a clone is a tenant from the start. It:
 
 1. adds its upstream, and a fork's parent, to the store and fetches them there;
 2. borrows those objects (`git clone --reference-if-able`), so it downloads almost nothing itself;
@@ -159,25 +160,25 @@ With a store configured, a clone:
 A clone only tells servers about the store history it shares (its upstream's and a fork's
 parent's), so a store full of unrelated projects doesn't slow down every fetch.
 
-A shallow or partial clone (`--depth`, `--shallow-*` or `--filter`) still borrows from the store
-but doesn't add its history to it. A clone given its own `--reference` uses only that, as git
+A shallow or partial clone (`--depth`, `--shallow-*` or `--filter`) is still a tenant, but
+doesn't add its history to the store. A clone given its own `--reference` uses only that, as git
 does.
 
-### Putting existing checkouts under the store
+### Making existing checkouts tenants
 
-`h store ingest [DIR]` (by default, the checkout you're in) makes a checkout look as if it had been
-cloned with the store from the start. Use it for a clone made before the store, or after a pull
-brings in new submodules.
+`h store ingest [DIR]` (by default, the checkout you're in) makes a checkout and its submodules
+tenants of the store, as if the checkout had been cloned with the store from the start. Use it
+for a clone made before the store, or after a pull brings in new submodules.
 
 - Every remote of the checkout becomes an upstream in the store, and so does every remote of
   every submodule, at every level.
 - Submodules not yet cloned are cloned, borrowing from the store.
-- The checkout and its submodules then drop their own copies of the store's objects
-  (`git repack -a -d -l --cruft`). Nothing the store lacks is lost.
+- Each tenant then drops its own copies of the store's objects (`git repack -a -d -l --cruft`).
+  Nothing the store lacks is lost.
 - A new upstream is fetched from the checkout first (its remote-tracking branches and tags,
   never its local branches), then from its URL, so its history isn't downloaded again.
 - A shallow or partial clone isn't fetched from, and keeps its objects.
-- A checkout that already borrows from another store, such as another identity's, is ingested
+- A checkout that is already a tenant of another store, such as another identity's, is ingested
   into that one.
 
 It does what it can and names what it couldn't, exiting nonzero if anything failed. It leaves out,
@@ -200,8 +201,8 @@ first fetch fails.
 
 ### Worktrees from the store
 
-`h store worktree <term> <ref> [DIR]` makes a cheap clone of one upstream that borrows the store's
-objects, and prints its directory.
+`h store worktree <term> <ref> [DIR]` makes a cheap clone of one upstream, a tenant of the store,
+and prints its directory.
 
 - It looks like an ordinary clone: branches as `origin/*`, `origin/HEAD` at the default branch,
   and tags as plain tags, so `git describe` and build tools behave as usual.
@@ -260,7 +261,7 @@ names Claude Code uses itself), and prints its path.
   container for a container clone.
 - The branch starts from the store's copy of the upstream's default branch (a fork's parent's,
   or else the clone's own) as of the last `h store fetch`, so it is fresh without touching the
-  network. The store is the one the clone borrows from, so each identity uses its own.
+  network. The store is the one the clone is a tenant of, so each identity uses its own.
 - Without a store, the branch starts from `upstream/HEAD`, then `origin/HEAD`, then HEAD.
 - Submodules are cloned from the store, at every level, and those the store lacks are put there.
   What fails there is only warned about, since the worktree is usable without it.

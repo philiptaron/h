@@ -164,8 +164,8 @@ fn base(
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
             let head = format!("refs/remotes/{name}{}/HEAD", if nested { "/-" } else { "" });
-            if let Some(found) = git::at(&store.path).commit(&head)
-                && repo.commit(&found).is_some()
+            if let Some(found) = git::at(&store.path).resolve_commit(&head)
+                && repo.resolve_commit(&found).is_some()
             {
                 let from = format!("{name}/HEAD in the store at {}", store.path.display());
                 return Ok((found, from));
@@ -174,7 +174,7 @@ fn base(
     }
     let refs = upstream.iter().chain(&own).map(|remote| format!("refs/remotes/{remote}/HEAD"));
     for rev in refs.chain(["HEAD".to_string()]) {
-        if let Some(found) = repo.commit(&rev) {
+        if let Some(found) = repo.resolve_commit(&rev) {
             return Ok((found, rev));
         }
     }
@@ -230,7 +230,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
-    let added = if repo.commit(&format!("refs/heads/{branch}")).is_some() {
+    let added = if repo.resolve_commit(&format!("refs/heads/{branch}")).is_some() {
         repo.run(&["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
             path,
             branch,
@@ -364,7 +364,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     if let Some(branch) = repo.query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         return Ok(Some(branch));
     }
-    let Some(head) = repo.commit("HEAD") else {
+    let Some(head) = repo.resolve_commit("HEAD") else {
         return Ok(None);
     };
     let unique =
@@ -374,7 +374,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     }
     let dir = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let mut name = format!("worktree-{dir}");
-    if repo.commit(&format!("refs/heads/{name}")).is_some() {
+    if repo.resolve_commit(&format!("refs/heads/{name}")).is_some() {
         name = format!("{name}-{}", &head[..head.len().min(12)]);
     }
     repo.run(&["branch", &name, &head])?;

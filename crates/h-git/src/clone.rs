@@ -400,7 +400,8 @@ pub fn refresh_container_head(path: &Path) {
     if repo.output(&["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
         return;
     }
-    let (Some(new), Some(old)) = (repo.commit("refs/remotes/origin/HEAD"), repo.commit("HEAD"))
+    let (Some(new), Some(old)) =
+        (repo.resolve_commit("refs/remotes/origin/HEAD"), repo.resolve_commit("HEAD"))
     else {
         return;
     };

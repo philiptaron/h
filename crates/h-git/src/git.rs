@@ -205,7 +205,7 @@ impl Git<'_> {
     }
 
     /// The commit `rev` names, if it names one.
-    pub fn commit(self, rev: &str) -> Option<String> {
+    pub fn resolve_commit(self, rev: &str) -> Option<String> {
         self.query(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
     }
 

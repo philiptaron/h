@@ -440,7 +440,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
             Ok(())
         }
         Some("list") => print_upstreams(store),
-        Some("add") => store_add(config, store, &terms),
+        Some("add") => add_to_store(config, store, &terms),
         Some("remove") => store_remove(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
         Some("remote") => match terms.as_slice() {
@@ -491,7 +491,7 @@ fn print_upstreams(store: &Store) -> Result<(), String> {
     Ok(())
 }
 
-fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+fn add_to_store(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
     if terms.is_empty() {
         return Err("Usage: h store add <term>...".into());
     }

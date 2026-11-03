@@ -617,7 +617,7 @@ fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<
     }
     let report = ingest::ingest(&target, &dir, &identity, ingest::Scope::Everything)
         .map_err(|e| e.to_string())?;
-    ingest_result(report)
+    report_ingest(report)
 }
 
 /// Say that the store could not be made, because of `err`.
@@ -626,7 +626,7 @@ fn cannot_make(store: &Store, err: GitError) -> String {
 }
 
 /// Say what an ingest added to the store and could not do, and fail when it did not do everything.
-fn ingest_result(report: ingest::Report) -> Result<(), String> {
+fn report_ingest(report: ingest::Report) -> Result<(), String> {
     say_renamed(&report);
     for name in &report.added {
         eprintln!("added {name}");

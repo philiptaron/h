@@ -89,9 +89,9 @@ struct Tenant {
     unusable: Vec<(String, String)>,
 }
 
-/// The repository's own configuration settings for the identity it was cloned with, `user.*`
+/// Read the repository's own configuration settings for the identity it was cloned with, `user.*`
 /// and `credential.*`, as `-c` pairs: what the shell function passes `h`, when nothing does.
-pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
+pub fn read_local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
     let pattern = r"^(user|credential)\.";
     let out = git::at(dir).capture(&["config", "--local", "-z", "--get-regexp", pattern]);
     out.unwrap_or_default()
@@ -122,7 +122,7 @@ pub fn ingest(
 ) -> Result<Report, GitError> {
     let common = find_common_dir(dir)?;
     let root = repository_root(&common);
-    let identity = if identity.is_empty() { local_identity(&root) } else { identity.to_vec() };
+    let identity = if identity.is_empty() { read_local_identity(&root) } else { identity.to_vec() };
     let lookup = Lookup::new(&identity);
     let mut report = Report::default();
     let mut tenants = Vec::new();
@@ -664,7 +664,7 @@ mod tests {
             git::at(dir).run(&["config", key, value]).unwrap();
         }
         let want = pairs(&[("user.name", "Me Too"), ("credential.username", "me")]);
-        assert_eq!(local_identity(dir), want);
+        assert_eq!(read_local_identity(dir), want);
     }
 
     #[test]

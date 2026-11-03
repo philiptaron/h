@@ -267,7 +267,8 @@ impl Report {
     }
 
     /// What went wrong, one line each, for people: upstreams taken out again, failed fetches,
-    /// and everything else.
+    /// and everything else. Git names each upstream it could not fetch as it fails, so a failed
+    /// fetch is said only when no upstream taken out again says it already.
     pub fn problems(&self) -> Vec<String> {
         let mut lines: Vec<String> = self
             .removed_again
@@ -276,8 +277,8 @@ impl Report {
                 format!("removed {name} from the store again, since it could not be fetched")
             })
             .collect();
-        if let Some(err) = &self.fetch.failed {
-            lines.push(format!("fetching into the store failed: {err}"));
+        if self.fetch.failed.is_some() && self.removed_again.is_empty() {
+            lines.push("could not fetch every upstream into the store".into());
         }
         for (name, err) in &self.fetch.heads_failed {
             lines.push(format!("could not update {name}/-/HEAD: {err}"));
@@ -648,5 +649,17 @@ mod tests {
                 .map(|(k, v)| (OsString::from(k), OsString::from(v)))
                 .collect();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn failed_fetches_are_said_once() {
+        let failed = || GitError::Failed { args: vec!["fetch".into()], code: 1 };
+        let mut report = Report::default();
+        report.fetch.failed = Some(failed());
+        assert_eq!(report.problems(), ["could not fetch every upstream into the store"]);
+        report.removed_again.push("github.com/me/gone".into());
+        let removed =
+            "removed github.com/me/gone from the store again, since it could not be fetched";
+        assert_eq!(report.problems(), [removed]);
     }
 }

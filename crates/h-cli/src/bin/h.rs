@@ -77,7 +77,7 @@ fn main() -> ExitCode {
             args.pop();
             opts
         }
-        None => match env_git_opts() {
+        None => match read_env_git_opts() {
             Ok(opts) => opts,
             Err(msg) => return fail_with_cwd(&msg),
         },
@@ -144,8 +144,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// The git options in `$H_GIT_OPTS`, split as the shell function would split its `--git-opts`.
-fn env_git_opts() -> Result<Vec<OsString>, String> {
+/// Read the git options in `$H_GIT_OPTS`, split as the shell function would split its `--git-opts`.
+fn read_env_git_opts() -> Result<Vec<OsString>, String> {
     let Some(line) = std::env::var_os("H_GIT_OPTS") else {
         return Ok(Vec::new());
     };

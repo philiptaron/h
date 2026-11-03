@@ -487,7 +487,7 @@ pub fn add_upstream(
         let msg = format!("Cannot tell which remote of {} to push to: {remotes:?}", dir.display());
         return Err(GitError::Invalid(msg));
     };
-    let branch = if single_branch { default_branch(repo, url)? } else { None };
+    let branch = if single_branch { ask_default_branch(repo, url)? } else { None };
     let mut add = vec!["remote", "add"];
     if let Some(branch) = &branch {
         add.extend(["-t", branch]);
@@ -503,8 +503,8 @@ pub fn add_upstream(
     repo.run(&fetch)
 }
 
-/// The branch that HEAD names in the repository at `url`, if it names one.
-fn default_branch(repo: Git<'_>, url: &str) -> Result<Option<String>, GitError> {
+/// Ask the repository at `url` which branch its HEAD names, if it names one.
+fn ask_default_branch(repo: Git<'_>, url: &str) -> Result<Option<String>, GitError> {
     let out = repo.capture(&["ls-remote", "--symref", url, "HEAD"])?;
     let branch =
         out.lines().find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"));

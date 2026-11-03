@@ -18,11 +18,16 @@ A noun name fails the test, and can mislead: `repo.commit("HEAD")` reads as "mak
 when it only looks one up. A name that hides an effect is the worst case. A function that may
 create a branch is `ensure_branch`, not `branch`.
 
+Name what the verb acts on, too, unless the receiver already says it. A bare verb is too short:
+`repo.capture(&args)` leaves open what is captured, and `repo.prepare(&args)` what is
+prepared. Say `capture_output` and `prepare_command`. A verb that is the whole act, as `run`,
+`fetch` and `maintain` are on their receivers, needs nothing more.
+
 ### Where the rule applies
 
 - **Everything that does I/O**, meaning it runs git, touches files, talks to the network or
   prints, is named for what it does: `capture_output`, `read_status`, `find_base`,
-  `ensure_in_store`, `check_out_worktree`, `report_fetch`.
+  `ensure_upstream`, `check_out_worktree`, `report_fetch`.
 - **Pure computations** that only derive a value from their arguments may keep Rust's noun style
   for getters (no `get_` prefix): `config_args`, `history_opts`, `remote_name`, `refspecs`.
 

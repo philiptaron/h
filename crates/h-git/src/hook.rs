@@ -146,13 +146,13 @@ fn store_name(store: &Store, url: &str) -> Option<String> {
     store.find(&name)
 }
 
-/// The commit a new worktree of the repository at `root` starts from, and how it was found.
+/// Find the commit a new worktree of the repository at `root` starts from, and say how.
 ///
 /// That is the store's copy of the upstream's default branch, as of the last fetch into the store,
 /// when the clone's upstream (a fork's parent, else its own remote) is in the store and the commit
 /// is there for the clone through its alternates. Otherwise it is `upstream/HEAD`, then the
 /// clone's own `origin/HEAD`, then HEAD. Nothing is fetched.
-fn base(
+fn find_base(
     root: &Path,
     common: &Path,
     fallback: Option<&Store>,
@@ -195,9 +195,9 @@ fn is_worktree_of(repo: Git<'_>, path: &Path) -> bool {
 ///
 /// It goes in `<repository>/.claude/worktrees/<name>` on the branch `worktree-<name>`, the names
 /// Claude Code uses itself, in the main repository even when the session is in one of its
-/// worktrees. The branch starts at [`base`]. A branch of that name that already exists, as one a
-/// removed worktree left behind, is checked out again instead, and a worktree already there is
-/// used as it is.
+/// worktrees. The branch starts at what [`find_base`] finds. A branch of that name that already
+/// exists, as one a removed worktree left behind, is checked out again instead, and a worktree
+/// already there is used as it is.
 ///
 /// A directory already there that is not a worktree, such as one a build or a language server
 /// still running in a removed worktree wrote into again, is moved aside to the first of
@@ -237,7 +237,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
             base: "its existing branch".into(),
         })
     } else {
-        base(&root, &common, fallback).and_then(|(start, from)| {
+        find_base(&root, &common, fallback).and_then(|(start, from)| {
             repo.run(&["worktree", "add", "--quiet", "-b", &branch, &target, &start])
                 .map(|()| Created { path, branch, base: from })
         })

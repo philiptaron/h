@@ -395,7 +395,7 @@ fn upstream(
     source: &Source,
     report: &mut Report,
 ) -> Result<String, GitError> {
-    if store.remotes()?.contains(&source.name) {
+    if store.list_remotes()?.contains(&source.name) {
         return Ok(source.name.clone());
     }
     let (name, url) = match canonical(lookup, &source.url) {
@@ -408,7 +408,7 @@ fn upstream(
     let same = |r: &String| {
         *r != name && (r.eq_ignore_ascii_case(&name) || r.eq_ignore_ascii_case(&source.name))
     };
-    for other in store.remotes()?.into_iter().filter(same) {
+    for other in store.list_remotes()?.into_iter().filter(same) {
         store.rename_remote(&other, &name, &url)?;
         report.renamed.push((other, name.clone()));
     }
@@ -454,7 +454,7 @@ pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
     let Some(configured) = repo.query(&["config", "--get", key]) else {
         return Ok(());
     };
-    let existing = store.remotes()?;
+    let existing = store.list_remotes()?;
     let mut prefixes: Vec<String> = Vec::new();
     for prefix in configured.split_whitespace() {
         let parsed = ["refs/remotes/", "refs/tags/"].into_iter().find_map(|namespace| {

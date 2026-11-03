@@ -125,7 +125,7 @@ impl Store {
         }
         // Upstreams added before HEAD was followed, or before negotiation was restricted, are
         // fetched as new ones are from now on.
-        for name in self.remotes()? {
+        for name in self.list_remotes()? {
             let nested = self.is_nested(&name)?;
             self.follow_remote_head(&name, nested)?;
             self.restrict_negotiation(&name)?;
@@ -136,8 +136,8 @@ impl Store {
         Ok(())
     }
 
-    /// The names of the upstreams in the store.
-    pub fn remotes(&self) -> Result<Vec<String>, GitError> {
+    /// List the names of the upstreams in the store.
+    pub fn list_remotes(&self) -> Result<Vec<String>, GitError> {
         let out = self.git().capture(&["remote"])?;
         Ok(out.lines().map(String::from).collect())
     }
@@ -145,7 +145,7 @@ impl Store {
     /// The upstream called `name`, spelled as the store spells it: exactly, or else, on GitHub,
     /// whose names ignore case, in another casing. `None` when the store has no such upstream.
     pub fn find(&self, name: &str) -> Option<String> {
-        let existing = self.remotes().ok()?;
+        let existing = self.list_remotes().ok()?;
         let exact = existing.iter().find(|r| *r == name);
         let github = name.starts_with("github.com/");
         let other_case = || existing.iter().find(|r| github && r.eq_ignore_ascii_case(name));
@@ -159,7 +159,7 @@ impl Store {
     /// outer one first. The remote is written into the configuration directly, since `git remote
     /// add` refuses a name that extends another's.
     pub fn add_remote(&self, name: &str, url: &str) -> Result<bool, GitError> {
-        let remotes = self.remotes()?;
+        let remotes = self.list_remotes()?;
         if remotes.iter().any(|r| r == name) {
             return Ok(false);
         }
@@ -191,7 +191,8 @@ impl Store {
     pub fn remove_remote(&self, name: &str) -> Result<(), GitError> {
         let repo = self.git();
         let prefix = self.find_prefix(name)?;
-        let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, name)).collect();
+        let inner: Vec<String> =
+            self.list_remotes()?.into_iter().filter(|r| extends(r, name)).collect();
         let namespaces = [format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/")];
         let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
         args.extend(namespaces.iter().cloned());
@@ -227,13 +228,14 @@ impl Store {
     /// since a name that differs only in case is the same file to the files ref backend on a
     /// case-insensitive filesystem; a reftable has no such trouble, but it is one way for both.
     pub fn rename_remote(&self, old: &str, new: &str, url: &str) -> Result<(), GitError> {
-        if self.remotes()?.iter().any(|r| r == new) {
+        if self.list_remotes()?.iter().any(|r| r == new) {
             return self.remove_remote(old);
         }
         self.add_remote(new, url)?;
         let repo = self.git();
         let (from, to) = (self.find_prefix(old)?, self.find_prefix(new)?);
-        let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, old)).collect();
+        let inner: Vec<String> =
+            self.list_remotes()?.into_iter().filter(|r| extends(r, old)).collect();
         let namespaces =
             [("remotes", format!("refs/remotes/{from}/")), ("tags", format!("refs/tags/{from}/"))];
         let format = "--format=%(refname)%00%(objectname)%00%(symref)";
@@ -424,7 +426,7 @@ impl Store {
     /// Tags are never pruned, even in stores made before [`STORE_CONFIG`] said so: git passes
     /// `--no-prune-tags` on to the fetch of each upstream.
     pub fn fetch(&self, names: &[String], quiet: bool) -> Result<FetchReport, GitError> {
-        let fetched = if names.is_empty() { self.remotes()? } else { names.to_vec() };
+        let fetched = if names.is_empty() { self.list_remotes()? } else { names.to_vec() };
         let mut args: Vec<String> = Vec::new();
         // An upstream with no relatives offers nothing, but git warns that its pattern matches
         // no branch. A branch that does not exist yet is passed over in silence, so it is

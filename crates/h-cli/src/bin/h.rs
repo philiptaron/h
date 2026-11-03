@@ -293,7 +293,7 @@ fn warn_about(report: &ingest::Report, consequence: &str) {
 /// for a fork, its parent's. Each is spelled as the store spells it when the store has it
 /// (GitHub names ignore case), and as it would be added otherwise.
 fn shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> {
-    let existing = store.remotes().unwrap_or_default();
+    let existing = store.list_remotes().unwrap_or_default();
     let parent = resolution.upstream_url.as_deref().and_then(|url| match parse_term(url) {
         Ok(Target::GitHub { user, repo }) => {
             Some(remote_name("github.com", &format!("{user}/{repo}")))
@@ -344,7 +344,7 @@ struct Upstream {
 /// another casing, or under the name GitHub has since renamed it from; those are to be renamed.
 fn upstream_for(config: &Config, store: &Store, term: &str, ask: bool) -> Result<Upstream, String> {
     let existing = match store.exists() {
-        true => store.remotes().map_err(|e| e.to_string())?,
+        true => store.list_remotes().map_err(|e| e.to_string())?,
         false => Vec::new(),
     };
     if existing.iter().any(|r| r == term) {
@@ -480,7 +480,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
 }
 
 fn store_list(store: &Store) -> Result<(), String> {
-    for name in store.remotes().map_err(|e| e.to_string())? {
+    for name in store.list_remotes().map_err(|e| e.to_string())? {
         println!("{name}");
     }
     Ok(())

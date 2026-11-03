@@ -299,9 +299,10 @@ impl Store {
         self.git().run(&["config", "--replace-all", &key, &negotiation_restrict(name)])
     }
 
-    /// The upstreams among `names` whose fetches have no relative's branch to offer the server,
-    /// as a new upstream unlike any other has none: [`negotiation_restrict`] matches nothing.
-    fn without_relatives(&self, names: &[String]) -> Result<Vec<String>, GitError> {
+    /// Find the upstreams among `names` whose fetches have no relative's branch to offer the
+    /// server, as a new upstream unlike any other has none: [`negotiation_restrict`] matches
+    /// nothing.
+    fn find_without_relatives(&self, names: &[String]) -> Result<Vec<String>, GitError> {
         let format = "--format=%(refname)";
         let branches = self.git().capture(&["for-each-ref", format, "refs/remotes/"])?;
         let branches: Vec<&str> =
@@ -428,7 +429,7 @@ impl Store {
         // An upstream with no relatives offers nothing, but git warns that its pattern matches
         // no branch. A branch that does not exist yet is passed over in silence, so it is
         // restricted to its own HEAD instead, after an empty value drops the pattern.
-        for name in self.without_relatives(&fetched)? {
+        for name in self.find_without_relatives(&fetched)? {
             let key = format!("remote.{name}.negotiationRestrict");
             let head = format!("refs/remotes/{}/HEAD", self.find_prefix(&name)?);
             args.extend(["-c".into(), format!("{key}="), "-c".into(), format!("{key}={head}")]);

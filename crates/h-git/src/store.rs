@@ -457,12 +457,12 @@ impl Store {
         Ok(report)
     }
 
-    /// `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or
+    /// Qualify `reference` of upstream `name` as git should be given it: `<name>/<reference>` (or
     /// `<name>/-/<reference>`, when nested) when that names something, and otherwise `reference`
     /// itself if it is a commit hash, as `1f0e2d3` and `1f0e2d3~2` are. Any other reference stays
     /// qualified, so one the upstream lacks fails rather than naming something else in the
     /// store, as `HEAD` would name the store's own.
-    fn revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
+    fn qualify_revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
         let qualified = format!("{}/{reference}", self.find_prefix(name)?);
         let object = format!("{qualified}^{{object}}");
         let found = self.git().capture(&["rev-parse", "--verify", "--quiet", &object]).is_ok();
@@ -475,7 +475,7 @@ impl Store {
             Some(i) if i > 0 => spec.split_at(i),
             _ => (spec, ""),
         };
-        let spec = format!("{}{path}", self.revision(name, reference)?);
+        let spec = format!("{}{path}", self.qualify_revision(name, reference)?);
         self.git().run_attached(&["show", &spec])
     }
 
@@ -536,7 +536,7 @@ impl Store {
         if let Some(branch) = branch {
             return Ok(Start::Branch(branch));
         }
-        let commit = format!("{}^{{commit}}", self.revision(name, reference)?);
+        let commit = format!("{}^{{commit}}", self.qualify_revision(name, reference)?);
         match repo.capture(&["rev-parse", "--verify", "--quiet", &commit]) {
             Ok(oid) => Ok(Start::Detached(oid.trim().to_string())),
             Err(_) => {

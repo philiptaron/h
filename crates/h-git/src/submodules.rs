@@ -411,7 +411,7 @@ pub fn resolve_fork_urls(
             continue;
         }
         let in_store = || {
-            let found = store_upstream(&fork).and_then(|(name, _)| store?.find(&name));
+            let found = store_upstream(&fork).and_then(|(name, _)| store?.find_upstream(&name));
             found.is_some()
         };
         if in_store() || answers(&fork, identity) {

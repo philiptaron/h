@@ -156,7 +156,7 @@ pub fn ingest(
     let mut partial_only = Vec::new();
     for tenant in &mut tenants {
         for source in &mut tenant.sources {
-            if !tenant.complete && store.find(&source.name).is_none() {
+            if !tenant.complete && store.find_upstream(&source.name).is_none() {
                 partial_only.push(source.name.clone());
                 continue;
             }
@@ -183,8 +183,8 @@ pub fn ingest(
     // An upstream the store has no history of yet gets the tenant's first.
     for tenant in tenants.iter().filter(|tenant| tenant.complete) {
         for source in &tenant.sources {
-            let new =
-                store.find(&source.name).is_some() && !store.has_refs(&source.name).unwrap_or(true);
+            let new = store.find_upstream(&source.name).is_some()
+                && !store.has_refs(&source.name).unwrap_or(true);
             if new && let Err(err) = fetch_local(store, &tenant.git_dir, source) {
                 let msg =
                     format!("could not fetch {} from {}: {err}", source.name, display(tenant));
@@ -208,7 +208,7 @@ pub fn ingest(
             .sources
             .iter()
             .map(|s| s.name.clone())
-            .filter(|n| store.find(n).is_some())
+            .filter(|n| store.find_upstream(n).is_some())
             .collect();
         if names.is_empty() {
             continue;
@@ -401,7 +401,7 @@ fn ensure_upstream(
     }
     let (name, url) = match ask_canonical(lookup, &source.url) {
         Some(canonical) => canonical,
-        None => match store.find(&source.name) {
+        None => match store.find_upstream(&source.name) {
             Some(name) => return Ok(name),
             None => (source.name.clone(), source.url.clone()),
         },
@@ -466,7 +466,9 @@ pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
         let repaired = match parsed {
             None => Some(prefix.to_string()),
             Some((_, name)) if existing.iter().any(|r| r == name) => Some(prefix.to_string()),
-            Some((namespace, name)) => store.find(name).map(|found| format!("{namespace}{found}/")),
+            Some((namespace, name)) => {
+                store.find_upstream(name).map(|found| format!("{namespace}{found}/"))
+            }
         };
         if let Some(repaired) = repaired.filter(|p| !prefixes.contains(p)) {
             prefixes.push(repaired);

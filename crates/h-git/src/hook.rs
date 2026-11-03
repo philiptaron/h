@@ -143,7 +143,7 @@ fn find_store_name(store: &Store, url: &str) -> Option<String> {
         Target::Remote { host, path, .. } => remote_name(&host, &path),
         Target::Name(_) => return None,
     };
-    store.find(&name)
+    store.find_upstream(&name)
 }
 
 /// Find the commit a new worktree of the repository at `root` starts from, and say how.

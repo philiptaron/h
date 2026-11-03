@@ -142,9 +142,10 @@ impl Store {
         Ok(out.lines().map(String::from).collect())
     }
 
-    /// The upstream called `name`, spelled as the store spells it: exactly, or else, on GitHub,
-    /// whose names ignore case, in another casing. `None` when the store has no such upstream.
-    pub fn find(&self, name: &str) -> Option<String> {
+    /// Find the upstream called `name`, spelled as the store spells it: exactly, or else, on
+    /// GitHub, whose names ignore case, in another casing. `None` when the store has no such
+    /// upstream.
+    pub fn find_upstream(&self, name: &str) -> Option<String> {
         let existing = self.list_remotes().ok()?;
         let exact = existing.iter().find(|r| *r == name);
         let github = name.starts_with("github.com/");

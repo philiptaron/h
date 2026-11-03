@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Stdio;
 
-use crate::git::{self, GitError, config_args, config_pairs, non_config_opts};
+use crate::git::{self, Git, GitError, config_args, config_pairs, non_config_opts};
 use crate::store::Store;
 use crate::submodules::{self, SubmoduleOptions};
 
@@ -187,7 +187,7 @@ fn cannot_add_upstream(url: &str) -> String {
 /// the first failure is the one returned.
 fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
     let plan = plan(req);
-    let cloned = git::run(None, &git_clone_args(req)).map_err(|err| err.context(cannot_clone(req)));
+    let cloned = git::run(&git_clone_args(req)).map_err(|err| err.context(cannot_clone(req)));
     if cloned.is_err() && !req.path.join(".git").exists() {
         return cloned;
     }
@@ -339,13 +339,14 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
     let mut opts = req.git_opts.to_vec();
     opts.extend(req.extra.iter().cloned());
     let config = config_pairs(&opts);
-    let head = remote_head(req.url, req.path.parent(), &config)?;
+    let head = remote_head(req.url, req.path.parent().unwrap_or(Path::new("/")), &config)?;
     let format = format!("--object-format={}", head.object_format()?);
-    git::run(None, &git::args!["init", "--bare", "--quiet", format, bare])?;
+    git::run(&git::args!["init", "--bare", "--quiet", format, bare])?;
+    let repo = git::at(&bare);
     // Worktrees link to the container by relative paths, so the whole can be moved (git 2.48).
-    git::run(Some(&bare), &["config", "worktree.useRelativePaths", "true"])?;
+    repo.run(&["config", "worktree.useRelativePaths", "true"])?;
     for (key, value) in config {
-        git::run(Some(&bare), &git::args!["config", key, value])?;
+        repo.run(&git::args!["config", key, value])?;
     }
     if let Some(reference) = req.reference.filter(|r| r.join("objects").is_dir()) {
         let alternates = bare.join("objects/info/alternates");
@@ -353,7 +354,7 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         line.push(b'\n');
         std::fs::write(&alternates, line).map_err(git::file_error("write", &alternates))?;
         if let Some(prefixes) = alternate_refs_prefixes(req.reference_names) {
-            git::run(Some(&bare), &["config", "core.alternateRefsPrefixes", &prefixes])?;
+            repo.run(&["config", "core.alternateRefsPrefixes", &prefixes])?;
         }
     }
     let mut remote_add = vec!["remote", "add"];
@@ -362,21 +363,21 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         remote_add.push("--no-tags");
     }
     remote_add.extend(["origin", req.url]);
-    git::run(Some(&bare), &remote_add)?;
+    repo.run(&remote_add)?;
     let mut fetch: Vec<OsString> = vec!["fetch".into()];
     fetch.extend(fetch_opts);
     fetch.push("origin".into());
-    git::run(Some(&bare), &fetch)?;
+    repo.run(&fetch)?;
     let start = match &head.branch {
         Some(branch) => {
             // Fetching sets origin/HEAD itself since git 2.48; earlier versions do not.
             let target = format!("refs/remotes/origin/{branch}");
-            git::run(Some(&bare), &["symbolic-ref", "refs/remotes/origin/HEAD", &target])?;
+            repo.run(&["symbolic-ref", "refs/remotes/origin/HEAD", &target])?;
             "refs/remotes/origin/HEAD"
         }
         None => &head.oid,
     };
-    git::run(Some(&bare), &["update-ref", "--no-deref", "HEAD", start])?;
+    repo.run(&["update-ref", "--no-deref", "HEAD", start])?;
     let dot_git = req.path.join(".git");
     std::fs::write(&dot_git, format!("gitdir: ./{BARE_DIR}\n"))
         .map_err(git::file_error("write", &dot_git))
@@ -395,12 +396,12 @@ pub fn refresh_container_head(path: &Path) {
     if !bare.is_dir() {
         return;
     }
-    let dir = Some(bare.as_path());
-    if git::output(dir, &["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
+    let repo = git::at(&bare);
+    if repo.output(&["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
         return;
     }
     let commit = |rev: &str| {
-        let out = git::output(dir, &["rev-parse", "--verify", "--quiet", rev]).ok()?;
+        let out = repo.output(&["rev-parse", "--verify", "--quiet", rev]).ok()?;
         Some(out.trim().to_string())
     };
     let (Some(new), Some(old)) = (commit("refs/remotes/origin/HEAD^{commit}"), commit("HEAD"))
@@ -408,7 +409,7 @@ pub fn refresh_container_head(path: &Path) {
         return;
     };
     if new != old {
-        let _ = git::output(dir, &["update-ref", "--no-deref", "HEAD", &new, &old]);
+        let _ = repo.output(&["update-ref", "--no-deref", "HEAD", &new, &old]);
     }
 }
 
@@ -435,18 +436,19 @@ impl RemoteHead {
 /// `credential.username` does). Git's errors go to stderr, so that the user sees why it failed.
 fn remote_head(
     url: &str,
-    dir: Option<&Path>,
+    dir: &Path,
     config: &[(OsString, OsString)],
 ) -> Result<RemoteHead, GitError> {
     let mut args = config_args(config);
     args.extend(["ls-remote".into(), "--symref".into(), url.into(), "HEAD".into()]);
-    let out = git::command(dir, &args)
+    let out = git::at(dir)
+        .command(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()
         .map_err(GitError::Spawn)?;
     if !out.status.success() {
-        return Err(GitError::Failed { args, code: git::exit_code(out.status) });
+        return Err(git::failed(&args, out.status));
     }
     parse_remote_head(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| {
         GitError::Invalid(format!(
@@ -482,31 +484,31 @@ pub fn add_upstream(
     fetch_opts: &[OsString],
     single_branch: bool,
 ) -> Result<(), GitError> {
-    let remotes = git::output(Some(dir), &["remote"])?;
+    let repo = git::at(dir);
+    let remotes = repo.output(&["remote"])?;
     let [origin] = remotes.lines().collect::<Vec<_>>()[..] else {
         let msg = format!("Cannot tell which remote of {} to push to: {remotes:?}", dir.display());
         return Err(GitError::Invalid(msg));
     };
-    let dir = Some(dir);
-    let branch = if single_branch { default_branch(dir, url)? } else { None };
+    let branch = if single_branch { default_branch(repo, url)? } else { None };
     let mut add = vec!["remote", "add"];
     if let Some(branch) = &branch {
         add.extend(["-t", branch]);
     }
     add.extend(["upstream", url]);
-    git::run(dir, &add)?;
-    git::run(dir, &["config", "remote.upstream.pushurl", NO_PUSH])?;
-    git::run(dir, &["config", "remote.upstream.tagOpt", "--no-tags"])?;
-    git::run(dir, &["config", "remote.pushDefault", origin])?;
+    repo.run(&add)?;
+    repo.run(&["config", "remote.upstream.pushurl", NO_PUSH])?;
+    repo.run(&["config", "remote.upstream.tagOpt", "--no-tags"])?;
+    repo.run(&["config", "remote.pushDefault", origin])?;
     let mut fetch: Vec<OsString> = vec!["fetch".into(), "--quiet".into()];
     fetch.extend(fetch_opts.iter().cloned());
     fetch.push("upstream".into());
-    git::run(dir, &fetch)
+    repo.run(&fetch)
 }
 
 /// The branch that HEAD names in the repository at `url`, if it names one.
-fn default_branch(dir: Option<&Path>, url: &str) -> Result<Option<String>, GitError> {
-    let out = git::output(dir, &["ls-remote", "--symref", url, "HEAD"])?;
+fn default_branch(repo: Git<'_>, url: &str) -> Result<Option<String>, GitError> {
+    let out = repo.output(&["ls-remote", "--symref", url, "HEAD"])?;
     let branch =
         out.lines().find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"));
     Ok(branch.map(String::from))

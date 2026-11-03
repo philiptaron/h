@@ -70,7 +70,7 @@ pub fn credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Opti
     let credential: Vec<_> = config.iter().filter(|(key, _)| is_credential(key)).cloned().collect();
     let mut args = git::config_args(&credential);
     args.extend(["-c", "credential.interactive=false", "credential", "fill"].map(OsString::from));
-    let mut child = git::command(None, &args)
+    let mut child = git::command(&args)
         .env("GIT_ASKPASS", "")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::piped())

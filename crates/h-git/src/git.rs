@@ -13,7 +13,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 /// Arguments for git of different types, such as `&str`, `String`, `OsString` and `&Path`, as
 /// the one array of `&OsStr` that [`run`] and the others take:
-/// `git::run(None, &git::args!["init", "--quiet", format, path])`.
+/// `git::run(&git::args!["init", "--quiet", format, path])`.
 macro_rules! args {
     ($($arg:expr),+ $(,)?) => {
         [$(::std::ffi::OsStr::new(&$arg)),+]
@@ -130,76 +130,94 @@ pub const LOCAL_REPO_ENV: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-/// A `git` command running in `dir` (with `-C`), free of the repository h was started in, so
-/// that it works on `dir` (or the repository it creates) and nothing else.
-fn git(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
-    let mut cmd = Command::new("git");
-    for var in LOCAL_REPO_ENV {
-        cmd.env_remove(var);
-    }
-    if let Some(dir) = dir {
-        cmd.arg("-C").arg(dir);
-    }
-    cmd.args(args);
-    cmd
+/// Git working on the repository in one directory, as `git -C <dir>` does, made by [`at`]. The
+/// functions [`run`], [`output`] and [`command`] are git working on no repository in particular,
+/// as for `git init <dir>` and `git clone`. Either way, git runs free of the repository h was
+/// started in.
+#[derive(Debug, Clone, Copy)]
+pub struct Git<'a> {
+    dir: Option<&'a Path>,
 }
 
-/// A `git` command running in `dir` (with `-C`), its stdout redirected to stderr.
-pub fn command(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Command {
-    let mut cmd = git(dir, args);
-    cmd.stdout(stderr_as_stdout());
-    cmd
+/// Git working on the repository at `dir`.
+pub fn at(dir: &Path) -> Git<'_> {
+    Git { dir: Some(dir) }
 }
 
-/// Run `git` with `args`, in `dir` if given.
-pub fn run(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
-    let status = command(dir, args).status().map_err(GitError::Spawn)?;
-    if status.success() {
-        Ok(())
-    } else {
-        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
-        Err(GitError::Failed { args, code: exit_code(status) })
-    }
+/// A `git` command with `args`, its stdout redirected to stderr.
+pub fn command(args: &[impl AsRef<OsStr>]) -> Command {
+    Git { dir: None }.command(args)
+}
+
+/// Run `git` with `args`.
+pub fn run(args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
+    Git { dir: None }.run(args)
 }
 
 /// Run `git` with `args` and return what it printed on stdout.
-pub fn output(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
-    let out = git(dir, args).output().map_err(GitError::Spawn)?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
-        Err(GitError::Failed { args, code: exit_code(out.status) })
+pub fn output(args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
+    Git { dir: None }.output(args)
+}
+
+impl Git<'_> {
+    /// A `git` command with `args`, free of the repository h was started in, so that it works
+    /// on this one (or the repository it creates) and nothing else.
+    fn git(self, args: &[impl AsRef<OsStr>]) -> Command {
+        let mut cmd = Command::new("git");
+        for var in LOCAL_REPO_ENV {
+            cmd.env_remove(var);
+        }
+        if let Some(dir) = self.dir {
+            cmd.arg("-C").arg(dir);
+        }
+        cmd.args(args);
+        cmd
+    }
+
+    /// A `git` command with `args`, its stdout redirected to stderr.
+    pub fn command(self, args: &[impl AsRef<OsStr>]) -> Command {
+        let mut cmd = self.git(args);
+        cmd.stdout(stderr_as_stdout());
+        cmd
+    }
+
+    /// Run `git` with `args`.
+    pub fn run(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
+        let status = self.command(args).status().map_err(GitError::Spawn)?;
+        if status.success() { Ok(()) } else { Err(failed(args, status)) }
+    }
+
+    /// Run `git` with `args` and return what it printed on stdout.
+    pub fn output(self, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
+        let out = self.git(args).output().map_err(GitError::Spawn)?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(failed(args, out.status))
+        }
+    }
+
+    /// Run `git` with `args`, feeding it `input` on stdin.
+    pub fn run_with_input(self, args: &[impl AsRef<OsStr>], input: &[u8]) -> Result<(), GitError> {
+        use std::io::Write;
+        let mut child =
+            self.command(args).stdin(Stdio::piped()).spawn().map_err(GitError::Spawn)?;
+        let written = child.stdin.take().expect("stdin is piped").write_all(input);
+        let status = child.wait().map_err(GitError::Spawn)?;
+        if status.success() { written.map_err(GitError::Spawn) } else { Err(failed(args, status)) }
+    }
+
+    /// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
+    pub fn passthrough(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
+        let status = self.git(args).status().map_err(GitError::Spawn)?;
+        if status.success() { Ok(()) } else { Err(failed(args, status)) }
     }
 }
 
-/// Run `git` with `args`, feeding it `input` on stdin.
-pub fn run_with_input(
-    dir: Option<&Path>,
-    args: &[impl AsRef<OsStr>],
-    input: &[u8],
-) -> Result<(), GitError> {
-    use std::io::Write;
-    let mut child = command(dir, args).stdin(Stdio::piped()).spawn().map_err(GitError::Spawn)?;
-    let written = child.stdin.take().expect("stdin is piped").write_all(input);
-    let status = child.wait().map_err(GitError::Spawn)?;
-    if status.success() {
-        written.map_err(GitError::Spawn)
-    } else {
-        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
-        Err(GitError::Failed { args, code: exit_code(status) })
-    }
-}
-
-/// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
-pub fn passthrough(dir: Option<&Path>, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
-    let status = git(dir, args).status().map_err(GitError::Spawn)?;
-    if status.success() {
-        Ok(())
-    } else {
-        let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
-        Err(GitError::Failed { args, code: exit_code(status) })
-    }
+/// How `git` with `args` failed, having finished with `status`.
+pub fn failed(args: &[impl AsRef<OsStr>], status: ExitStatus) -> GitError {
+    let args = args.iter().map(|a| a.as_ref().to_owned()).collect();
+    GitError::Failed { args, code: exit_code(status) }
 }
 
 /// The `key=value` pairs given as `-c key=value` (or `-ckey=value`) among git options.
@@ -287,11 +305,11 @@ mod tests {
 
     #[test]
     fn reports_failures() {
-        let err = run(None, &["--no-such-option"]).unwrap_err();
+        let err = run(&["--no-such-option"]).unwrap_err();
         assert!(matches!(err, GitError::Failed { .. }), "{err:?}");
         assert_eq!(err.code(), 129);
         assert_eq!(err.to_string(), "git exited with status 129");
-        let err = run(None, &["-c", "user.name=A B", "-C", "/", "no-such-command", "x"]);
+        let err = run(&["-c", "user.name=A B", "-C", "/", "no-such-command", "x"]);
         assert_eq!(err.unwrap_err().to_string(), "git no-such-command exited with status 1");
     }
 
@@ -320,20 +338,20 @@ mod tests {
 
     #[test]
     fn captures_output() {
-        assert!(output(None, &["--version"]).unwrap().starts_with("git version"));
+        assert!(output(&["--version"]).unwrap().starts_with("git version"));
     }
 
     #[test]
     fn clears_what_git_clears_for_another_repository() {
         let kept = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
-        let local = output(None, &["rev-parse", "--local-env-vars"]).unwrap();
+        let local = output(&["rev-parse", "--local-env-vars"]).unwrap();
         let mut want: Vec<&str> = local.lines().filter(|var| !kept.contains(var)).collect();
         want.sort();
         let mut have = LOCAL_REPO_ENV.to_vec();
         have.sort();
         assert_eq!(have, want, "LOCAL_REPO_ENV is out of date with this git");
 
-        let cmd = git(None, &["--version"]);
+        let cmd = Git { dir: None }.git(&["--version"]);
         let removed: Vec<_> = cmd.get_envs().filter(|(_, value)| value.is_none()).collect();
         assert_eq!(removed.len(), LOCAL_REPO_ENV.len(), "{removed:?}");
     }

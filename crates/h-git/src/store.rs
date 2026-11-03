@@ -14,7 +14,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use crate::clone::{NO_PUSH, alternate_refs_prefixes};
-use crate::git::{self, GitError, config_pairs};
+use crate::git::{self, Git, GitError, config_pairs};
 
 /// Configuration every store gets at creation.
 pub const STORE_CONFIG: &[(&str, &str)] = &[
@@ -89,8 +89,9 @@ impl Store {
         self.path.join("objects").is_dir() && self.path.join("HEAD").is_file()
     }
 
-    fn dir(&self) -> Option<&Path> {
-        Some(&self.path)
+    /// Git working on the store.
+    fn git(&self) -> Git<'_> {
+        git::at(&self.path)
     }
 
     /// Create the store, applying [`STORE_CONFIG`] and the `-c key=value` pairs in `git_opts`
@@ -116,10 +117,10 @@ impl Store {
                 "--ref-format=reftable",
                 self.path,
             ];
-            git::run(None, &init)?;
+            git::run(&init)?;
         }
         for (key, value) in STORE_CONFIG {
-            git::run(self.dir(), &["config", key, value])?;
+            self.git().run(&["config", key, value])?;
         }
         // Upstreams added before HEAD was followed, or before negotiation was restricted, are
         // fetched as new ones are from now on.
@@ -129,14 +130,14 @@ impl Store {
             self.restrict_negotiation(&name)?;
         }
         for (key, value) in config_pairs(git_opts) {
-            git::run(self.dir(), &git::args!["config", key, value])?;
+            self.git().run(&git::args!["config", key, value])?;
         }
         Ok(())
     }
 
     /// The names of the upstreams in the store.
     pub fn remotes(&self) -> Result<Vec<String>, GitError> {
-        let out = git::output(self.dir(), &["remote"])?;
+        let out = self.git().output(&["remote"])?;
         Ok(out.lines().map(String::from).collect())
     }
 
@@ -167,13 +168,13 @@ impl Store {
             }
         }
         let nested = remotes.iter().any(|r| extends(r, name));
-        let dir = self.dir();
+        let repo = self.git();
         let key = |k: &str| format!("remote.{name}.{k}");
-        git::run(dir, &["config", &key("url"), url])?;
-        git::run(dir, &["config", &key("pushurl"), NO_PUSH])?;
-        git::run(dir, &["config", &key("tagOpt"), "--no-tags"])?;
+        repo.run(&["config", &key("url"), url])?;
+        repo.run(&["config", &key("pushurl"), NO_PUSH])?;
+        repo.run(&["config", &key("tagOpt"), "--no-tags"])?;
         for refspec in refspecs(name, nested) {
-            git::run(dir, &["config", "--add", &key("fetch"), &refspec])?;
+            repo.run(&["config", "--add", &key("fetch"), &refspec])?;
         }
         self.follow_remote_head(name, nested)?;
         self.restrict_negotiation(name)?;
@@ -187,16 +188,16 @@ impl Store {
     /// `git remote remove` would keep the tags, which are not remote-tracking refs, so the refs
     /// are deleted here.
     pub fn remove_remote(&self, name: &str) -> Result<(), GitError> {
-        let dir = self.dir();
+        let repo = self.git();
         let prefix = self.prefix(name)?;
         let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, name)).collect();
         let namespaces = [format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/")];
         let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
         args.extend(namespaces.iter().cloned());
-        let mut refs: Vec<String> = git::output(dir, &args)?.lines().map(String::from).collect();
+        let mut refs: Vec<String> = repo.output(&args)?.lines().map(String::from).collect();
         // A HEAD whose branch is gone is a broken ref, which for-each-ref leaves out.
         let head = format!("refs/remotes/{prefix}/HEAD");
-        if !refs.contains(&head) && git::output(dir, &["symbolic-ref", "--quiet", &head]).is_ok() {
+        if !refs.contains(&head) && repo.output(&["symbolic-ref", "--quiet", &head]).is_ok() {
             refs.push(head);
         }
         let inner_ref = |refname: &str| {
@@ -211,9 +212,9 @@ impl Store {
             .map(|refname| format!("delete {refname}\n"))
             .collect();
         if !input.is_empty() {
-            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+            repo.run_with_input(&["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
         }
-        git::run(dir, &["config", "--remove-section", &format!("remote.{name}")])
+        repo.run(&["config", "--remove-section", &format!("remote.{name}")])
     }
 
     /// Call upstream `old` `new` from now on, fetching it from `url`: its branches, tags and HEAD
@@ -229,7 +230,7 @@ impl Store {
             return self.remove_remote(old);
         }
         self.add_remote(new, url)?;
-        let dir = self.dir();
+        let repo = self.git();
         let (from, to) = (self.prefix(old)?, self.prefix(new)?);
         let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, old)).collect();
         let namespaces =
@@ -237,7 +238,7 @@ impl Store {
         let format = "--format=%(refname)%00%(objectname)%00%(symref)";
         let mut args = vec!["for-each-ref", format];
         args.extend(namespaces.iter().map(|(_, ns)| ns.as_str()));
-        let refs = git::output(dir, &args)?;
+        let refs = repo.output(&args)?;
         let (mut away, mut back, mut heads) = (String::new(), String::new(), Vec::new());
         for line in refs.lines() {
             let mut fields = line.split('\0');
@@ -271,10 +272,10 @@ impl Store {
             }
         }
         for input in [away, back].iter().filter(|input| !input.is_empty()) {
-            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+            repo.run_with_input(&["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
         }
         for (head, target) in heads {
-            git::run(dir, &["symbolic-ref", &head, &target])?;
+            repo.run(&["symbolic-ref", &head, &target])?;
         }
         // What is left of `old` is its configuration, and any HEAD whose branch was gone.
         self.remove_remote(old)
@@ -286,7 +287,7 @@ impl Store {
     /// `refs/remotes/<name>/`, where only an inner upstream's refs are.
     fn follow_remote_head(&self, name: &str, nested: bool) -> Result<(), GitError> {
         let key = format!("remote.{name}.followRemoteHEAD");
-        git::run(self.dir(), &["config", &key, if nested { "never" } else { "always" }])
+        self.git().run(&["config", &key, if nested { "never" } else { "always" }])
     }
 
     /// Have each fetch of upstream `name` offer the server only the commits of its relatives'
@@ -294,14 +295,14 @@ impl Store {
     /// older versions ignore it and offer everything).
     fn restrict_negotiation(&self, name: &str) -> Result<(), GitError> {
         let key = format!("remote.{name}.negotiationRestrict");
-        git::run(self.dir(), &["config", "--replace-all", &key, &negotiation_restrict(name)])
+        self.git().run(&["config", "--replace-all", &key, &negotiation_restrict(name)])
     }
 
     /// The upstreams among `names` whose fetches have no relative's branch to offer the server,
     /// as a new upstream unlike any other has none: [`negotiation_restrict`] matches nothing.
     fn without_relatives(&self, names: &[String]) -> Result<Vec<String>, GitError> {
         let format = "--format=%(refname)";
-        let branches = git::output(self.dir(), &["for-each-ref", format, "refs/remotes/"])?;
+        let branches = self.git().output(&["for-each-ref", format, "refs/remotes/"])?;
         let branches: Vec<&str> =
             branches.lines().filter_map(|r| r.strip_prefix("refs/remotes/")).collect();
         Ok(names
@@ -317,7 +318,7 @@ impl Store {
     /// Whether upstream `name` keeps its refs under `<name>/-/`.
     pub fn is_nested(&self, name: &str) -> Result<bool, GitError> {
         let key = format!("remote.{name}.fetch");
-        let configured = git::output(self.dir(), &["config", "--get-all", &key])?;
+        let configured = self.git().output(&["config", "--get-all", &key])?;
         let [nested_heads, _] = refspecs(name, true);
         Ok(configured.lines().any(|r| r == nested_heads))
     }
@@ -327,7 +328,7 @@ impl Store {
         let prefix = self.prefix(name)?;
         let (branches, tags) = (format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/"));
         let args = ["for-each-ref", "--count=1", "--format=x", &branches, &tags];
-        Ok(!git::output(self.dir(), &args)?.is_empty())
+        Ok(!self.git().output(&args)?.is_empty())
     }
 
     /// What `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
@@ -340,7 +341,7 @@ impl Store {
     /// `refs/remotes/<name>/`, so [`Store::fetch`] does it here, after every fetch. Returns
     /// whether HEAD was set.
     pub fn set_head(&self, name: &str) -> Result<bool, GitError> {
-        let out = git::output(self.dir(), &["ls-remote", "--symref", name, "HEAD"])?;
+        let out = self.git().output(&["ls-remote", "--symref", name, "HEAD"])?;
         let Some(branch) = out
             .lines()
             .find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
@@ -348,11 +349,11 @@ impl Store {
             return Ok(false);
         };
         let target = format!("refs/remotes/{name}/-/{branch}");
-        if git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &target]).is_err() {
+        if self.git().output(&["rev-parse", "--verify", "--quiet", &target]).is_err() {
             return Ok(false);
         }
         let head = format!("refs/remotes/{name}/-/HEAD");
-        git::run(self.dir(), &["symbolic-ref", &head, &target])?;
+        self.git().run(&["symbolic-ref", &head, &target])?;
         Ok(true)
     }
 
@@ -361,12 +362,12 @@ impl Store {
     /// other `remotes` under those directories are left alone. No objects are touched, so nothing
     /// needs fetching again.
     fn nest(&self, name: &str, remotes: &[String]) -> Result<(), GitError> {
-        let dir = self.dir();
+        let repo = self.git();
         let branches = format!("refs/remotes/{name}/");
         let tags = format!("refs/tags/{name}/");
         let inner: Vec<String> = remotes.iter().filter(|r| extends(r, name)).cloned().collect();
         let format = "--format=%(refname)%00%(objectname)%00%(symref)";
-        let refs = git::output(dir, &["for-each-ref", format, &branches, &tags])?;
+        let refs = repo.output(&["for-each-ref", format, &branches, &tags])?;
         let mut input = String::new();
         let mut heads = Vec::new();
         for line in refs.lines() {
@@ -399,15 +400,15 @@ impl Store {
             }
         }
         if !input.is_empty() {
-            git::run_with_input(dir, &["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
+            repo.run_with_input(&["update-ref", "--no-deref", "--stdin"], input.as_bytes())?;
         }
         for (head, target) in heads {
-            git::run(dir, &["symbolic-ref", &head, &target])?;
+            repo.run(&["symbolic-ref", &head, &target])?;
         }
         let key = format!("remote.{name}.fetch");
-        git::run(dir, &["config", "--unset-all", &key])?;
+        repo.run(&["config", "--unset-all", &key])?;
         for refspec in refspecs(name, true) {
-            git::run(dir, &["config", "--add", &key, &refspec])?;
+            repo.run(&["config", "--add", &key, &refspec])?;
         }
         self.follow_remote_head(name, true)
     }
@@ -443,8 +444,7 @@ impl Store {
             args.extend(names.iter().cloned());
         }
         // Git fetches every upstream it can, names those it cannot, and then fails.
-        let mut report =
-            FetchReport { failed: git::run(self.dir(), &args).err(), ..Default::default() };
+        let mut report = FetchReport { failed: self.git().run(&args).err(), ..Default::default() };
         for name in fetched {
             match self.is_nested(&name).and_then(|nested| Ok(nested && !self.set_head(&name)?)) {
                 Ok(true) => report.headless.push(name),
@@ -463,7 +463,7 @@ impl Store {
     fn revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
         let qualified = format!("{}/{reference}", self.prefix(name)?);
         let object = format!("{qualified}^{{object}}");
-        let found = git::output(self.dir(), &["rev-parse", "--verify", "--quiet", &object]).is_ok();
+        let found = self.git().output(&["rev-parse", "--verify", "--quiet", &object]).is_ok();
         Ok(if found || !is_object_name(reference) { qualified } else { reference.to_string() })
     }
 
@@ -474,7 +474,7 @@ impl Store {
             _ => (spec, ""),
         };
         let spec = format!("{}{path}", self.revision(name, reference)?);
-        git::passthrough(self.dir(), &["show", &spec])
+        self.git().passthrough(&["show", &spec])
     }
 
     /// Clone upstream `name` from the store into `dir`, or a fresh temporary directory, and check
@@ -518,16 +518,16 @@ impl Store {
     /// a branch of the upstream, or else the commit that `reference` names, such as a tag, a
     /// hash or `main~2`. Checked before anything is made, so a bad reference leaves nothing.
     fn checkout_start(&self, name: &str, prefix: &str, reference: &str) -> Result<Start, GitError> {
-        let dir = self.dir();
+        let repo = self.git();
         let branches = format!("refs/remotes/{prefix}/");
         let branch = if reference == "HEAD" {
             let head = format!("{branches}HEAD");
-            git::output(dir, &["symbolic-ref", "--quiet", &head])
+            repo.output(&["symbolic-ref", "--quiet", &head])
                 .ok()
                 .and_then(|target| target.trim().strip_prefix(&branches).map(String::from))
         } else {
             let exact = format!("{branches}{reference}");
-            git::output(dir, &["show-ref", "--verify", "--quiet", &exact])
+            repo.output(&["show-ref", "--verify", "--quiet", &exact])
                 .ok()
                 .map(|_| reference.to_string())
         };
@@ -535,7 +535,7 @@ impl Store {
             return Ok(Start::Branch(branch));
         }
         let commit = format!("{}^{{commit}}", self.revision(name, reference)?);
-        match git::output(dir, &["rev-parse", "--verify", "--quiet", &commit]) {
+        match repo.output(&["rev-parse", "--verify", "--quiet", &commit]) {
             Ok(oid) => Ok(Start::Detached(oid.trim().to_string())),
             Err(_) => {
                 let msg = format!("{reference} is not a branch, tag or commit of {name}");
@@ -553,17 +553,17 @@ impl Store {
         dir: &Path,
         git_opts: &[OsString],
     ) -> Result<(), GitError> {
-        let format = git::output(self.dir(), &["rev-parse", "--show-object-format"])?;
+        let format = self.git().output(&["rev-parse", "--show-object-format"])?;
         let format = format!("--object-format={}", format.trim());
         std::fs::create_dir_all(dir).map_err(git::file_error("create", dir))?;
-        git::run(None, &git::args!["init", "--quiet", format, dir])?;
+        git::run(&git::args!["init", "--quiet", format, dir])?;
         let mut alternates = self.path.join("objects").into_os_string().into_vec();
         alternates.push(b'\n');
         let file = dir.join(".git/objects/info/alternates");
         std::fs::write(&file, alternates).map_err(git::file_error("write", &file))?;
 
-        let clone = Some(dir);
-        git::run(clone, &git::args!["config", "remote.origin.url", self.path])?;
+        let clone = git::at(dir);
+        clone.run(&git::args!["config", "remote.origin.url", self.path])?;
         let fetch = [
             format!("+refs/remotes/{prefix}/*:refs/remotes/origin/*"),
             // Leave out the store's `<prefix>/HEAD`: origin/HEAD is pointed at the default
@@ -572,7 +572,7 @@ impl Store {
             format!("+refs/tags/{prefix}/*:refs/tags/*"),
         ];
         for refspec in &fetch {
-            git::run(clone, &["config", "--add", "remote.origin.fetch", refspec])?;
+            clone.run(&["config", "--add", "remote.origin.fetch", refspec])?;
         }
         for (key, value) in [
             ("remote.origin.pushurl", NO_PUSH),
@@ -581,29 +581,29 @@ impl Store {
             // The store's own HEAD says nothing about the upstream's default branch.
             ("remote.origin.followRemoteHEAD", "never"),
         ] {
-            git::run(clone, &["config", key, value])?;
+            clone.run(&["config", key, value])?;
         }
         if let Some(prefixes) = alternate_refs_prefixes(&[name.to_string()]) {
-            git::run(clone, &["config", "core.alternateRefsPrefixes", &prefixes])?;
+            clone.run(&["config", "core.alternateRefsPrefixes", &prefixes])?;
         }
         for (key, value) in config_pairs(git_opts) {
-            git::run(clone, &git::args!["config", key, value])?;
+            clone.run(&git::args!["config", key, value])?;
         }
-        git::run(clone, &["fetch", "--quiet", "origin"])?;
+        clone.run(&["fetch", "--quiet", "origin"])?;
 
         let head = format!("refs/remotes/{prefix}/HEAD");
-        if let Ok(target) = git::output(self.dir(), &["symbolic-ref", "--quiet", &head])
+        if let Ok(target) = self.git().output(&["symbolic-ref", "--quiet", &head])
             && let Some(branch) = target.trim().strip_prefix(&format!("refs/remotes/{prefix}/"))
         {
             let origin_head = format!("refs/remotes/origin/{branch}");
-            git::run(clone, &["symbolic-ref", "refs/remotes/origin/HEAD", &origin_head])?;
+            clone.run(&["symbolic-ref", "refs/remotes/origin/HEAD", &origin_head])?;
         }
         match start {
             Start::Branch(branch) => {
                 let upstream = format!("origin/{branch}");
-                git::run(clone, &["switch", "--quiet", "--track", "--create", branch, &upstream])
+                clone.run(&["switch", "--quiet", "--track", "--create", branch, &upstream])
             }
-            Start::Detached(oid) => git::run(clone, &["switch", "--quiet", "--detach", oid]),
+            Start::Detached(oid) => clone.run(&["switch", "--quiet", "--detach", oid]),
         }
     }
 
@@ -615,7 +615,7 @@ impl Store {
         };
         let mut args = vec!["maintenance".to_string(), "run".to_string(), "--quiet".to_string()];
         args.extend(tasks.iter().map(|task| format!("--task={task}")));
-        git::run(self.dir(), &args)
+        self.git().run(&args)
     }
 }
 

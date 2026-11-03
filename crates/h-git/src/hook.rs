@@ -86,7 +86,7 @@ fn slug(name: &str) -> (String, String) {
 
 /// The output of `git` in `dir`, trimmed, or `None` when it fails.
 pub(crate) fn query(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = git::output(Some(dir), args).ok()?;
+    let out = git::at(dir).output(args).ok()?;
     Some(out.trim().to_string()).filter(|out| !out.is_empty())
 }
 
@@ -241,15 +241,16 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
+    let repo = git::at(&root);
     let added = if commit(&root, &format!("refs/heads/{branch}")).is_some() {
-        git::run(Some(&root), &["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
+        repo.run(&["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
             path,
             branch,
             base: "its existing branch".into(),
         })
     } else {
         base(&root, &common, fallback).and_then(|(start, from)| {
-            git::run(Some(&root), &["worktree", "add", "--quiet", "-b", &branch, &target, &start])
+            repo.run(&["worktree", "add", "--quiet", "-b", &branch, &target, &start])
                 .map(|()| Created { path, branch, base: from })
         })
     };
@@ -330,7 +331,7 @@ fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
 /// submodules included.
 fn status(path: &Path) -> Result<String, GitError> {
     let args = ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"];
-    git::output(Some(path), &args)
+    git::at(path).output(&args)
 }
 
 /// Commit everything uncommitted in the worktree at `path`, untracked files included, onto
@@ -341,8 +342,9 @@ fn save(path: &Path) -> Result<bool, GitError> {
     if status(path)?.is_empty() {
         return Ok(false);
     }
-    git::run(Some(path), &["add", "--all"])?;
-    if git::output(Some(path), &["diff", "--cached", "--quiet"]).is_ok() {
+    let repo = git::at(path);
+    repo.run(&["add", "--all"])?;
+    if repo.output(&["diff", "--cached", "--quiet"]).is_ok() {
         return Ok(false);
     }
     let message = format!(
@@ -362,7 +364,7 @@ fn save(path: &Path) -> Result<bool, GitError> {
         "-m",
         &message,
     ];
-    git::run(Some(path), &commit)?;
+    repo.run(&commit)?;
     Ok(true)
 }
 
@@ -386,7 +388,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     if commit(path, &format!("refs/heads/{name}")).is_some() {
         name = format!("{name}-{}", &head[..head.len().min(12)]);
     }
-    git::run(Some(path), &["branch", &name, &head])?;
+    git::at(path).run(&["branch", &name, &head])?;
     Ok(Some(name))
 }
 
@@ -429,7 +431,7 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
         return leave(&format!("still has changes that could not be committed:\n{left}"));
     }
     let target = path.to_string_lossy().into_owned();
-    git::run(Some(&repository_root(&common)), &["worktree", "remove", "--force", &target])?;
+    git::at(&repository_root(&common)).run(&["worktree", "remove", "--force", &target])?;
     Ok(Removed::Removed { branch, saved })
 }
 

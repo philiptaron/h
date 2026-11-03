@@ -88,7 +88,7 @@ struct Repo {
 /// and `credential.*`, as `-c` pairs: what the shell function passes `h`, when nothing does.
 pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
     let pattern = r"^(user|credential)\.";
-    let out = git::output(Some(dir), &["config", "--local", "-z", "--get-regexp", pattern]);
+    let out = git::at(dir).output(&["config", "--local", "-z", "--get-regexp", pattern]);
     out.unwrap_or_default()
         .split('\0')
         .filter_map(|entry| entry.split_once('\n'))
@@ -462,9 +462,9 @@ pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
         return Ok(());
     }
     if prefixes.is_empty() {
-        return git::run(Some(git_dir), &["config", "--unset", key]);
+        return git::at(git_dir).run(&["config", "--unset", key]);
     }
-    git::run(Some(git_dir), &["config", key, &prefixes.join(" ")])
+    git::at(git_dir).run(&["config", key, &prefixes.join(" ")])
 }
 
 /// Fetch upstream `source` into `store` from the repository whose git directory is `git_dir`:
@@ -484,7 +484,7 @@ fn fetch_local(store: &Store, git_dir: &Path, source: &Source) -> Result<(), Git
     if source.tags {
         args.push(format!("+refs/tags/*:refs/tags/{prefix}/*").into());
     }
-    git::run(Some(&store.path), &args)
+    git::at(&store.path).run(&args)
 }
 
 /// Clone the submodules of the working tree `worktree` that are not there yet, at every level,
@@ -529,10 +529,11 @@ fn clone_missing(
     if !unmapped.is_empty() && !active {
         init.extend(mapped());
     }
-    git::run(Some(worktree), &init)?;
+    let repo = git::at(worktree);
+    repo.run(&init)?;
     let mut args: Vec<OsString> = ["submodule", "status", "--"].map(OsString::from).into();
     args.extend(mapped());
-    let status = git::output(Some(worktree), &args)?;
+    let status = repo.output(&args)?;
     let mut missing = Vec::new();
     let mut present = Vec::new();
     for line in status.lines() {
@@ -567,7 +568,7 @@ fn clone_missing(
         args.push(store.path.clone().into());
         args.push("--".into());
         args.extend(missing.iter().map(OsString::from));
-        let updated = git::run(Some(worktree), &args);
+        let updated = repo.run(&args);
         result = updated.and(submodules::write_identity(worktree, identity));
     }
     for dir in present {
@@ -606,7 +607,7 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
             prefixes.push(prefix.to_string());
         }
     }
-    git::run(Some(git_dir), &["config", key, &prefixes.join(" ")])
+    git::at(git_dir).run(&["config", key, &prefixes.join(" ")])
 }
 
 /// Give up the local copies of objects the repository whose git directory is `git_dir` can now
@@ -618,7 +619,7 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
 /// store has are dropped; with no `--cruft-expiration`, nothing expires. Nothing happens when
 /// the repository keeps no objects of its own.
 fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
-    let counts = git::output(Some(git_dir), &["count-objects", "-v"])?;
+    let counts = git::at(git_dir).output(&["count-objects", "-v"])?;
     let local = counts
         .lines()
         .any(|line| matches!(line.split_once(": "), Some(("count" | "in-pack", n)) if n != "0"));
@@ -626,7 +627,7 @@ fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
         return Ok(());
     }
     let args = ["repack", "-a", "-d", "-l", "--cruft", "-q", "--no-write-bitmap-index"];
-    git::run(Some(git_dir), &args)
+    git::at(git_dir).run(&args)
 }
 
 #[cfg(test)]
@@ -638,11 +639,11 @@ mod tests {
     fn local_identity_reads_user_and_credential_settings() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        assert!(git::run(None, &git::args!["init", "-q", dir]).is_ok());
+        assert!(git::run(&git::args!["init", "-q", dir]).is_ok());
         for (key, value) in
             [("user.name", "Me Too"), ("credential.username", "me"), ("core.x", "y")]
         {
-            git::run(Some(dir), &["config", key, value]).unwrap();
+            git::at(dir).run(&["config", key, value]).unwrap();
         }
         let want = pairs(&[("user.name", "Me Too"), ("credential.username", "me")]);
         assert_eq!(local_identity(dir), want);

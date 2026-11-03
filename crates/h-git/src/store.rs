@@ -119,8 +119,9 @@ impl Store {
             ];
             git::run(&init)?;
         }
+        let repo = self.git();
         for (key, value) in STORE_CONFIG {
-            self.git().run(&["config", key, value])?;
+            repo.run(&["config", key, value])?;
         }
         // Upstreams added before HEAD was followed, or before negotiation was restricted, are
         // fetched as new ones are from now on.
@@ -130,7 +131,7 @@ impl Store {
             self.restrict_negotiation(&name)?;
         }
         for (key, value) in config_pairs(git_opts) {
-            self.git().run(&git::args!["config", key, value])?;
+            repo.run(&git::args!["config", key, value])?;
         }
         Ok(())
     }
@@ -341,7 +342,8 @@ impl Store {
     /// `refs/remotes/<name>/`, so [`Store::fetch`] does it here, after every fetch. Returns
     /// whether HEAD was set.
     pub fn set_head(&self, name: &str) -> Result<bool, GitError> {
-        let out = self.git().output(&["ls-remote", "--symref", name, "HEAD"])?;
+        let repo = self.git();
+        let out = repo.output(&["ls-remote", "--symref", name, "HEAD"])?;
         let Some(branch) = out
             .lines()
             .find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
@@ -349,11 +351,11 @@ impl Store {
             return Ok(false);
         };
         let target = format!("refs/remotes/{name}/-/{branch}");
-        if self.git().output(&["rev-parse", "--verify", "--quiet", &target]).is_err() {
+        if repo.output(&["rev-parse", "--verify", "--quiet", &target]).is_err() {
             return Ok(false);
         }
         let head = format!("refs/remotes/{name}/-/HEAD");
-        self.git().run(&["symbolic-ref", &head, &target])?;
+        repo.run(&["symbolic-ref", &head, &target])?;
         Ok(true)
     }
 
@@ -553,7 +555,8 @@ impl Store {
         dir: &Path,
         git_opts: &[OsString],
     ) -> Result<(), GitError> {
-        let format = self.git().output(&["rev-parse", "--show-object-format"])?;
+        let store = self.git();
+        let format = store.output(&["rev-parse", "--show-object-format"])?;
         let format = format!("--object-format={}", format.trim());
         std::fs::create_dir_all(dir).map_err(git::file_error("create", dir))?;
         git::run(&git::args!["init", "--quiet", format, dir])?;
@@ -592,7 +595,7 @@ impl Store {
         clone.run(&["fetch", "--quiet", "origin"])?;
 
         let head = format!("refs/remotes/{prefix}/HEAD");
-        if let Ok(target) = self.git().output(&["symbolic-ref", "--quiet", &head])
+        if let Ok(target) = store.output(&["symbolic-ref", "--quiet", &head])
             && let Some(branch) = target.trim().strip_prefix(&format!("refs/remotes/{prefix}/"))
         {
             let origin_head = format!("refs/remotes/origin/{branch}");

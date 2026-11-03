@@ -366,7 +366,8 @@ fn save(path: &Path) -> Result<bool, GitError> {
 /// remote-tracking branch has is given a branch of its own first: `worktree-<directory>`, or
 /// `worktree-<directory>-<commit>` when a branch of that name already has other work.
 fn branch(path: &Path) -> Result<Option<String>, GitError> {
-    if let Some(branch) = git::at(path).query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+    let repo = git::at(path);
+    if let Some(branch) = repo.query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         return Ok(Some(branch));
     }
     let Some(head) = commit(path, "HEAD") else {
@@ -374,7 +375,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     };
     let unique =
         ["rev-list", "--max-count=1", "HEAD", "--not", "--branches", "--tags", "--remotes"];
-    if git::at(path).query(&unique).is_none() {
+    if repo.query(&unique).is_none() {
         return Ok(None);
     }
     let dir = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -382,7 +383,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     if commit(path, &format!("refs/heads/{name}")).is_some() {
         name = format!("{name}-{}", &head[..head.len().min(12)]);
     }
-    git::at(path).run(&["branch", &name, &head])?;
+    repo.run(&["branch", &name, &head])?;
     Ok(Some(name))
 }
 
@@ -404,12 +405,13 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
         let msg = format!("{} {why}, so it is left in place", path.display());
         Err(GitError::Invalid(msg))
     };
-    let top = git::at(&path).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from);
+    let repo = git::at(&path);
+    let top = repo.query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from);
     if top.and_then(|top| top.canonicalize().ok()) != path.canonicalize().ok() {
         return leave("is not the top of a git worktree");
     }
     let dirs = ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"];
-    let dirs = git::at(&path).query(&dirs).unwrap_or_default();
+    let dirs = repo.query(&dirs).unwrap_or_default();
     let (git_dir, common) = match dirs.lines().collect::<Vec<_>>().as_slice() {
         [git_dir, common] => (PathBuf::from(git_dir), PathBuf::from(common)),
         _ => return leave("has no git directory that git reports"),

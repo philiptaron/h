@@ -351,8 +351,9 @@ fn fork_urls(root: &Path) -> Option<(String, String)> {
 /// Whether the repository whose common git directory is `common` has all its history, unlike a
 /// shallow or partial clone.
 fn is_complete(common: &Path) -> bool {
-    let partial = git::at(common).query(&["config", "--get", "extensions.partialClone"]).is_some()
-        || git::at(common)
+    let repo = git::at(common);
+    let partial = repo.query(&["config", "--get", "extensions.partialClone"]).is_some()
+        || repo
             .query(&["config", "--get-regexp", r"^remote\..*\.promisor$"])
             .is_some_and(|out| out.lines().any(|line| line.ends_with(" true")));
     !common.join("shallow").exists() && !partial
@@ -443,7 +444,8 @@ fn canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
 /// store upstream are left alone.
 pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
     let key = "core.alternateRefsPrefixes";
-    let Some(configured) = git::at(git_dir).query(&["config", "--get", key]) else {
+    let repo = git::at(git_dir);
+    let Some(configured) = repo.query(&["config", "--get", key]) else {
         return Ok(());
     };
     let existing = store.remotes()?;
@@ -466,9 +468,9 @@ pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
         return Ok(());
     }
     if prefixes.is_empty() {
-        return git::at(git_dir).run(&["config", "--unset", key]);
+        return repo.run(&["config", "--unset", key]);
     }
-    git::at(git_dir).run(&["config", key, &prefixes.join(" ")])
+    repo.run(&["config", key, &prefixes.join(" ")])
 }
 
 /// Fetch upstream `source` into `store` from the repository whose git directory is `git_dir`:
@@ -528,12 +530,12 @@ fn clone_missing(
     // Without a pathspec, `git submodule init` initializes every submodule, or only the active
     // ones when `submodule.active` is set, which leaves the unmapped out too; given paths, it
     // initializes them active or not, so they are given only when nothing else leaves those out.
-    let active = git::at(worktree).query(&["config", "--get-all", "submodule.active"]).is_some();
+    let repo = git::at(worktree);
+    let active = repo.query(&["config", "--get-all", "submodule.active"]).is_some();
     let mut init: Vec<OsString> = ["submodule", "init", "--"].map(OsString::from).into();
     if !unmapped.is_empty() && !active {
         init.extend(mapped());
     }
-    let repo = git::at(worktree);
     repo.run(&init)?;
     let mut args: Vec<OsString> = ["submodule", "status", "--"].map(OsString::from).into();
     args.extend(mapped());
@@ -605,14 +607,15 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
     }
     repair_prefixes(store, git_dir)?;
     let key = "core.alternateRefsPrefixes";
-    let configured = git::at(git_dir).query(&["config", "--get", key]).unwrap_or_default();
+    let repo = git::at(git_dir);
+    let configured = repo.query(&["config", "--get", key]).unwrap_or_default();
     let mut prefixes: Vec<String> = configured.split_whitespace().map(String::from).collect();
     for prefix in alternate_refs_prefixes(names).unwrap_or_default().split_whitespace() {
         if !prefixes.iter().any(|p| p == prefix) {
             prefixes.push(prefix.to_string());
         }
     }
-    git::at(git_dir).run(&["config", key, &prefixes.join(" ")])
+    repo.run(&["config", key, &prefixes.join(" ")])
 }
 
 /// Give up the local copies of objects the repository whose git directory is `git_dir` can now
@@ -624,7 +627,8 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
 /// store has are dropped; with no `--cruft-expiration`, nothing expires. Nothing happens when
 /// the repository keeps no objects of its own.
 fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
-    let counts = git::at(git_dir).output(&["count-objects", "-v"])?;
+    let repo = git::at(git_dir);
+    let counts = repo.output(&["count-objects", "-v"])?;
     let local = counts
         .lines()
         .any(|line| matches!(line.split_once(": "), Some(("count" | "in-pack", n)) if n != "0"));
@@ -632,7 +636,7 @@ fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
         return Ok(());
     }
     let args = ["repack", "-a", "-d", "-l", "--cruft", "-q", "--no-write-bitmap-index"];
-    git::at(git_dir).run(&args)
+    repo.run(&args)
 }
 
 #[cfg(test)]

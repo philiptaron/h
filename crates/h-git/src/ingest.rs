@@ -137,7 +137,7 @@ pub fn ingest(
         {
             report.failures.push(format!("could not clone every submodule: {err}"));
         }
-        tenants.extend(submodule_tenants(&worktree));
+        tenants.extend(find_submodule_tenants(&worktree));
     }
     let mut tenants: Vec<Tenant> = tenants.into_iter().flatten().collect();
     for tenant in &tenants {
@@ -365,9 +365,9 @@ fn is_complete(common: &Path) -> bool {
     !common.join("shallow").exists() && !partial
 }
 
-/// The submodules checked out in the working tree `worktree`, nested ones included, as tenants,
-/// each with every one of its remotes.
-fn submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
+/// Find the submodules checked out in the working tree `worktree`, nested ones included, as
+/// tenants, each with every one of its remotes.
+fn find_submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
     submodules::checked_out(worktree)
         .into_iter()
         .map(|dir| {

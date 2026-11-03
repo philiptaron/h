@@ -545,7 +545,7 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     for name in &report.headless {
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not set");
     }
-    fetch_result(report)
+    report_fetch(report)
 }
 
 /// Take the upstreams `store add` just added out of the store again, saying so and `why`.
@@ -592,7 +592,7 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
     for name in report.headless.iter().filter(|_| !quiet) {
         eprintln!("{name} has no default branch, so {name}/-/HEAD is not updated");
     }
-    fetch_result(report)
+    report_fetch(report)
 }
 
 /// `h store ingest [DIR]`: make the checkout at `dir`, or the current directory, a tenant of a
@@ -641,13 +641,13 @@ fn report_ingest(report: ingest::Report) -> Result<(), String> {
         eprintln!("{failure}");
     }
     let complete = report.failures.is_empty();
-    fetch_result(report.fetch)?;
+    report_fetch(report.fetch)?;
     if complete { Ok(()) } else { Err("the checkout is not wholly under the store".into()) }
 }
 
 /// Fail when a fetch did not do everything, after naming the upstreams whose HEAD it could not
 /// update. Git has already named the upstreams it could not fetch.
-fn fetch_result(report: FetchReport) -> Result<(), String> {
+fn report_fetch(report: FetchReport) -> Result<(), String> {
     for (name, err) in &report.heads_failed {
         eprintln!("could not update {name}/-/HEAD: {err}");
     }

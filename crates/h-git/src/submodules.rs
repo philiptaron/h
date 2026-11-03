@@ -175,7 +175,7 @@ pub fn update(
     let pattern = r"^(submodule\.stickyrecursiveclone|clone\.filtersubmodules)$";
     let repo = git::at(path);
     let settings =
-        repo.output(&["config", "--type=bool", "--get-regexp", pattern]).unwrap_or_default();
+        repo.capture(&["config", "--type=bool", "--get-regexp", pattern]).unwrap_or_default();
     let enabled = |key: &str| settings.lines().any(|line| line == format!("{key} true"));
     if enabled("submodule.stickyrecursiveclone") {
         repo.run(&["config", "submodule.recurse", "true"])?;
@@ -200,7 +200,7 @@ pub fn update(
 /// one whose history is older than the rest of the store. The skipping negotiator gives up on
 /// unrelated history quickly, and still finds the submodule's own commits in the store.
 pub(crate) fn negotiation_args(path: &Path) -> Vec<OsString> {
-    if git::at(path).output(&["config", "--get", "fetch.negotiationAlgorithm"]).is_ok() {
+    if git::at(path).capture(&["config", "--get", "fetch.negotiationAlgorithm"]).is_ok() {
         return Vec::new();
     }
     ["-c", "fetch.negotiationAlgorithm=skipping"].map(OsString::from).into()
@@ -228,7 +228,7 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
 /// `foreach` stop at one, saying there is no submodule mapping for it.
 pub fn gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
     let named = paths(path);
-    let out = git::at(path).output(&["ls-files", "--stage", "-z"]).unwrap_or_default();
+    let out = git::at(path).capture(&["ls-files", "--stage", "-z"]).unwrap_or_default();
     let mut mapped: Vec<(String, String)> = Vec::new();
     let mut unmapped: Vec<String> = Vec::new();
     // NUL-terminated `<mode> <object> <stage>\t<path>` entries; a conflicted gitlink has one for
@@ -272,7 +272,7 @@ pub fn paths(path: &Path) -> Vec<(String, String)> {
     }
     let pattern = r"^submodule\..*\.path$";
     let args = git::args!["config", "--file", file, "-z", "--get-regexp", pattern];
-    let out = git::at(path).output(&args).unwrap_or_default();
+    let out = git::at(path).capture(&args).unwrap_or_default();
     // NUL-terminated `<key>\n<value>` entries, since names and paths may contain spaces.
     out.split('\0')
         .filter_map(|entry| {
@@ -291,7 +291,7 @@ pub fn gitmodules(path: &Path) -> Vec<(String, String)> {
     }
     let pattern = r"^submodule\..*\.url$";
     let args = git::args!["config", "--file", file, "-z", "--get-regexp", pattern];
-    let out = git::at(path).output(&args).unwrap_or_default();
+    let out = git::at(path).capture(&args).unwrap_or_default();
     // NUL-terminated `<key>\n<value>` entries, since submodule names may contain spaces.
     out.split('\0')
         .filter_map(|entry| {
@@ -394,7 +394,7 @@ pub fn resolve_fork_urls(
     identity: &[(OsString, OsString)],
 ) -> Result<Vec<(String, String)>, GitError> {
     let repo = git::at(path);
-    let git_dir = repo.output(&["rev-parse", "--absolute-git-dir"])?;
+    let git_dir = repo.capture(&["rev-parse", "--absolute-git-dir"])?;
     let modules = Path::new(git_dir.trim()).join("modules");
     let mut from_upstream = Vec::new();
     for (name, url) in gitmodules(path).into_iter().filter(|(_, url)| is_relative(url)) {
@@ -404,7 +404,7 @@ pub fn resolve_fork_urls(
             continue;
         };
         let key = format!("submodule.{name}.url");
-        let set = repo.output(&["config", "--get", &key]).ok();
+        let set = repo.capture(&["config", "--get", &key]).ok();
         let untouched = set.as_deref().is_none_or(|set| set.trim() == fork);
         if fork == upstream || modules.join(&name).exists() || !untouched {
             continue;

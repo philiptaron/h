@@ -93,7 +93,7 @@ struct Tenant {
 /// and `credential.*`, as `-c` pairs: what the shell function passes `h`, when nothing does.
 pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
     let pattern = r"^(user|credential)\.";
-    let out = git::at(dir).output(&["config", "--local", "-z", "--get-regexp", pattern]);
+    let out = git::at(dir).capture(&["config", "--local", "-z", "--get-regexp", pattern]);
     out.unwrap_or_default()
         .split('\0')
         .filter_map(|entry| entry.split_once('\n'))
@@ -545,7 +545,7 @@ fn clone_missing(
     repo.run(&init)?;
     let mut args: Vec<OsString> = ["submodule", "status", "--"].map(OsString::from).into();
     args.extend(mapped());
-    let status = repo.output(&args)?;
+    let status = repo.capture(&args)?;
     let mut missing = Vec::new();
     let mut present = Vec::new();
     for line in status.lines() {
@@ -635,7 +635,7 @@ fn make_tenant(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), Gi
 /// the repository keeps no objects of its own.
 fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
     let repo = git::at(git_dir);
-    let counts = repo.output(&["count-objects", "-v"])?;
+    let counts = repo.capture(&["count-objects", "-v"])?;
     let local = counts
         .lines()
         .any(|line| matches!(line.split_once(": "), Some(("count" | "in-pack", n)) if n != "0"));

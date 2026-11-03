@@ -45,9 +45,9 @@ Commands:
   store worktree <term> <ref> [DIR]
                               clone the upstream from the store into DIR (default: a temporary
                               directory) and check <ref> out there
-  store ingest [DIR]          put the checkout at DIR (default: here) under the store: its upstreams
-                              and its submodules' in the store, missing submodules cloned, and its
-                              objects borrowed from the store instead of kept
+  store ingest [DIR]          make the checkout at DIR (default: here) a tenant of the store: its
+                              upstreams and its submodules' in the store, missing submodules
+                              cloned, and its objects borrowed from the store instead of kept
   store maintain [hourly|daily|weekly]
                               run the store's maintenance tasks (default: daily)
   hook worktree-create        Claude Code's WorktreeCreate hook: read its JSON on stdin, add a
@@ -590,10 +590,10 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
     fetch_result(report)
 }
 
-/// `h store ingest [DIR]`: put the checkout at `dir`, or the current directory, under the store
-/// it already borrows from, or else under `store`, creating it if needed.
+/// `h store ingest [DIR]`: make the checkout at `dir`, or the current directory, a tenant of a
+/// store: the one it is a tenant of already, or else `store`, creating it if needed.
 ///
-/// The git options are the identity for `store`, so a checkout that borrows from another store,
+/// The git options are the identity for `store`, so a checkout that is a tenant of another store,
 /// as a clone made with another identity's shell function does, uses its own identity instead.
 fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<(), String> {
     let dir = match dir {
@@ -604,7 +604,7 @@ fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<
     let identity = if target == *store {
         config_pairs(&config.git_opts)
     } else {
-        eprintln!("{} borrows from the store at {}", dir.display(), target.path.display());
+        eprintln!("{} is a tenant of the store at {}", dir.display(), target.path.display());
         Vec::new()
     };
     if !target.exists() {

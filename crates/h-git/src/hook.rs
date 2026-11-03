@@ -104,9 +104,9 @@ pub(crate) fn repository_root(common: &Path) -> PathBuf {
     }
 }
 
-/// The store the repository at `common` borrows objects from: the one its
-/// `objects/info/alternates` names, which is the store the clone was made with, else `fallback`.
-pub(crate) fn borrowed_store(common: &Path, fallback: Option<&Store>) -> Option<Store> {
+/// The store the repository at `common` is a tenant of: the one its `objects/info/alternates`
+/// names, which is the store the clone was made with, else `fallback`.
+pub(crate) fn store_of(common: &Path, fallback: Option<&Store>) -> Option<Store> {
     let objects = common.join("objects");
     let alternates = std::fs::read_to_string(objects.join("info/alternates")).unwrap_or_default();
     let named = alternates
@@ -159,7 +159,7 @@ fn base(
 ) -> Result<(String, String), GitError> {
     let repo = git::at(root);
     let (upstream, own) = remotes(repo);
-    if let Some(store) = borrowed_store(common, fallback) {
+    if let Some(store) = store_of(common, fallback) {
         let url = upstream.iter().chain(&own).find_map(|remote| repo.remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
@@ -250,7 +250,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
         }
         (Err(err), None) => return Err(err),
     };
-    if let Some(store) = borrowed_store(&common, None)
+    if let Some(store) = store_of(&common, None)
         && let Err(err) = ingest::repair_prefixes(&store, &common)
     {
         eprintln!("warning: could not update {}: {err}", common.display());
@@ -295,14 +295,14 @@ fn set_aside(path: &Path) -> Result<PathBuf, GitError> {
 }
 
 /// Clone the submodules of the new worktree at `path` from the store the repository (whose
-/// common git directory is `common`) borrows from, putting those it lacks there too, so that an
+/// common git directory is `common`) is a tenant of, putting those it lacks there too, so that an
 /// agent gets a tree it can build. The worktree is usable without them, so what fails is only
 /// said on stderr; stdout stays the worktree's path alone.
 fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
     if !path.join(".gitmodules").is_file() {
         return;
     }
-    let Some(store) = borrowed_store(common, fallback) else {
+    let Some(store) = store_of(common, fallback) else {
         return;
     };
     match ingest::ingest(&store, path, &[], ingest::Scope::Submodules) {

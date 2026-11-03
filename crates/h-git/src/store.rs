@@ -7,7 +7,7 @@
 //! one extends, as `gitlab.com/g/proj` is extended by `gitlab.com/g/proj/sub`, is nested: its
 //! refs live under `<name>/-/` instead, so pruning it never touches the other's refs. No name has
 //! a `-` segment, so the two layouts never overlap. Pushing to any remote fails, and nothing is
-//! ever pruned, so clones that borrow objects from the store stay intact.
+//! ever pruned, so the store's tenants, the clones that borrow its objects, stay intact.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -18,7 +18,7 @@ use crate::git::{self, Git, GitError, config_pairs};
 
 /// Configuration every store gets at creation.
 pub const STORE_CONFIG: &[(&str, &str)] = &[
-    // Never delete objects: clones borrow them through alternates.
+    // Never delete objects: tenants borrow them through alternates.
     ("gc.auto", "0"),
     ("gc.pruneExpire", "never"),
     ("gc.cruftPacks", "true"),
@@ -184,7 +184,7 @@ impl Store {
 
     /// Remove upstream `name`: its configuration, and its branches, tags and HEAD, all in one
     /// transaction. The refs of upstreams whose names extend it are left alone, and an outer
-    /// upstream it nested stays nested. Its objects stay too, since clones borrow them.
+    /// upstream it nested stays nested. Its objects stay too, since tenants borrow them.
     ///
     /// `git remote remove` would keep the tags, which are not remote-tracking refs, so the refs
     /// are deleted here.
@@ -482,14 +482,14 @@ impl Store {
     /// Clone upstream `name` from the store into `dir`, or a fresh temporary directory, and check
     /// out `reference` there. Returns the clone's path.
     ///
-    /// The clone borrows the store's objects, as `git clone --shared` would, but sees only this
-    /// upstream, and under the names an ordinary clone of it has: its branches as `origin/*`,
-    /// `origin/HEAD` at its default branch, and its tags as plain tags. So `git describe` and
-    /// build tooling behave as in any clone, and `git fetch` refreshes it from the store with no
-    /// network. Pushing back fails. A branch (or `HEAD`, the default branch) is checked out as a
-    /// local branch tracking `origin/<branch>`, as `git clone --branch` does, so work in the clone
-    /// can be committed; a tag or commit is checked out detached. The `-c key=value` pairs in
-    /// `git_opts` are written into it, as `h go` writes them into clones.
+    /// The clone is a tenant, borrowing the store's objects as `git clone --shared` would, but sees
+    /// only this upstream, and under the names an ordinary clone of it has: its branches as
+    /// `origin/*`, `origin/HEAD` at its default branch, and its tags as plain tags. So
+    /// `git describe` and build tooling behave as in any clone, and `git fetch` refreshes it from
+    /// the store with no network. Pushing back fails. A branch (or `HEAD`, the default branch) is
+    /// checked out as a local branch tracking `origin/<branch>`, as `git clone --branch` does, so
+    /// work in the clone can be committed; a tag or commit is checked out detached. The
+    /// `-c key=value` pairs in `git_opts` are written into it, as `h go` writes them into clones.
     ///
     /// `git clone --shared` itself is not used: it would also take the store's own HEAD and
     /// branches, and every upstream's tags. Anything at `dir` but an empty directory is refused,

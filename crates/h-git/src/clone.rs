@@ -116,8 +116,8 @@ pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     args
 }
 
-/// The `core.alternateRefsPrefixes` that limits the refs a clone borrowing from the store
-/// negotiates with to those of the store upstreams `names`, or `None` when there are none.
+/// The `core.alternateRefsPrefixes` that limits the refs a tenant of the store negotiates
+/// with to those of the store upstreams `names`, or `None` when there are none.
 ///
 /// Fetching treats every ref of an alternate as history it already has and sends the server
 /// all of it until the server recognizes a commit, so a clone of something unrelated to the

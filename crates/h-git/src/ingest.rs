@@ -1,10 +1,11 @@
 //! Putting a checkout under the store: `h store ingest`.
 //!
 //! Ingesting a checkout puts the history of all its remotes, and of its submodules' remotes at
-//! every nesting level, into the store as upstreams, points it and each of its submodules at the
-//! store for their objects, clones any submodules that are missing from the store, and drops the
-//! local copies of objects the store now has. A clone made before the store, or a submodule a pull
-//! brought in, ends up as if it had been cloned with the store in the first place.
+//! every nesting level, into the store as upstreams, clones any submodules that are missing, and
+//! makes the checkout and each of its submodules a [`Tenant`] of the store: a repository that
+//! gets its objects from the store and keeps only those the store lacks. A clone made before the
+//! store, or a submodule a pull brought in, ends up as if it had been cloned with the store in the
+//! first place.
 //!
 //! History the checkout already has is not downloaded again: an upstream new to the store is
 //! fetched first from the checkout itself, its remote-tracking branches and tags (never its local
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, Git, GitError, config_args};
 use crate::github::Lookup;
-use crate::hook::{borrowed_store, common_dir, remotes, repository_root};
+use crate::hook::{common_dir, remotes, repository_root, store_of};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, negotiation_args};
@@ -70,14 +71,18 @@ struct Source {
     tags: bool,
 }
 
-/// A repository whose objects are to come from the store.
+/// A tenant of the store: a repository that gets its objects from the store, which its
+/// `objects/info/alternates` names, and offers servers only the store history of its own
+/// upstreams. Ingesting makes the checkout and each of its submodules one, as cloning with the
+/// store does from the start.
 #[derive(Debug, Clone)]
-struct Repo {
+struct Tenant {
     /// Its common git directory, which holds its objects.
     git_dir: PathBuf,
     /// Whether it has all the history it names, which a shallow or partial clone does not: only
-    /// a complete repository is fetched from, and only a complete one gives up objects.
+    /// a complete tenant is fetched from, and only a complete one gives up objects.
     complete: bool,
+    /// Its remotes the store can fetch, as upstreams.
     sources: Vec<Source>,
     /// Its remotes the store cannot fetch from, as `(remote, URL)`: a local path, say, or an SSH
     /// host alias such as `me.github.com:owner/repo`.
@@ -96,10 +101,10 @@ pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
         .collect()
 }
 
-/// The store the checkout at `dir` borrows from, else `fallback`, which need not exist yet.
+/// The store the checkout at `dir` is a tenant of, else `fallback`, which need not exist yet.
 pub fn store_for(dir: &Path, fallback: Option<&Store>) -> Option<Store> {
     let common = common_dir(dir).ok();
-    common.and_then(|common| borrowed_store(&common, None)).or_else(|| fallback.cloned())
+    common.and_then(|common| store_of(&common, None)).or_else(|| fallback.cloned())
 }
 
 /// Put the checkout at `dir` under `store`, as far as `scope` goes, with `identity` (`-c` pairs
@@ -120,9 +125,9 @@ pub fn ingest(
     let identity = if identity.is_empty() { local_identity(&root) } else { identity.to_vec() };
     let lookup = Lookup::new(&identity);
     let mut report = Report::default();
-    let mut repos = Vec::new();
+    let mut tenants = Vec::new();
     if scope == Scope::Everything {
-        repos.push(repository(&root, &common));
+        tenants.push(tenant(&root, &common));
     }
     if let Some(worktree) = git::at(dir).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
     {
@@ -132,26 +137,26 @@ pub fn ingest(
         {
             report.failures.push(format!("could not clone every submodule: {err}"));
         }
-        repos.extend(submodule_repos(&worktree));
+        tenants.extend(submodule_tenants(&worktree));
     }
-    let mut repos: Vec<Repo> = repos.into_iter().flatten().collect();
-    for repo in &repos {
-        for (remote, url) in &repo.unusable {
+    let mut tenants: Vec<Tenant> = tenants.into_iter().flatten().collect();
+    for tenant in &tenants {
+        for (remote, url) in &tenant.unusable {
             let msg = format!(
                 "could not add remote {remote} of {}: the store cannot fetch from {url}",
-                display(repo)
+                display(tenant)
             );
             report.failures.push(msg);
         }
     }
 
-    // The upstreams, in the store or put there. A shallow or partial repository's upstream is
-    // only used when the store has it already, or a whole repository brings it there.
+    // The upstreams, in the store or put there. A shallow or partial tenant's upstream is only
+    // used when the store has it already, or a complete tenant brings it there.
     let mut names = Vec::new();
     let mut partial_only = Vec::new();
-    for repo in &mut repos {
-        for source in &mut repo.sources {
-            if !repo.complete && store.find(&source.name).is_none() {
+    for tenant in &mut tenants {
+        for source in &mut tenant.sources {
+            if !tenant.complete && store.find(&source.name).is_none() {
                 partial_only.push(source.name.clone());
                 continue;
             }
@@ -167,7 +172,7 @@ pub fn ingest(
     }
     // A name taken as the store spelled it may have been renamed for a later remote since.
     names = follow_renames(&report.renamed, names);
-    for source in repos.iter_mut().flat_map(|repo| repo.sources.iter_mut()) {
+    for source in tenants.iter_mut().flat_map(|tenant| tenant.sources.iter_mut()) {
         source.name = follow_renames(&report.renamed, vec![source.name.clone()]).remove(0);
     }
     for name in partial_only {
@@ -175,13 +180,14 @@ pub fn ingest(
             report.left_out.push(name);
         }
     }
-    // An upstream the store has no history of yet gets the checkout's first.
-    for repo in repos.iter().filter(|repo| repo.complete) {
-        for source in &repo.sources {
+    // An upstream the store has no history of yet gets the tenant's first.
+    for tenant in tenants.iter().filter(|tenant| tenant.complete) {
+        for source in &tenant.sources {
             let new =
                 store.find(&source.name).is_some() && !store.has_refs(&source.name).unwrap_or(true);
-            if new && let Err(err) = fetch_local(store, &repo.git_dir, source) {
-                let msg = format!("could not fetch {} from {}: {err}", source.name, display(repo));
+            if new && let Err(err) = fetch_local(store, &tenant.git_dir, source) {
+                let msg =
+                    format!("could not fetch {} from {}: {err}", source.name, display(tenant));
                 report.failures.push(msg);
             }
         }
@@ -191,14 +197,14 @@ pub fn ingest(
     }
     take_back_unfetched(store, &mut report);
 
-    // A clone made before an upstream was renamed still names it the old way. Those borrowing
-    // below are repaired as they borrow; this is for the repository itself in every scope.
+    // A clone made before an upstream was renamed still names it the old way. The tenants below
+    // are repaired as they move in; this is for the repository itself in every scope.
     if let Err(err) = repair_prefixes(store, &common) {
         report.failures.push(format!("could not update {}: {err}", common.display()));
     }
-    // Borrowing, then giving up what the store has.
-    for repo in &repos {
-        let names: Vec<String> = repo
+    // Each tenant moves in, then gives up what the store has.
+    for tenant in &tenants {
+        let names: Vec<String> = tenant
             .sources
             .iter()
             .map(|s| s.name.clone())
@@ -207,12 +213,13 @@ pub fn ingest(
         if names.is_empty() {
             continue;
         }
-        if let Err(err) = borrow(store, &repo.git_dir, &names) {
-            report.failures.push(format!("could not borrow for {}: {err}", display(repo)));
-        } else if repo.complete
-            && let Err(err) = drop_borrowed(&repo.git_dir)
+        if let Err(err) = make_tenant(store, &tenant.git_dir, &names) {
+            let msg = format!("could not make {} a tenant of the store: {err}", display(tenant));
+            report.failures.push(msg);
+        } else if tenant.complete
+            && let Err(err) = drop_borrowed(&tenant.git_dir)
         {
-            report.failures.push(format!("could not repack {}: {err}", display(repo)));
+            report.failures.push(format!("could not repack {}: {err}", display(tenant)));
         }
     }
     Ok(report)
@@ -289,54 +296,54 @@ impl Report {
     }
 }
 
-fn display(repo: &Repo) -> String {
-    repo.git_dir.display().to_string()
+fn display(tenant: &Tenant) -> String {
+    tenant.git_dir.display().to_string()
 }
 
-/// The repository whose common git directory is `common`, held in `root`, with every one of its
-/// remotes.
-fn repository(root: &Path, common: &Path) -> Option<Repo> {
-    let mut repo = Repo {
+/// The repository whose common git directory is `common`, held in `root`, as a tenant, with
+/// every one of its remotes.
+fn tenant(root: &Path, common: &Path) -> Option<Tenant> {
+    let mut tenant = Tenant {
         git_dir: common.to_path_buf(),
         complete: is_complete(common),
         sources: Vec::new(),
         unusable: Vec::new(),
     };
-    add_sources(&mut repo, root);
-    Some(repo)
+    add_sources(&mut tenant, root);
+    Some(tenant)
 }
 
-/// Add every remote of the repository at `dir` to `repo`'s sources: its own first (`origin`, or
+/// Add every remote of the repository at `dir` to `tenant`'s sources: its own first (`origin`, or
 /// its only remote besides `upstream`), whose tags are the repository's, then `upstream`, for a
 /// fork, then the rest, in the order the configuration has them. Tags fetched from any of the
 /// others share one namespace with the own remote's in the repository, so they are not counted
 /// as theirs; the store gets each one's tags from its URL.
-fn add_sources(repo: &mut Repo, dir: &Path) {
-    let dir = git::at(dir);
-    let (upstream, own) = remotes(dir);
+fn add_sources(tenant: &mut Tenant, dir: &Path) {
+    let repo = git::at(dir);
+    let (upstream, own) = remotes(repo);
     let all: Vec<String> =
-        dir.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
     if let Some(own) = &own {
-        add_source(repo, dir, own, true);
+        add_source(tenant, repo, own, true);
     }
     for remote in upstream.iter().chain(others) {
-        add_source(repo, dir, remote, false);
+        add_source(tenant, repo, remote, false);
     }
 }
 
-/// Add the remote `remote` of the repository at `dir` to `repo`'s sources as an upstream, named
+/// Add the remote `remote` of `repo` to `tenant`'s sources as an upstream, named
 /// as the store would add it, or to its unusable remotes when the store cannot fetch from its
 /// URL. Its URL is read from the configuration as it is written, before any `insteadOf`.
-fn add_source(repo: &mut Repo, dir: Git<'_>, remote: &str, tags: bool) {
-    let Some(url) = dir.remote_url(remote) else {
+fn add_source(tenant: &mut Tenant, repo: Git<'_>, remote: &str, tags: bool) {
+    let Some(url) = repo.remote_url(remote) else {
         return;
     };
     match store_upstream(&url) {
         Some((name, url)) => {
-            repo.sources.push(Source { name, url, remote: remote.to_string(), tags });
+            tenant.sources.push(Source { name, url, remote: remote.to_string(), tags });
         }
-        None => repo.unusable.push((remote.to_string(), url)),
+        None => tenant.unusable.push((remote.to_string(), url)),
     }
 }
 
@@ -358,19 +365,19 @@ fn is_complete(common: &Path) -> bool {
     !common.join("shallow").exists() && !partial
 }
 
-/// The submodules checked out in the working tree `worktree`, nested ones included, each with
-/// every one of its remotes.
-fn submodule_repos(worktree: &Path) -> Vec<Option<Repo>> {
+/// The submodules checked out in the working tree `worktree`, nested ones included, as tenants,
+/// each with every one of its remotes.
+fn submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
     submodules::checked_out(worktree)
         .into_iter()
         .map(|dir| {
             let dir = dir.as_path();
             let common = common_dir(dir).ok()?;
             let complete = is_complete(&common);
-            let mut repo =
-                Repo { git_dir: common, complete, sources: Vec::new(), unusable: Vec::new() };
-            add_sources(&mut repo, dir);
-            Some(repo)
+            let mut tenant =
+                Tenant { git_dir: common, complete, sources: Vec::new(), unusable: Vec::new() };
+            add_sources(&mut tenant, dir);
+            Some(tenant)
         })
         .collect()
 }
@@ -583,9 +590,10 @@ fn clone_missing(
     result
 }
 
-/// Point the repository whose git directory is `git_dir` at `store` for objects, beside any
-/// alternates it already has, and have it offer servers only the store history of `names`.
-fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitError> {
+/// Make the repository whose git directory is `git_dir` a tenant of `store`: point it at the store
+/// for objects, beside any alternates it already has, and have it offer servers only the store
+/// history of `names`.
+fn make_tenant(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitError> {
     let objects = git_dir.join("objects");
     let file = objects.join("info/alternates");
     let theirs = store.path.join("objects");
@@ -617,8 +625,8 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
     repo.run(&["config", key, &prefixes.join(" ")])
 }
 
-/// Give up the local copies of objects the repository whose git directory is `git_dir` can now
-/// borrow from the store, keeping every other object, reachable or not.
+/// Give up the local copies of objects the tenant whose git directory is `git_dir` can now get
+/// from the store, keeping every other object, reachable or not.
 ///
 /// `git repack -a -d -l` packs what is reachable and not in an alternate into a new pack and
 /// deletes the old ones, which on its own would drop unreachable objects too. With `--cruft`

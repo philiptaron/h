@@ -227,7 +227,7 @@ impl Git<'_> {
     }
 
     /// Run `git` with `args`, leaving stdout connected so the user sees what it prints.
-    pub fn passthrough(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
+    pub fn run_attached(self, args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
         let status = self.prepare_attached(args).status().map_err(GitError::Spawn)?;
         if status.success() { Ok(()) } else { Err(failed(args, status)) }
     }

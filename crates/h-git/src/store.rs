@@ -476,7 +476,7 @@ impl Store {
             _ => (spec, ""),
         };
         let spec = format!("{}{path}", self.revision(name, reference)?);
-        self.git().passthrough(&["show", &spec])
+        self.git().run_attached(&["show", &spec])
     }
 
     /// Clone upstream `name` from the store into `dir`, or a fresh temporary directory, and check

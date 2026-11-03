@@ -524,7 +524,7 @@ fn clone_missing(
     }
     // A gitlink `.gitmodules` does not map is no submodule, to git or to h, but `git submodule`
     // stops at one unless given only the others.
-    let (paths, unmapped) = submodules::gitlinks(worktree);
+    let (paths, unmapped) = submodules::read_gitlinks(worktree);
     for path in &unmapped {
         eprintln!(
             "left {path} in {} as it is, since .gitmodules names no submodule there",

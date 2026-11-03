@@ -221,12 +221,12 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
     Ok(())
 }
 
-/// The gitlinks in the index of the working tree at `path`, in its order: those `.gitmodules`
-/// maps to a submodule, as `(name, path)`, and the paths of those it does not. Git counts only
-/// the first as submodules. A clone leaves each of the rest an empty directory, as it does a
-/// submodule it does not clone, but `git submodule init` without a pathspec, `status` and
-/// `foreach` stop at one, saying there is no submodule mapping for it.
-pub fn gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
+/// Read the gitlinks in the index of the working tree at `path`, in its order: those `.gitmodules`
+/// maps to a submodule, as `(name, path)`, and the paths of those it does not. Git counts only the
+/// first as submodules. A clone leaves each of the rest an empty directory, as it does a submodule
+/// it does not clone, but `git submodule init` without a pathspec, `status` and `foreach` stop at
+/// one, saying there is no submodule mapping for it.
+pub fn read_gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
     let named = paths(path);
     let out = git::at(path).capture(&["ls-files", "--stage", "-z"]).unwrap_or_default();
     let mut mapped: Vec<(String, String)> = Vec::new();
@@ -253,7 +253,7 @@ pub fn gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
 /// does not map, at which `foreach` stops, is passed over.
 pub fn checked_out(path: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    for (_, sub) in gitlinks(path).0 {
+    for (_, sub) in read_gitlinks(path).0 {
         let dir = path.join(sub);
         if dir.join(".git").exists() {
             let nested = checked_out(&dir);

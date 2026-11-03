@@ -497,7 +497,7 @@ impl Store {
     /// `git clone --shared` itself is not used: it would also take the store's own HEAD and
     /// branches, and every upstream's tags. Anything at `dir` but an empty directory is refused,
     /// and a failure removes whatever was made, so `dir` ends up a whole clone or as it was.
-    pub fn worktree(
+    pub fn check_out_worktree(
         &self,
         name: &str,
         reference: &str,
@@ -554,7 +554,7 @@ impl Store {
         }
     }
 
-    /// Make the clone described at [`Store::worktree`] in `dir`.
+    /// Make the clone described at [`Store::check_out_worktree`] in `dir`.
     fn fill_checkout(
         &self,
         name: &str,
@@ -630,8 +630,8 @@ impl Store {
     }
 }
 
-/// Remove what a failed [`Store::worktree`] made in `dir`: all of it, or only what is inside
-/// when the (empty) directory was there before.
+/// Remove what a failed [`Store::check_out_worktree`] made in `dir`: all of it, or only what is
+/// inside when the (empty) directory was there before.
 fn remove_checkout(dir: &Path, existed: bool) {
     if !existed {
         let _ = std::fs::remove_dir_all(dir);
@@ -646,7 +646,7 @@ fn remove_checkout(dir: &Path, existed: bool) {
     }
 }
 
-/// Where [`Store::worktree`] starts the clone it makes.
+/// Where [`Store::check_out_worktree`] starts the clone it makes.
 enum Start {
     /// A local branch of this name, tracking `origin/<name>`.
     Branch(String),

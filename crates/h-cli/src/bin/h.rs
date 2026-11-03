@@ -452,7 +452,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
                 let dir = rest.get(2).map(|d| absolute(d));
                 upstream_in_store(config, store, term).and_then(|name| {
                     store
-                        .worktree(&name, reference, dir, &config.git_opts)
+                        .check_out_worktree(&name, reference, dir, &config.git_opts)
                         .map(|dir| print_path(&dir))
                         .map_err(|e| {
                             e.context(format!("could not check out {reference} of {name}"))

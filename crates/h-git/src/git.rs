@@ -204,6 +204,16 @@ impl Git<'_> {
         Some(out.trim().to_string()).filter(|out| !out.is_empty())
     }
 
+    /// The commit `rev` names, if it names one.
+    pub fn commit(self, rev: &str) -> Option<String> {
+        self.query(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
+    }
+
+    /// The URL of the remote `remote`, as the configuration has it, before any `insteadOf`.
+    pub fn remote_url(self, remote: &str) -> Option<String> {
+        self.query(&["config", "--get", &format!("remote.{remote}.url")])
+    }
+
     /// Run `git` with `args`, feeding it `input` on stdin.
     pub fn run_with_input(self, args: &[impl AsRef<OsStr>], input: &[u8]) -> Result<(), GitError> {
         use std::io::Write;

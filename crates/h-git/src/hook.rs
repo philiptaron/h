@@ -84,11 +84,6 @@ fn slug(name: &str) -> (String, String) {
     (slug, branch)
 }
 
-/// The commit `rev` names in `dir`, if it names one.
-fn commit(dir: &Path, rev: &str) -> Option<String> {
-    git::at(dir).query(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
-}
-
 /// The repository `dir` belongs to: its common git directory, which is the main repository's
 /// even from inside one of its worktrees.
 pub(crate) fn common_dir(dir: &Path) -> Result<PathBuf, GitError> {
@@ -164,14 +159,12 @@ fn base(
 ) -> Result<(String, String), GitError> {
     let (upstream, own) = remotes(root);
     if let Some(store) = borrowed_store(common, fallback) {
-        let url = upstream.iter().chain(&own).find_map(|remote| {
-            git::at(root).query(&["config", "--get", &format!("remote.{remote}.url")])
-        });
+        let url = upstream.iter().chain(&own).find_map(|remote| git::at(root).remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
             let head = format!("refs/remotes/{name}{}/HEAD", if nested { "/-" } else { "" });
-            if let Some(found) = commit(&store.path, &head)
-                && commit(root, &found).is_some()
+            if let Some(found) = git::at(&store.path).commit(&head)
+                && git::at(root).commit(&found).is_some()
             {
                 let from = format!("{name}/HEAD in the store at {}", store.path.display());
                 return Ok((found, from));
@@ -180,7 +173,7 @@ fn base(
     }
     let refs = upstream.iter().chain(&own).map(|remote| format!("refs/remotes/{remote}/HEAD"));
     for rev in refs.chain(["HEAD".to_string()]) {
-        if let Some(found) = commit(root, &rev) {
+        if let Some(found) = git::at(root).commit(&rev) {
             return Ok((found, rev));
         }
     }
@@ -236,7 +229,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
     let repo = git::at(&root);
-    let added = if commit(&root, &format!("refs/heads/{branch}")).is_some() {
+    let added = if repo.commit(&format!("refs/heads/{branch}")).is_some() {
         repo.run(&["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
             path,
             branch,
@@ -370,7 +363,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     if let Some(branch) = repo.query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         return Ok(Some(branch));
     }
-    let Some(head) = commit(path, "HEAD") else {
+    let Some(head) = repo.commit("HEAD") else {
         return Ok(None);
     };
     let unique =
@@ -380,7 +373,7 @@ fn branch(path: &Path) -> Result<Option<String>, GitError> {
     }
     let dir = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let mut name = format!("worktree-{dir}");
-    if commit(path, &format!("refs/heads/{name}")).is_some() {
+    if repo.commit(&format!("refs/heads/{name}")).is_some() {
         name = format!("{name}-{}", &head[..head.len().min(12)]);
     }
     repo.run(&["branch", &name, &head])?;

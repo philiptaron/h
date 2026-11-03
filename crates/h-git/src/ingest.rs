@@ -328,8 +328,7 @@ fn add_sources(repo: &mut Repo, dir: &Path) {
 /// as the store would add it, or to its unusable remotes when the store cannot fetch from its
 /// URL. Its URL is read from the configuration as it is written, before any `insteadOf`.
 fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
-    let Some(url) = git::at(dir).query(&["config", "--get", &format!("remote.{remote}.url")])
-    else {
+    let Some(url) = git::at(dir).remote_url(remote) else {
         return;
     };
     match store_upstream(&url) {
@@ -343,9 +342,8 @@ fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
 /// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
 fn fork_urls(root: &Path) -> Option<(String, String)> {
     let (upstream, own) = remotes(root);
-    let url =
-        |remote: String| git::at(root).query(&["config", "--get", &format!("remote.{remote}.url")]);
-    Some((url(own?)?, url(upstream?)?))
+    let repo = git::at(root);
+    Some((repo.remote_url(&own?)?, repo.remote_url(&upstream?)?))
 }
 
 /// Whether the repository whose common git directory is `common` has all its history, unlike a

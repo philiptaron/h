@@ -270,7 +270,7 @@ fn take_back_unfetched(store: &Store, report: &mut Report) {
 
 impl Report {
     /// Whether everything was done.
-    pub fn complete(&self) -> bool {
+    pub fn is_complete(&self) -> bool {
         self.problems().is_empty()
     }
 

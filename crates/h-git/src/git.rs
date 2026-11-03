@@ -199,21 +199,21 @@ impl Git<'_> {
         }
     }
 
-    /// What `git` with `args` printed on stdout, trimmed, or `None` when it fails or prints
-    /// nothing: for asking about the repository.
-    pub fn query(self, args: &[impl AsRef<OsStr>]) -> Option<String> {
+    /// Query the repository: what `git` with `args` printed on stdout, trimmed, or `None` when it
+    /// fails or prints nothing.
+    pub fn query_output(self, args: &[impl AsRef<OsStr>]) -> Option<String> {
         let out = self.capture_output(args).ok()?;
         Some(out.trim().to_string()).filter(|out| !out.is_empty())
     }
 
     /// The commit `rev` names, if it names one.
     pub fn resolve_commit(self, rev: &str) -> Option<String> {
-        self.query(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
+        self.query_output(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
     }
 
     /// Read the URL of the remote `remote` as the configuration has it, before any `insteadOf`.
     pub fn read_remote_url(self, remote: &str) -> Option<String> {
-        self.query(&["config", "--get", &format!("remote.{remote}.url")])
+        self.query_output(&["config", "--get", &format!("remote.{remote}.url")])
     }
 
     /// Run `git` with `args`, feeding it `input` on stdin.

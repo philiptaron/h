@@ -88,7 +88,7 @@ fn slug(name: &str) -> (String, String) {
 /// even from inside one of its worktrees.
 pub(crate) fn find_common_dir(dir: &Path) -> Result<PathBuf, GitError> {
     git::at(dir)
-        .query(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .query_output(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .map(PathBuf::from)
         .ok_or_else(|| GitError::Invalid(format!("{} is not in a git repository", dir.display())))
 }
@@ -126,7 +126,7 @@ pub(crate) fn find_store(common: &Path, fallback: Option<&Store>) -> Option<Stor
 /// (`origin`, or its only other remote).
 pub(crate) fn read_remotes(repo: Git<'_>) -> (Option<String>, Option<String>) {
     let all: Vec<String> =
-        repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        repo.query_output(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let upstream = all.iter().find(|r| *r == "upstream").cloned();
     let others: Vec<&String> = all.iter().filter(|r| *r != "upstream").collect();
     let own = match others.as_slice() {
@@ -183,7 +183,7 @@ fn find_base(
 
 /// Whether `path` is a worktree of `repo`.
 fn is_worktree_of(repo: Git<'_>, path: &Path) -> bool {
-    let listed = repo.query(&["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let listed = repo.query_output(&["worktree", "list", "--porcelain"]).unwrap_or_default();
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     listed
         .lines()
@@ -362,7 +362,7 @@ fn save(path: &Path) -> Result<bool, GitError> {
 /// already has other work. Any other detached HEAD is on no branch.
 fn ensure_branch(path: &Path) -> Result<Option<String>, GitError> {
     let repo = git::at(path);
-    if let Some(branch) = repo.query(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+    if let Some(branch) = repo.query_output(&["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         return Ok(Some(branch));
     }
     let Some(head) = repo.resolve_commit("HEAD") else {
@@ -370,7 +370,7 @@ fn ensure_branch(path: &Path) -> Result<Option<String>, GitError> {
     };
     let unique =
         ["rev-list", "--max-count=1", "HEAD", "--not", "--branches", "--tags", "--remotes"];
-    if repo.query(&unique).is_none() {
+    if repo.query_output(&unique).is_none() {
         return Ok(None);
     }
     let dir = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -401,12 +401,12 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
         Err(GitError::Invalid(msg))
     };
     let repo = git::at(&path);
-    let top = repo.query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from);
+    let top = repo.query_output(&["rev-parse", "--show-toplevel"]).map(PathBuf::from);
     if top.and_then(|top| top.canonicalize().ok()) != path.canonicalize().ok() {
         return leave("is not the top of a git worktree");
     }
     let dirs = ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"];
-    let dirs = repo.query(&dirs).unwrap_or_default();
+    let dirs = repo.query_output(&dirs).unwrap_or_default();
     let (git_dir, common) = match dirs.lines().collect::<Vec<_>>().as_slice() {
         [git_dir, common] => (PathBuf::from(git_dir), PathBuf::from(common)),
         _ => return leave("has no git directory that git reports"),

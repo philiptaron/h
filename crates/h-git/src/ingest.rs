@@ -129,7 +129,8 @@ pub fn ingest(
     if scope == Scope::Everything {
         tenants.push(find_tenant(&root, &common));
     }
-    if let Some(worktree) = git::at(dir).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+    if let Some(worktree) =
+        git::at(dir).query_output(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
     {
         let fork = read_fork_urls(&root);
         if scope != Scope::CheckedOut
@@ -322,7 +323,7 @@ fn add_sources(tenant: &mut Tenant, dir: &Path) {
     let repo = git::at(dir);
     let (upstream, own) = read_remotes(repo);
     let all: Vec<String> =
-        repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        repo.query_output(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
     if let Some(own) = &own {
         add_source(tenant, repo, own, true);
@@ -358,9 +359,9 @@ fn read_fork_urls(root: &Path) -> Option<(String, String)> {
 /// shallow or partial clone.
 fn is_complete(common: &Path) -> bool {
     let repo = git::at(common);
-    let partial = repo.query(&["config", "--get", "extensions.partialClone"]).is_some()
+    let partial = repo.query_output(&["config", "--get", "extensions.partialClone"]).is_some()
         || repo
-            .query(&["config", "--get-regexp", r"^remote\..*\.promisor$"])
+            .query_output(&["config", "--get-regexp", r"^remote\..*\.promisor$"])
             .is_some_and(|out| out.lines().any(|line| line.ends_with(" true")));
     !common.join("shallow").exists() && !partial
 }
@@ -453,7 +454,7 @@ fn ask_canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
 pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
     let key = "core.alternateRefsPrefixes";
     let repo = git::at(git_dir);
-    let Some(configured) = repo.query(&["config", "--get", key]) else {
+    let Some(configured) = repo.query_output(&["config", "--get", key]) else {
         return Ok(());
     };
     let existing = store.list_remotes()?;
@@ -541,7 +542,7 @@ fn clone_missing(
     // ones when `submodule.active` is set, which leaves the unmapped out too; given paths, it
     // initializes them active or not, so they are given only when nothing else leaves those out.
     let repo = git::at(worktree);
-    let active = repo.query(&["config", "--get-all", "submodule.active"]).is_some();
+    let active = repo.query_output(&["config", "--get-all", "submodule.active"]).is_some();
     let mut init: Vec<OsString> = ["submodule", "init", "--"].map(OsString::from).into();
     if !unmapped.is_empty() && !active {
         init.extend(mapped());
@@ -568,7 +569,7 @@ fn clone_missing(
             continue;
         };
         let initialized = git::at(worktree)
-            .query(&["config", "--get", &format!("submodule.{name}.url")])
+            .query_output(&["config", "--get", &format!("submodule.{name}.url")])
             .is_some();
         match line.as_bytes().first() {
             Some(b'-') if initialized => missing.push(path.to_string()),
@@ -619,7 +620,7 @@ fn make_tenant(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), Gi
     repair_prefixes(store, git_dir)?;
     let key = "core.alternateRefsPrefixes";
     let repo = git::at(git_dir);
-    let configured = repo.query(&["config", "--get", key]).unwrap_or_default();
+    let configured = repo.query_output(&["config", "--get", key]).unwrap_or_default();
     let mut prefixes: Vec<String> = configured.split_whitespace().map(String::from).collect();
     for prefix in alternate_refs_prefixes(names).unwrap_or_default().split_whitespace() {
         if !prefixes.iter().any(|p| p == prefix) {

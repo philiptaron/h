@@ -227,7 +227,7 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
 /// it does not clone, but `git submodule init` without a pathspec, `status` and `foreach` stop at
 /// one, saying there is no submodule mapping for it.
 pub fn read_gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
-    let named = paths(path);
+    let named = read_paths(path);
     let out = git::at(path).capture(&["ls-files", "--stage", "-z"]).unwrap_or_default();
     let mut mapped: Vec<(String, String)> = Vec::new();
     let mut unmapped: Vec<String> = Vec::new();
@@ -264,8 +264,8 @@ pub fn find_checked_out(path: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The submodules `.gitmodules` in the working tree at `path` names, as `(name, path)`.
-pub fn paths(path: &Path) -> Vec<(String, String)> {
+/// Read the submodules `.gitmodules` in the working tree at `path` names, as `(name, path)`.
+pub fn read_paths(path: &Path) -> Vec<(String, String)> {
     let file = path.join(".gitmodules");
     if !file.is_file() {
         return Vec::new();

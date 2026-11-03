@@ -503,7 +503,7 @@ impl Store {
         git_opts: &[OsString],
     ) -> Result<PathBuf, GitError> {
         let prefix = self.find_prefix(name)?;
-        let start = self.checkout_start(name, &prefix, reference)?;
+        let start = self.find_checkout_start(name, &prefix, reference)?;
         let dir = dir.unwrap_or_else(|| temp_worktree_dir(name, reference));
         let existed = dir.exists();
         if existed && !dir.read_dir().is_ok_and(|mut entries| entries.next().is_none()) {
@@ -517,10 +517,15 @@ impl Store {
         result.map(|()| dir)
     }
 
-    /// Where a checkout of `reference` of upstream `name` (called `prefix` in refs) starts:
+    /// Find where a checkout of `reference` of upstream `name` (called `prefix` in refs) starts:
     /// a branch of the upstream, or else the commit that `reference` names, such as a tag, a
     /// hash or `main~2`. Checked before anything is made, so a bad reference leaves nothing.
-    fn checkout_start(&self, name: &str, prefix: &str, reference: &str) -> Result<Start, GitError> {
+    fn find_checkout_start(
+        &self,
+        name: &str,
+        prefix: &str,
+        reference: &str,
+    ) -> Result<Start, GitError> {
         let repo = self.git();
         let branches = format!("refs/remotes/{prefix}/");
         let branch = if reference == "HEAD" {

@@ -182,8 +182,8 @@ fn concat_path(root: impl AsRef<Path>, parts: &[&str]) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes))
 }
 
-/// The names under `dir` that are directories spelled like `name` in any casing, sorted.
-fn case_variants(dir: &Path, name: &str) -> Vec<String> {
+/// List the names under `dir` that are directories spelled like `name` in any casing, sorted.
+fn list_case_variants(dir: &Path, name: &str) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -205,10 +205,10 @@ pub fn find_github_dir(
     repo: &str,
 ) -> Option<(String, String)> {
     let host = concat_path(code_root, &["github.com"]);
-    let found: Vec<(String, String)> = case_variants(&host, user)
+    let found: Vec<(String, String)> = list_case_variants(&host, user)
         .into_iter()
         .flat_map(|owner| {
-            let names = case_variants(&host.join(&owner), repo);
+            let names = list_case_variants(&host.join(&owner), repo);
             names.into_iter().map(move |name| (owner.clone(), name))
         })
         .collect();

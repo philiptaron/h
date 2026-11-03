@@ -341,20 +341,11 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
     let config = config_pairs(&opts);
     let head = remote_head(req.url, req.path.parent(), &config)?;
     let format = format!("--object-format={}", head.object_format()?);
-    git::run(
-        None,
-        &[
-            OsString::from("init"),
-            "--bare".into(),
-            "--quiet".into(),
-            format.into(),
-            bare.clone().into(),
-        ],
-    )?;
+    git::run(None, &git::args!["init", "--bare", "--quiet", format, bare])?;
     // Worktrees link to the container by relative paths, so the whole can be moved (git 2.48).
     git::run(Some(&bare), &["config", "worktree.useRelativePaths", "true"])?;
     for (key, value) in config {
-        git::run(Some(&bare), &[OsString::from("config"), key, value])?;
+        git::run(Some(&bare), &git::args!["config", key, value])?;
     }
     if let Some(reference) = req.reference.filter(|r| r.join("objects").is_dir()) {
         let alternates = bare.join("objects/info/alternates");

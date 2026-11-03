@@ -11,6 +11,16 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 
+/// Arguments for git of different types, such as `&str`, `String`, `OsString` and `&Path`, as
+/// the one array of `&OsStr` that [`run`] and the others take:
+/// `git::run(None, &git::args!["init", "--quiet", format, path])`.
+macro_rules! args {
+    ($($arg:expr),+ $(,)?) => {
+        [$(::std::ffi::OsStr::new(&$arg)),+]
+    };
+}
+pub(crate) use args;
+
 /// Why a `git` command did not succeed.
 #[derive(Debug)]
 pub enum GitError {

@@ -214,7 +214,7 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
     }
     for dir in checked_out(path) {
         for (key, value) in identity {
-            git::run(Some(&dir), &[OsString::from("config"), key.clone(), value.clone()])?;
+            git::run(Some(&dir), &git::args!["config", key, value])?;
         }
     }
     Ok(())
@@ -269,8 +269,8 @@ pub fn paths(path: &Path) -> Vec<(String, String)> {
     if !file.is_file() {
         return Vec::new();
     }
-    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
-    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.path$".into()]].concat();
+    let pattern = r"^submodule\..*\.path$";
+    let args = git::args!["config", "--file", file, "-z", "--get-regexp", pattern];
     let out = git::output(Some(path), &args).unwrap_or_default();
     // NUL-terminated `<key>\n<value>` entries, since names and paths may contain spaces.
     out.split('\0')
@@ -288,8 +288,8 @@ pub fn gitmodules(path: &Path) -> Vec<(String, String)> {
     if !file.is_file() {
         return Vec::new();
     }
-    let args = [OsString::from("config"), "--file".into(), file.into(), "-z".into()];
-    let args = [&args[..], &["--get-regexp".into(), r"^submodule\..*\.url$".into()]].concat();
+    let pattern = r"^submodule\..*\.url$";
+    let args = git::args!["config", "--file", file, "-z", "--get-regexp", pattern];
     let out = git::output(Some(path), &args).unwrap_or_default();
     // NUL-terminated `<key>\n<value>` entries, since submodule names may contain spaces.
     out.split('\0')

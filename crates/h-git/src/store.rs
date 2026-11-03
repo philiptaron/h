@@ -108,15 +108,15 @@ impl Store {
             if let Some(parent) = self.path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let args: Vec<OsString> = vec![
-                "init".into(),
-                "--bare".into(),
-                "--quiet".into(),
-                "--object-format=sha1".into(),
-                "--ref-format=reftable".into(),
-                self.path.clone().into(),
+            let init = git::args![
+                "init",
+                "--bare",
+                "--quiet",
+                "--object-format=sha1",
+                "--ref-format=reftable",
+                self.path,
             ];
-            git::run(None, &args)?;
+            git::run(None, &init)?;
         }
         for (key, value) in STORE_CONFIG {
             git::run(self.dir(), &["config", key, value])?;
@@ -129,7 +129,7 @@ impl Store {
             self.restrict_negotiation(&name)?;
         }
         for (key, value) in config_pairs(git_opts) {
-            git::run(self.dir(), &[OsString::from("config"), key, value])?;
+            git::run(self.dir(), &git::args!["config", key, value])?;
         }
         Ok(())
     }
@@ -556,17 +556,14 @@ impl Store {
         let format = git::output(self.dir(), &["rev-parse", "--show-object-format"])?;
         let format = format!("--object-format={}", format.trim());
         std::fs::create_dir_all(dir).map_err(GitError::Spawn)?;
-        let init: Vec<OsString> =
-            vec!["init".into(), "--quiet".into(), format.into(), dir.as_os_str().into()];
-        git::run(None, &init)?;
+        git::run(None, &git::args!["init", "--quiet", format, dir])?;
         let mut alternates = self.path.join("objects").into_os_string().into_vec();
         alternates.push(b'\n');
         std::fs::write(dir.join(".git/objects/info/alternates"), alternates)
             .map_err(GitError::Spawn)?;
 
         let clone = Some(dir);
-        let store: OsString = self.path.clone().into();
-        git::run(clone, &[OsString::from("config"), "remote.origin.url".into(), store])?;
+        git::run(clone, &git::args!["config", "remote.origin.url", self.path])?;
         let fetch = [
             format!("+refs/remotes/{prefix}/*:refs/remotes/origin/*"),
             // Leave out the store's `<prefix>/HEAD`: origin/HEAD is pointed at the default
@@ -590,7 +587,7 @@ impl Store {
             git::run(clone, &["config", "core.alternateRefsPrefixes", &prefixes])?;
         }
         for (key, value) in config_pairs(git_opts) {
-            git::run(clone, &[OsString::from("config"), key, value])?;
+            git::run(clone, &git::args!["config", key, value])?;
         }
         git::run(clone, &["fetch", "--quiet", "origin"])?;
 

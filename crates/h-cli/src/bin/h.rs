@@ -442,7 +442,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
         Some("list") => print_upstreams(store),
         Some("add") => add_to_store(config, store, &terms),
         Some("remove") => remove_from_store(config, store, &terms),
-        Some("fetch") => store_fetch(config, store, &terms),
+        Some("fetch") => fetch_upstreams(config, store, &terms),
         Some("remote") => match terms.as_slice() {
             [term] => resolve_upstream(config, store, term, false).map(|u| println!("{}", u.name)),
             _ => Err("Usage: h store remote <term>".into()),
@@ -579,7 +579,7 @@ fn remove_from_store(config: &Config, store: &Store, terms: &[&str]) -> Result<(
     Ok(())
 }
 
-fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
+fn fetch_upstreams(config: &Config, store: &Store, terms: &[&str]) -> Result<(), String> {
     if !store.exists() {
         return Err(format!("No store at {}: run `h store init` first", store.path.display()));
     }

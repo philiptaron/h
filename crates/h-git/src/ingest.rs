@@ -368,7 +368,7 @@ fn is_complete(common: &Path) -> bool {
 /// Find the submodules checked out in the working tree `worktree`, nested ones included, as
 /// tenants, each with every one of its remotes.
 fn find_submodule_tenants(worktree: &Path) -> Vec<Option<Tenant>> {
-    submodules::checked_out(worktree)
+    submodules::find_checked_out(worktree)
         .into_iter()
         .map(|dir| {
             let dir = dir.as_path();

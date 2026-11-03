@@ -213,7 +213,7 @@ pub fn write_identity(path: &Path, identity: &[(OsString, OsString)]) -> Result<
     if identity.is_empty() {
         return Ok(());
     }
-    for dir in checked_out(path) {
+    for dir in find_checked_out(path) {
         for (key, value) in identity {
             git::at(&dir).run(&git::args!["config", key, value])?;
         }
@@ -248,15 +248,15 @@ pub fn read_gitlinks(path: &Path) -> (Vec<(String, String)>, Vec<String>) {
     (mapped, unmapped)
 }
 
-/// The submodules checked out in the working tree at `path`, nested ones included, each before
+/// Find the submodules checked out in the working tree at `path`, nested ones included, each before
 /// its own: what `git submodule foreach --recursive` visits, except that a gitlink `.gitmodules`
 /// does not map, at which `foreach` stops, is passed over.
-pub fn checked_out(path: &Path) -> Vec<PathBuf> {
+pub fn find_checked_out(path: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for (_, sub) in read_gitlinks(path).0 {
         let dir = path.join(sub);
         if dir.join(".git").exists() {
-            let nested = checked_out(&dir);
+            let nested = find_checked_out(&dir);
             dirs.push(dir);
             dirs.extend(nested);
         }

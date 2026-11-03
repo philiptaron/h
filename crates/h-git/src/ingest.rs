@@ -15,7 +15,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use crate::clone::alternate_refs_prefixes;
-use crate::git::{self, GitError, config_args};
+use crate::git::{self, Git, GitError, config_args};
 use crate::github::Lookup;
 use crate::hook::{borrowed_store, common_dir, remotes, repository_root};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
@@ -312,9 +312,10 @@ fn repository(root: &Path, common: &Path) -> Option<Repo> {
 /// others share one namespace with the own remote's in the repository, so they are not counted
 /// as theirs; the store gets each one's tags from its URL.
 fn add_sources(repo: &mut Repo, dir: &Path) {
+    let dir = git::at(dir);
     let (upstream, own) = remotes(dir);
     let all: Vec<String> =
-        git::at(dir).query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        dir.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
     if let Some(own) = &own {
         add_source(repo, dir, own, true);
@@ -327,8 +328,8 @@ fn add_sources(repo: &mut Repo, dir: &Path) {
 /// Add the remote `remote` of the repository at `dir` to `repo`'s sources as an upstream, named
 /// as the store would add it, or to its unusable remotes when the store cannot fetch from its
 /// URL. Its URL is read from the configuration as it is written, before any `insteadOf`.
-fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
-    let Some(url) = git::at(dir).remote_url(remote) else {
+fn add_source(repo: &mut Repo, dir: Git<'_>, remote: &str, tags: bool) {
+    let Some(url) = dir.remote_url(remote) else {
         return;
     };
     match store_upstream(&url) {
@@ -341,8 +342,8 @@ fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
 
 /// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
 fn fork_urls(root: &Path) -> Option<(String, String)> {
-    let (upstream, own) = remotes(root);
     let repo = git::at(root);
+    let (upstream, own) = remotes(repo);
     Some((repo.remote_url(&own?)?, repo.remote_url(&upstream?)?))
 }
 

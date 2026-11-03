@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::clone::BARE_DIR;
-use crate::git::{self, GitError};
+use crate::git::{self, Git, GitError};
 use crate::ingest;
 use crate::resolve::{Target, parse_term, remote_name};
 use crate::store::Store;
@@ -122,11 +122,11 @@ pub(crate) fn borrowed_store(common: &Path, fallback: Option<&Store>) -> Option<
     named.or_else(|| fallback.filter(|store| store.exists()).cloned())
 }
 
-/// The remotes that matter for a base: `upstream`, for a fork, and the clone's own (`origin`, or
-/// its only other remote).
-pub(crate) fn remotes(root: &Path) -> (Option<String>, Option<String>) {
+/// The remotes of `repo` that matter for a base: `upstream`, for a fork, and the clone's own
+/// (`origin`, or its only other remote).
+pub(crate) fn remotes(repo: Git<'_>) -> (Option<String>, Option<String>) {
     let all: Vec<String> =
-        git::at(root).query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let upstream = all.iter().find(|r| *r == "upstream").cloned();
     let others: Vec<&String> = all.iter().filter(|r| *r != "upstream").collect();
     let own = match others.as_slice() {
@@ -157,14 +157,15 @@ fn base(
     common: &Path,
     fallback: Option<&Store>,
 ) -> Result<(String, String), GitError> {
-    let (upstream, own) = remotes(root);
+    let repo = git::at(root);
+    let (upstream, own) = remotes(repo);
     if let Some(store) = borrowed_store(common, fallback) {
-        let url = upstream.iter().chain(&own).find_map(|remote| git::at(root).remote_url(remote));
+        let url = upstream.iter().chain(&own).find_map(|remote| repo.remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
             let head = format!("refs/remotes/{name}{}/HEAD", if nested { "/-" } else { "" });
             if let Some(found) = git::at(&store.path).commit(&head)
-                && git::at(root).commit(&found).is_some()
+                && repo.commit(&found).is_some()
             {
                 let from = format!("{name}/HEAD in the store at {}", store.path.display());
                 return Ok((found, from));
@@ -173,16 +174,16 @@ fn base(
     }
     let refs = upstream.iter().chain(&own).map(|remote| format!("refs/remotes/{remote}/HEAD"));
     for rev in refs.chain(["HEAD".to_string()]) {
-        if let Some(found) = git::at(root).commit(&rev) {
+        if let Some(found) = repo.commit(&rev) {
             return Ok((found, rev));
         }
     }
     Err(GitError::Invalid(format!("{} has no commit to start a worktree from", root.display())))
 }
 
-/// Whether `path` is a worktree of the repository at `root`.
-fn is_worktree_of(root: &Path, path: &Path) -> bool {
-    let listed = git::at(root).query(&["worktree", "list", "--porcelain"]).unwrap_or_default();
+/// Whether `path` is a worktree of `repo`.
+fn is_worktree_of(repo: Git<'_>, path: &Path) -> bool {
+    let listed = repo.query(&["worktree", "list", "--porcelain"]).unwrap_or_default();
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     listed
         .lines()
@@ -210,11 +211,12 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     let (slug, branch) = slug(&name);
     let common = common_dir(&cwd)?;
     let root = repository_root(&common);
+    let repo = git::at(&root);
     let path = root.join(WORKTREES_DIR).join(&slug);
 
     let mut leftover = None;
     if path.exists() {
-        if is_worktree_of(&root, &path) {
+        if is_worktree_of(repo, &path) {
             return Ok(Created { path, branch, base: "the existing worktree".into() });
         }
         if path.join(".git").symlink_metadata().is_ok() {
@@ -228,7 +230,6 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
     }
     let _ = std::fs::create_dir_all(root.join(WORKTREES_DIR));
     let target = path.to_string_lossy().into_owned();
-    let repo = git::at(&root);
     let added = if repo.commit(&format!("refs/heads/{branch}")).is_some() {
         repo.run(&["worktree", "add", "--quiet", &target, &branch]).map(|()| Created {
             path,
@@ -314,11 +315,11 @@ fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
     }
 }
 
-/// What `git status` reports in the worktree at `path`, untracked files and changes inside
+/// What `git status` reports in the worktree of `repo`, untracked files and changes inside
 /// submodules included.
-fn status(path: &Path) -> Result<String, GitError> {
+fn status(repo: Git<'_>) -> Result<String, GitError> {
     let args = ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"];
-    git::at(path).output(&args)
+    repo.output(&args)
 }
 
 /// Commit everything uncommitted in the worktree at `path`, untracked files included, onto
@@ -326,10 +327,10 @@ fn status(path: &Path) -> Result<String, GitError> {
 /// from being lost, so it must neither fail because a hook objects nor wait for a signing key's
 /// passphrase with nobody there to type it. Returns whether there was anything to commit.
 fn save(path: &Path) -> Result<bool, GitError> {
-    if status(path)?.is_empty() {
+    let repo = git::at(path);
+    if status(repo)?.is_empty() {
         return Ok(false);
     }
-    let repo = git::at(path);
     repo.run(&["add", "--all"])?;
     if repo.output(&["diff", "--cached", "--quiet"]).is_ok() {
         return Ok(false);
@@ -415,7 +416,7 @@ pub fn remove(input: &str) -> Result<Removed, GitError> {
 
     let saved = save(&path)?;
     let branch = branch(&path)?;
-    let left = status(&path)?;
+    let left = status(repo)?;
     if !left.is_empty() {
         return leave(&format!("still has changes that could not be committed:\n{left}"));
     }

@@ -409,8 +409,8 @@ fn resolve_upstream(
     }
 }
 
-/// Find the name of the upstream `term` names, which must be in the store.
-fn find_upstream_in_store(config: &Config, store: &Store, term: &str) -> Result<String, String> {
+/// Resolve `term` to the name of the upstream it names, which must be in the store.
+fn resolve_upstream_in_store(config: &Config, store: &Store, term: &str) -> Result<String, String> {
     match resolve_upstream(config, store, term, false)? {
         Upstream { name, url: None, .. } => Ok(name),
         Upstream { url: Some(_), .. } => Err(format!("{term} is not in the store")),
@@ -448,14 +448,14 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
             _ => Err("Usage: h store remote <term>".into()),
         },
         Some("show") => match terms.as_slice() {
-            [term, spec] => find_upstream_in_store(config, store, term)
+            [term, spec] => resolve_upstream_in_store(config, store, term)
                 .and_then(|name| store.show(&name, spec).map_err(|e| e.to_string())),
             _ => Err("Usage: h store show <term> <ref>[:<path>]".into()),
         },
         Some("worktree") => match terms.as_slice() {
             [term, reference] | [term, reference, _] => {
                 let dir = rest.get(2).map(|d| absolute(d));
-                find_upstream_in_store(config, store, term).and_then(|name| {
+                resolve_upstream_in_store(config, store, term).and_then(|name| {
                     store
                         .check_out_worktree(&name, reference, dir, &config.git_opts)
                         .map(|dir| print_path(&dir))
@@ -567,7 +567,7 @@ fn store_remove(config: &Config, store: &Store, terms: &[&str]) -> Result<(), St
     }
     let mut names = Vec::new();
     for term in terms {
-        let name = find_upstream_in_store(config, store, term)?;
+        let name = resolve_upstream_in_store(config, store, term)?;
         if !names.contains(&name) {
             names.push(name);
         }
@@ -586,7 +586,7 @@ fn store_fetch(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Str
     let quiet = terms.iter().any(|t| *t == "-q" || *t == "--quiet");
     let mut names = Vec::new();
     for term in terms.iter().filter(|t| **t != "-q" && **t != "--quiet") {
-        names.push(find_upstream_in_store(config, store, term)?);
+        names.push(resolve_upstream_in_store(config, store, term)?);
     }
     let report = store.fetch(&names, quiet).map_err(|e| e.to_string())?;
     for name in report.headless.iter().filter(|_| !quiet) {

@@ -632,24 +632,20 @@ fn drop_borrowed(git_dir: &Path) -> Result<(), GitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::pairs;
 
     #[test]
     fn local_identity_reads_user_and_credential_settings() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        assert!(git::run(None, &[OsString::from("init"), "-q".into(), dir.into()]).is_ok());
+        assert!(git::run(None, &git::args!["init", "-q", dir]).is_ok());
         for (key, value) in
             [("user.name", "Me Too"), ("credential.username", "me"), ("core.x", "y")]
         {
             git::run(Some(dir), &["config", key, value]).unwrap();
         }
-        let got = local_identity(dir);
-        let want: Vec<(OsString, OsString)> =
-            [("user.name", "Me Too"), ("credential.username", "me")]
-                .iter()
-                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-                .collect();
-        assert_eq!(got, want);
+        let want = pairs(&[("user.name", "Me Too"), ("credential.username", "me")]);
+        assert_eq!(local_identity(dir), want);
     }
 
     #[test]

@@ -472,14 +472,10 @@ pub fn update_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{opts, strings};
 
     fn parse(list: &[&str]) -> SubmoduleOptions {
-        let opts: Vec<OsString> = list.iter().map(OsString::from).collect();
-        SubmoduleOptions::parse(&opts)
-    }
-
-    fn strings(args: Vec<OsString>) -> Vec<String> {
-        args.into_iter().map(|a| a.into_string().unwrap()).collect()
+        SubmoduleOptions::parse(&opts(list))
     }
 
     #[test]

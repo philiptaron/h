@@ -11,3 +11,6 @@ pub mod resolve;
 pub mod search;
 pub mod store;
 pub mod submodules;
+
+#[cfg(test)]
+mod test_util;

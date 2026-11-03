@@ -515,14 +515,7 @@ fn default_branch(dir: Option<&Path>, url: &str) -> Result<Option<String>, GitEr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn strings(args: Vec<OsString>) -> Vec<String> {
-        args.into_iter().map(|a| a.into_string().unwrap()).collect()
-    }
-
-    fn opts(list: &[&str]) -> Vec<OsString> {
-        list.iter().map(OsString::from).collect()
-    }
+    use crate::test_util::{opts, strings};
 
     fn request<'a>(git_opts: &'a [OsString], extra: &'a [OsString]) -> CloneRequest<'a> {
         CloneRequest {

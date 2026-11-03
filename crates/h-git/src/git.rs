@@ -261,28 +261,22 @@ pub fn non_config_opts(opts: &[OsString]) -> Vec<OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn opts(list: &[&str]) -> Vec<OsString> {
-        list.iter().map(OsString::from).collect()
-    }
+    use crate::test_util::{opts, pairs, strings};
 
     #[test]
     fn extracts_config_pairs() {
         let got = config_pairs(&opts(&["-c", "user.name=Me", "--depth", "1", "-cx.y=z", "-c"]));
-        let want = [("user.name", "Me"), ("x.y", "z")];
-        let want: Vec<(OsString, OsString)> =
-            want.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect();
-        assert_eq!(got, want);
+        assert_eq!(got, pairs(&[("user.name", "Me"), ("x.y", "z")]));
         assert_eq!(config_pairs(&opts(&["-c", "novalue"])), []);
     }
 
     #[test]
     fn config_becomes_git_options() {
-        let config = [("user.name", "Me Too"), ("credential.username", "me")]
-            .map(|(k, v)| (OsString::from(k), OsString::from(v)));
-        let args: Vec<_> = config_args(&config).into_iter().map(|a| a.into_string()).collect();
-        let want = ["-c", "user.name=Me Too", "-c", "credential.username=me"];
-        assert_eq!(args, want.map(|a| Ok(a.to_string())));
+        let config = pairs(&[("user.name", "Me Too"), ("credential.username", "me")]);
+        assert_eq!(
+            strings(config_args(&config)),
+            ["-c", "user.name=Me Too", "-c", "credential.username=me"]
+        );
     }
 
     #[test]

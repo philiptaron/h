@@ -139,7 +139,7 @@ fn main() -> ExitCode {
         Some("go") => go(&config, rest),
         Some("resolve") => run_resolve_command(&config, rest),
         Some("store") => run_store_command(&config, rest),
-        Some("hook") => hook_cmd(&config, rest),
+        Some("hook") => run_hook_command(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
     }
 }
@@ -660,7 +660,7 @@ fn report_fetch(report: FetchReport) -> Result<(), String> {
 
 /// `h hook <event>`: a Claude Code hook, reading the hook's JSON input on stdin. Failures exit
 /// with 1, never 2, which Claude Code reads as a missing hook script.
-fn hook_cmd(config: &Config, args: &[OsString]) -> ExitCode {
+fn run_hook_command(config: &Config, args: &[OsString]) -> ExitCode {
     const USAGE: &str = "Usage: h hook (worktree-create | worktree-remove) < hook-input.json";
     let event = match args {
         [event] => event.to_str(),

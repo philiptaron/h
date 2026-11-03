@@ -138,7 +138,7 @@ fn main() -> ExitCode {
     match cmd.to_str() {
         Some("go") => go(&config, rest),
         Some("resolve") => run_resolve_command(&config, rest),
-        Some("store") => store_cmd(&config, rest),
+        Some("store") => run_store_command(&config, rest),
         Some("hook") => hook_cmd(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
     }
@@ -418,7 +418,7 @@ fn resolve_upstream_in_store(config: &Config, store: &Store, term: &str) -> Resu
 }
 
 /// `h store <subcommand> ...`
-fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
+fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(store) = &config.store else {
         return fail("No store configured: pass --store DIR or set H_STORE");
     };

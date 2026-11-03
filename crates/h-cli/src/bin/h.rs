@@ -137,7 +137,7 @@ fn main() -> ExitCode {
     };
     match cmd.to_str() {
         Some("go") => go(&config, rest),
-        Some("resolve") => resolve_cmd(&config, rest),
+        Some("resolve") => run_resolve_command(&config, rest),
         Some("store") => store_cmd(&config, rest),
         Some("hook") => hook_cmd(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
@@ -309,7 +309,7 @@ fn find_shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> 
 }
 
 /// `h resolve <term>`: print the directory, or fail when it does not exist.
-fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
+fn run_resolve_command(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(term) = args.first() else {
         return fail("Usage: h resolve (<name> | <user>/<repo> | <url>)");
     };

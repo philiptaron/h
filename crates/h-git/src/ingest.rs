@@ -399,7 +399,7 @@ fn ensure_upstream(
     if store.list_remotes()?.contains(&source.name) {
         return Ok(source.name.clone());
     }
-    let (name, url) = match canonical(lookup, &source.url) {
+    let (name, url) = match ask_canonical(lookup, &source.url) {
         Some(canonical) => canonical,
         None => match store.find(&source.name) {
             Some(name) => return Ok(name),
@@ -433,9 +433,10 @@ fn follow_renames(renamed: &[(String, String)], names: Vec<String>) -> Vec<Strin
     followed
 }
 
-/// The store's name for the GitHub repository a remote fetches from at `url`, and the URL to
-/// fetch it from, as GitHub names it now. `None` for another host, or when GitHub cannot say.
-fn canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
+/// Ask GitHub for the store's name for the repository a remote fetches from at `url`, and the
+/// URL to fetch it from, as GitHub names it now. `None` for another host, or when GitHub cannot
+/// say.
+fn ask_canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
     let Ok(Target::GitHub { user, repo }) = parse_term(url) else {
         return None;
     };

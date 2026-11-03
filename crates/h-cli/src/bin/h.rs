@@ -468,7 +468,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
             _ => Err("Usage: h store worktree <term> <ref> [DIR]".into()),
         },
         Some("ingest") => match rest {
-            [] | [_] => store_ingest(config, store, rest.first().map(|dir| absolute(dir))),
+            [] | [_] => ingest_checkout(config, store, rest.first().map(|dir| absolute(dir))),
             _ => Err("Usage: h store ingest [DIR]".into()),
         },
         Some("maintain") => match terms.as_slice() {
@@ -600,7 +600,7 @@ fn fetch_upstreams(config: &Config, store: &Store, terms: &[&str]) -> Result<(),
 ///
 /// The git options are the identity for `store`, so a checkout that is a tenant of another store,
 /// as a clone made with another identity's shell function does, uses its own identity instead.
-fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<(), String> {
+fn ingest_checkout(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<(), String> {
     let dir = match dir {
         Some(dir) => dir,
         None => std::env::current_dir().map_err(|e| e.to_string())?,

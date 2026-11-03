@@ -197,6 +197,13 @@ impl Git<'_> {
         }
     }
 
+    /// What `git` with `args` printed on stdout, trimmed, or `None` when it fails or prints
+    /// nothing: for asking about the repository.
+    pub fn query(self, args: &[impl AsRef<OsStr>]) -> Option<String> {
+        let out = self.output(args).ok()?;
+        Some(out.trim().to_string()).filter(|out| !out.is_empty())
+    }
+
     /// Run `git` with `args`, feeding it `input` on stdin.
     pub fn run_with_input(self, args: &[impl AsRef<OsStr>], input: &[u8]) -> Result<(), GitError> {
         use std::io::Write;

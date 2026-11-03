@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, GitError, config_args};
 use crate::github::Lookup;
-use crate::hook::{borrowed_store, common_dir, query, remotes, repository_root};
+use crate::hook::{borrowed_store, common_dir, remotes, repository_root};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, negotiation_args};
@@ -124,7 +124,8 @@ pub fn ingest(
     if scope == Scope::Everything {
         repos.push(repository(&root, &common));
     }
-    if let Some(worktree) = query(dir, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) {
+    if let Some(worktree) = git::at(dir).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+    {
         let fork = fork_urls(&root);
         if scope != Scope::CheckedOut
             && let Err(err) = clone_missing(store, &worktree, &identity, fork.as_ref())
@@ -313,7 +314,7 @@ fn repository(root: &Path, common: &Path) -> Option<Repo> {
 fn add_sources(repo: &mut Repo, dir: &Path) {
     let (upstream, own) = remotes(dir);
     let all: Vec<String> =
-        query(dir, &["remote"]).unwrap_or_default().lines().map(String::from).collect();
+        git::at(dir).query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
     if let Some(own) = &own {
         add_source(repo, dir, own, true);
@@ -327,7 +328,8 @@ fn add_sources(repo: &mut Repo, dir: &Path) {
 /// as the store would add it, or to its unusable remotes when the store cannot fetch from its
 /// URL. Its URL is read from the configuration as it is written, before any `insteadOf`.
 fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
-    let Some(url) = query(dir, &["config", "--get", &format!("remote.{remote}.url")]) else {
+    let Some(url) = git::at(dir).query(&["config", "--get", &format!("remote.{remote}.url")])
+    else {
         return;
     };
     match store_upstream(&url) {
@@ -341,15 +343,17 @@ fn add_source(repo: &mut Repo, dir: &Path, remote: &str, tags: bool) {
 /// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
 fn fork_urls(root: &Path) -> Option<(String, String)> {
     let (upstream, own) = remotes(root);
-    let url = |remote: String| query(root, &["config", "--get", &format!("remote.{remote}.url")]);
+    let url =
+        |remote: String| git::at(root).query(&["config", "--get", &format!("remote.{remote}.url")]);
     Some((url(own?)?, url(upstream?)?))
 }
 
 /// Whether the repository whose common git directory is `common` has all its history, unlike a
 /// shallow or partial clone.
 fn is_complete(common: &Path) -> bool {
-    let partial = query(common, &["config", "--get", "extensions.partialClone"]).is_some()
-        || query(common, &["config", "--get-regexp", r"^remote\..*\.promisor$"])
+    let partial = git::at(common).query(&["config", "--get", "extensions.partialClone"]).is_some()
+        || git::at(common)
+            .query(&["config", "--get-regexp", r"^remote\..*\.promisor$"])
             .is_some_and(|out| out.lines().any(|line| line.ends_with(" true")));
     !common.join("shallow").exists() && !partial
 }
@@ -439,7 +443,7 @@ fn canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
 /// store upstream are left alone.
 pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
     let key = "core.alternateRefsPrefixes";
-    let Some(configured) = query(git_dir, &["config", "--get", key]) else {
+    let Some(configured) = git::at(git_dir).query(&["config", "--get", key]) else {
         return Ok(());
     };
     let existing = store.remotes()?;
@@ -524,7 +528,7 @@ fn clone_missing(
     // Without a pathspec, `git submodule init` initializes every submodule, or only the active
     // ones when `submodule.active` is set, which leaves the unmapped out too; given paths, it
     // initializes them active or not, so they are given only when nothing else leaves those out.
-    let active = query(worktree, &["config", "--get-all", "submodule.active"]).is_some();
+    let active = git::at(worktree).query(&["config", "--get-all", "submodule.active"]).is_some();
     let mut init: Vec<OsString> = ["submodule", "init", "--"].map(OsString::from).into();
     if !unmapped.is_empty() && !active {
         init.extend(mapped());
@@ -551,8 +555,9 @@ fn clone_missing(
         else {
             continue;
         };
-        let initialized =
-            query(worktree, &["config", "--get", &format!("submodule.{name}.url")]).is_some();
+        let initialized = git::at(worktree)
+            .query(&["config", "--get", &format!("submodule.{name}.url")])
+            .is_some();
         match line.as_bytes().first() {
             Some(b'-') if initialized => missing.push(path.to_string()),
             Some(b'-') => {}
@@ -600,7 +605,7 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
     }
     repair_prefixes(store, git_dir)?;
     let key = "core.alternateRefsPrefixes";
-    let configured = query(git_dir, &["config", "--get", key]).unwrap_or_default();
+    let configured = git::at(git_dir).query(&["config", "--get", key]).unwrap_or_default();
     let mut prefixes: Vec<String> = configured.split_whitespace().map(String::from).collect();
     for prefix in alternate_refs_prefixes(names).unwrap_or_default().split_whitespace() {
         if !prefixes.iter().any(|p| p == prefix) {

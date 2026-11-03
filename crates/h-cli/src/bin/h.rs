@@ -336,13 +336,18 @@ struct Upstream {
     renames: Vec<String>,
 }
 
-/// The store's name for `term`, preferring an upstream already in the store over a GitHub
+/// Find the store's name for `term`, preferring an upstream already in the store over a GitHub
 /// lookup, and finding a bare project name among the upstreams' last path segments. A name as
 /// `h store list` prints it is taken as it is.
 ///
 /// With `ask`, a GitHub repository is named as GitHub names it even when the store has it in
 /// another casing, or under the name GitHub has since renamed it from; those are to be renamed.
-fn upstream_for(config: &Config, store: &Store, term: &str, ask: bool) -> Result<Upstream, String> {
+fn find_upstream(
+    config: &Config,
+    store: &Store,
+    term: &str,
+    ask: bool,
+) -> Result<Upstream, String> {
     let existing = match store.exists() {
         true => store.list_remotes().map_err(|e| e.to_string())?,
         false => Vec::new(),
@@ -406,7 +411,7 @@ fn upstream_for(config: &Config, store: &Store, term: &str, ask: bool) -> Result
 
 /// The name of the upstream `term` names, which must be in the store.
 fn upstream_in_store(config: &Config, store: &Store, term: &str) -> Result<String, String> {
-    match upstream_for(config, store, term, false)? {
+    match find_upstream(config, store, term, false)? {
         Upstream { name, url: None, .. } => Ok(name),
         Upstream { url: Some(_), .. } => Err(format!("{term} is not in the store")),
     }
@@ -439,7 +444,7 @@ fn store_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         Some("remove") => store_remove(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
         Some("remote") => match terms.as_slice() {
-            [term] => upstream_for(config, store, term, false).map(|u| println!("{}", u.name)),
+            [term] => find_upstream(config, store, term, false).map(|u| println!("{}", u.name)),
             _ => Err("Usage: h store remote <term>".into()),
         },
         Some("show") => match terms.as_slice() {
@@ -493,7 +498,7 @@ fn store_add(config: &Config, store: &Store, terms: &[&str]) -> Result<(), Strin
     // Every term is checked before anything changes.
     let mut upstreams: Vec<Upstream> = Vec::new();
     for term in terms {
-        let upstream = upstream_for(config, store, term, true)?;
+        let upstream = find_upstream(config, store, term, true)?;
         if !upstreams.iter().any(|u| u.name == upstream.name) {
             upstreams.push(upstream);
         }

@@ -131,7 +131,7 @@ pub fn ingest(
     }
     if let Some(worktree) = git::at(dir).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
     {
-        let fork = fork_urls(&root);
+        let fork = read_fork_urls(&root);
         if scope != Scope::CheckedOut
             && let Err(err) = clone_missing(store, &worktree, &identity, fork.as_ref())
         {
@@ -347,8 +347,8 @@ fn add_source(tenant: &mut Tenant, repo: Git<'_>, remote: &str, tags: bool) {
     }
 }
 
-/// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
-fn fork_urls(root: &Path) -> Option<(String, String)> {
+/// Read the URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
+fn read_fork_urls(root: &Path) -> Option<(String, String)> {
     let repo = git::at(root);
     let (upstream, own) = read_remotes(repo);
     Some((repo.read_remote_url(&own?)?, repo.read_remote_url(&upstream?)?))

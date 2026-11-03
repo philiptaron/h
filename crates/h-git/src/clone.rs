@@ -132,10 +132,25 @@ pub(crate) fn alternate_refs_prefixes(names: &[String]) -> Option<String> {
 
 /// Clone as `req` asks, creating parent directories. Returns git's exit status, 0 on success.
 pub fn clone_repo(req: &CloneRequest) -> u8 {
+    // The directories made for the clone are removed again if it fails, as long as nothing else
+    // was put in them, so that a mistyped owner leaves no empty directory behind.
+    let made: Vec<&Path> = req.path.ancestors().skip(1).take_while(|dir| !dir.exists()).collect();
     if let Some(parent) = req.path.parent() {
         // Any failure here is reported by git itself.
         let _ = std::fs::create_dir_all(parent);
     }
+    let code = clone_into(req);
+    if code != 0 {
+        for dir in made {
+            if std::fs::remove_dir(dir).is_err() {
+                break;
+            }
+        }
+    }
+    code
+}
+
+fn clone_into(req: &CloneRequest) -> u8 {
     let result = if req.container {
         // A container's origin has every branch, however much history it has.
         clone_container(req).and_then(|()| match req.upstream_url {

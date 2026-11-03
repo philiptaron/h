@@ -562,6 +562,27 @@ fn repositories_github_lacks_even_with_the_token_are_not_cloned() {
 }
 
 #[test]
+fn failed_clones_leave_no_directories_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let root = home.join("code");
+    fs::create_dir_all(root.join("example.com/someone/else")).unwrap();
+    for url in ["https://example.com/nobody/nothing.git", "https://example.com/someone/nothing.git"]
+    {
+        rewrite_url(home, url, &home.join("missing"));
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, home);
+        let out = run(cmd.current_dir(home).arg("--root").arg(&root).args(["go", url]));
+        assert_eq!(out.code, Some(128), "{out:?}");
+    }
+    // What was there before stays; only what the clones made is gone.
+    let left: Vec<_> = fs::read_dir(root.join("example.com")).unwrap().flatten().collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(root.join("example.com/someone/else").is_dir());
+    assert!(!root.join("example.com/someone/nothing").exists());
+}
+
+#[test]
 fn forks_get_an_unpushable_upstream() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("code");

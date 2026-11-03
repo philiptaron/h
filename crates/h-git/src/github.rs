@@ -189,14 +189,9 @@ impl Lookup {
         Lookup { api: api_base(), config: config.to_vec(), answers: RefCell::default() }
     }
 
-    /// GitHub's canonical owner and name for `user/repo`, its current one if it was renamed or
-    /// transferred. `None` when GitHub could not be asked or does not know it.
-    pub fn repo(&self, user: &str, repo: &str) -> Option<RepoInfo> {
-        self.answer(user, repo).found()
-    }
-
-    /// What GitHub says about `user/repo`, as [`fetch_repo_info`] asks it.
-    pub fn answer(&self, user: &str, repo: &str) -> Answer {
+    /// Ask GitHub about `user/repo`, as [`fetch_repo_info`] does, once whatever the casing: its
+    /// canonical owner and name, its current one if it was renamed or transferred.
+    pub fn ask(&self, user: &str, repo: &str) -> Answer {
         let key = format!("{user}/{repo}").to_ascii_lowercase();
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();

@@ -438,7 +438,7 @@ fn canonical(lookup: &Lookup, url: &str) -> Option<(String, String)> {
     let Ok(Target::GitHub { user, repo }) = parse_term(url) else {
         return None;
     };
-    let info = lookup.repo(&user, &repo)?;
+    let info = lookup.ask(&user, &repo).found()?;
     let full = format!("{}/{}", info.owner, info.name);
     Some((remote_name("github.com", &full), format!("https://github.com/{full}.git")))
 }

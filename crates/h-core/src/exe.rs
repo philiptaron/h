@@ -5,12 +5,12 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-/// The absolute path of the program `name` installed next to the running executable.
+/// Find the absolute path of the program `name` installed next to the running executable.
 ///
 /// The running executable is found through `/proc/self/exe` on Linux and `_NSGetExecutablePath`
 /// (with symlinks resolved) on macOS, else through `argv[0]`, looked up in `$PATH` when it has no
 /// slash. If it cannot be found at all, `name` is returned as is, for the shell to look up.
-pub fn sibling(name: &str) -> PathBuf {
+pub fn find_sibling(name: &str) -> PathBuf {
     let current = std::env::current_exe().ok().map(|exe| exe.canonicalize().unwrap_or(exe));
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -18,7 +18,7 @@ pub fn sibling(name: &str) -> PathBuf {
     sibling_of(current, &argv0, &path, cwd.as_deref(), name)
 }
 
-/// [`sibling`], with the process state passed in.
+/// [`find_sibling`], with the process state passed in.
 pub fn sibling_of(
     current_exe: Option<PathBuf>,
     argv0: &OsStr,
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn sibling_of_the_running_test() {
-        let up = sibling("up");
+        let up = find_sibling("up");
         assert_eq!(up.file_name(), Some(os("up")));
         let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
         assert_eq!(up.parent(), exe.parent());

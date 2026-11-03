@@ -25,7 +25,7 @@ fn main() -> ExitCode {
         Err(msg) => return fail(&msg),
     };
 
-    let exe = exe::sibling("up");
+    let exe = exe::find_sibling("up");
     let Some(exe) = exe.to_str() else {
         return fail(&format!("Path to up is not valid UTF-8: {}", exe.display()));
     };

@@ -45,7 +45,7 @@ fn main() -> ExitCode {
         },
         None => None,
     };
-    let exe = exe::sibling("h");
+    let exe = exe::find_sibling("h");
     let Some(exe) = exe.to_str() else {
         return fail(&format!("Path to h is not valid UTF-8: {}", exe.display()));
     };

@@ -194,7 +194,7 @@ fn clone_plain(req: &CloneRequest) -> Result<(), GitError> {
     let upstream = match req.upstream_url {
         Some(url) => {
             let opts = req.clone_opts();
-            add_upstream(req.path, url, &history_opts(&opts), single_branch(&opts))
+            add_upstream(req.path, url, &history_opts(&opts), is_single_branch(&opts))
                 .map_err(|err| err.context(cannot_add_upstream(url)))
         }
         None => Ok(()),
@@ -298,7 +298,7 @@ const DEEPEN_OPTIONS: &[&str] = &["--depth", "--shallow-since", "--shallow-exclu
 /// Whether a clone with the options `extra` fetches a single branch, as `git clone` decides:
 /// `--single-branch` or `--no-single-branch`, whichever comes last, or else whether its history
 /// is limited by depth.
-fn single_branch(extra: &[OsString]) -> bool {
+fn is_single_branch(extra: &[OsString]) -> bool {
     let explicit = non_config_opts(extra).iter().rev().find_map(|opt| match opt.to_str() {
         Some("--single-branch") => Some(true),
         Some("--no-single-branch") => Some(false),
@@ -635,7 +635,7 @@ mod tests {
             (&["--no-single-branch", "--single-branch"], true),
             (&["-c", "--depth=1"], false),
         ] {
-            assert_eq!(single_branch(&opts(extra)), want, "{extra:?}");
+            assert_eq!(is_single_branch(&opts(extra)), want, "{extra:?}");
         }
     }
 

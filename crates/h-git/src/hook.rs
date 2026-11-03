@@ -122,9 +122,9 @@ pub(crate) fn store_of(common: &Path, fallback: Option<&Store>) -> Option<Store>
     named.or_else(|| fallback.filter(|store| store.exists()).cloned())
 }
 
-/// The remotes of `repo` that matter for a base: `upstream`, for a fork, and the clone's own
+/// Read the remotes of `repo` that matter for a base: `upstream`, for a fork, and the clone's own
 /// (`origin`, or its only other remote).
-pub(crate) fn remotes(repo: Git<'_>) -> (Option<String>, Option<String>) {
+pub(crate) fn read_remotes(repo: Git<'_>) -> (Option<String>, Option<String>) {
     let all: Vec<String> =
         repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let upstream = all.iter().find(|r| *r == "upstream").cloned();
@@ -158,7 +158,7 @@ fn find_base(
     fallback: Option<&Store>,
 ) -> Result<(String, String), GitError> {
     let repo = git::at(root);
-    let (upstream, own) = remotes(repo);
+    let (upstream, own) = read_remotes(repo);
     if let Some(store) = store_of(common, fallback) {
         let url = upstream.iter().chain(&own).find_map(|remote| repo.read_remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {

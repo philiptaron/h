@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, Git, GitError, config_args};
 use crate::github::Lookup;
-use crate::hook::{common_dir, remotes, repository_root, store_of};
+use crate::hook::{common_dir, read_remotes, repository_root, store_of};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, negotiation_args};
@@ -320,7 +320,7 @@ fn tenant(root: &Path, common: &Path) -> Option<Tenant> {
 /// as theirs; the store gets each one's tags from its URL.
 fn add_sources(tenant: &mut Tenant, dir: &Path) {
     let repo = git::at(dir);
-    let (upstream, own) = remotes(repo);
+    let (upstream, own) = read_remotes(repo);
     let all: Vec<String> =
         repo.query(&["remote"]).unwrap_or_default().lines().map(String::from).collect();
     let others = all.iter().filter(|r| Some(*r) != own.as_ref() && Some(*r) != upstream.as_ref());
@@ -350,7 +350,7 @@ fn add_source(tenant: &mut Tenant, repo: Git<'_>, remote: &str, tags: bool) {
 /// The URLs of the fork's own remote and its upstream, for a fork's repository at `root`.
 fn fork_urls(root: &Path) -> Option<(String, String)> {
     let repo = git::at(root);
-    let (upstream, own) = remotes(repo);
+    let (upstream, own) = read_remotes(repo);
     Some((repo.read_remote_url(&own?)?, repo.read_remote_url(&upstream?)?))
 }
 

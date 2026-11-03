@@ -211,8 +211,8 @@ impl Git<'_> {
         self.query(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
     }
 
-    /// The URL of the remote `remote`, as the configuration has it, before any `insteadOf`.
-    pub fn remote_url(self, remote: &str) -> Option<String> {
+    /// Read the URL of the remote `remote` as the configuration has it, before any `insteadOf`.
+    pub fn read_remote_url(self, remote: &str) -> Option<String> {
         self.query(&["config", "--get", &format!("remote.{remote}.url")])
     }
 

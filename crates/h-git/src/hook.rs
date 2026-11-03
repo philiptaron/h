@@ -160,7 +160,7 @@ fn base(
     let repo = git::at(root);
     let (upstream, own) = remotes(repo);
     if let Some(store) = store_of(common, fallback) {
-        let url = upstream.iter().chain(&own).find_map(|remote| repo.remote_url(remote));
+        let url = upstream.iter().chain(&own).find_map(|remote| repo.read_remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
             let head = format!("refs/remotes/{name}{}/HEAD", if nested { "/-" } else { "" });

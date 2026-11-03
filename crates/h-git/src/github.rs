@@ -28,8 +28,8 @@ pub struct RepoInfo {
     pub parent: Option<String>,
 }
 
-/// The API base URL, honoring [`API_ENV`].
-pub fn api_base() -> String {
+/// Read the API base URL from [`API_ENV`], else [`DEFAULT_API`].
+pub fn read_api_base() -> String {
     std::env::var(API_ENV).unwrap_or_else(|_| DEFAULT_API.to_string())
 }
 
@@ -186,7 +186,7 @@ pub struct Lookup {
 
 impl Lookup {
     pub fn new(config: &[(OsString, OsString)]) -> Lookup {
-        Lookup { api: api_base(), config: config.to_vec(), answers: RefCell::default() }
+        Lookup { api: read_api_base(), config: config.to_vec(), answers: RefCell::default() }
     }
 
     /// Ask GitHub about `user/repo`, as [`fetch_repo_info`] does, once whatever the casing: its

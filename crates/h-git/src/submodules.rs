@@ -366,7 +366,7 @@ fn answers(url: &str, identity: &[(OsString, OsString)]) -> bool {
     let mut args = config_args(identity);
     let rest = ["-c", "credential.interactive=false", "ls-remote", "--quiet", url, "HEAD"];
     args.extend(rest.map(OsString::from));
-    git::command(&args)
+    git::prepare(&args)
         .env("GIT_ASKPASS", "")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdout(std::process::Stdio::null())

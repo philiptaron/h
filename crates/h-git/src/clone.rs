@@ -439,7 +439,7 @@ fn remote_head(
     let mut args = config_args(config);
     args.extend(["ls-remote".into(), "--symref".into(), url.into(), "HEAD".into()]);
     let out = git::at(dir)
-        .command(&args)
+        .prepare(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()

@@ -439,7 +439,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
             print_path(&store.path);
             Ok(())
         }
-        Some("list") => store_list(store),
+        Some("list") => print_upstreams(store),
         Some("add") => store_add(config, store, &terms),
         Some("remove") => store_remove(config, store, &terms),
         Some("fetch") => store_fetch(config, store, &terms),
@@ -484,7 +484,7 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
     }
 }
 
-fn store_list(store: &Store) -> Result<(), String> {
+fn print_upstreams(store: &Store) -> Result<(), String> {
     for name in store.list_remotes().map_err(|e| e.to_string())? {
         println!("{name}");
     }

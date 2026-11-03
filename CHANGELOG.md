@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.6 (2026-11-03)
+
+Shorter, clearer failures, and nothing left behind when a clone fails.
+
+### Fixes
+
+- **Repositories GitHub lacks even with the token are not cloned.** When GitHub answers 404 to
+  a lookup made with the identity's token, the repository does not exist or that identity cannot
+  see it. `h go` used to carry on and fetch it into the store and clone it, both of which failed
+  at length. Now it says `<user>/<repo> not found on GitHub, even with this identity's token` and
+  stops, unless there is a checkout of it already.
+- **A failed clone leaves no empty directories.** git takes away the directory it was cloning
+  into when it fails, but not the `<host>/<owner>` directories `h` made above it, so a mistyped
+  owner left them behind. They are removed again too, as far as nothing else was put in them.
+- **A failed git says what `h` could not do, not the whole command.** A failure was reported as
+  git's entire command line, identity and options included, which buried what `h` was doing.
+  Git has already said why by then, so `h` now says, for example, `could not clone <url>: git
+  clone exited with status 128`. Set `GIT_TRACE=1` to see every git command in full.
+- **A failed fetch into the store is said once.** When an upstream could not be fetched, `h`
+  said it took the upstream out of the store again and then also warned that fetching into the
+  store failed. The second warning is left out when the first already says it.
+- **Failures to write a file name the file.** Writing `objects/info/alternates` or a container's
+  `.git` file was reported as `failed to run git: Permission denied`, though git never ran. Now
+  it is `could not write <path>: Permission denied`.
+
+### Under the hood
+
+- **Names:** functions are named as commands for what they do, as a new naming skill for the
+  repository describes, and a repository that gets its objects from the store is a tenant.
+- **Tests:** 258 unit and end-to-end tests.
+
 ## 0.3.5 (2026-10-26)
 
 A git identity for clones made by running the `h` binary directly.

@@ -127,7 +127,7 @@ pub fn ingest(
     let mut report = Report::default();
     let mut tenants = Vec::new();
     if scope == Scope::Everything {
-        tenants.push(tenant(&root, &common));
+        tenants.push(find_tenant(&root, &common));
     }
     if let Some(worktree) = git::at(dir).query(&["rev-parse", "--show-toplevel"]).map(PathBuf::from)
     {
@@ -300,9 +300,9 @@ fn display(tenant: &Tenant) -> String {
     tenant.git_dir.display().to_string()
 }
 
-/// The repository whose common git directory is `common`, held in `root`, as a tenant, with
+/// Find the repository whose common git directory is `common`, held in `root`, as a tenant, with
 /// every one of its remotes.
-fn tenant(root: &Path, common: &Path) -> Option<Tenant> {
+fn find_tenant(root: &Path, common: &Path) -> Option<Tenant> {
     let mut tenant = Tenant {
         git_dir: common.to_path_buf(),
         complete: is_complete(common),

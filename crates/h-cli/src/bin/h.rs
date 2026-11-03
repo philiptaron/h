@@ -227,7 +227,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
         }
         warn_about(&report, "the clone downloads what the store could not get");
     }
-    let reference_names = store.map(|s| shared_upstreams(s, &resolution)).unwrap_or_default();
+    let reference_names = store.map(|s| find_shared_upstreams(s, &resolution)).unwrap_or_default();
     let request = CloneRequest {
         url,
         path: &resolution.path,
@@ -289,10 +289,10 @@ fn warn_about(report: &ingest::Report, consequence: &str) {
     }
 }
 
-/// The store's names for the upstreams a clone of `resolution` shares history with: its own and,
-/// for a fork, its parent's. Each is spelled as the store spells it when the store has it
+/// Find the store's names for the upstreams a clone of `resolution` shares history with: its own
+/// and, for a fork, its parent's. Each is spelled as the store spells it when the store has it
 /// (GitHub names ignore case), and as it would be added otherwise.
-fn shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> {
+fn find_shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> {
     let existing = store.list_remotes().unwrap_or_default();
     let parent = resolution.upstream_url.as_deref().and_then(|url| match parse_term(url) {
         Ok(Target::GitHub { user, repo }) => {

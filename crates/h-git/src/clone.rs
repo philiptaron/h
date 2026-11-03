@@ -339,7 +339,7 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
     let mut opts = req.git_opts.to_vec();
     opts.extend(req.extra.iter().cloned());
     let config = config_pairs(&opts);
-    let head = remote_head(req.url, req.path.parent().unwrap_or(Path::new("/")), &config)?;
+    let head = ask_remote_head(req.url, req.path.parent().unwrap_or(Path::new("/")), &config)?;
     let format = format!("--object-format={}", head.object_format()?);
     git::run(&git::args!["init", "--bare", "--quiet", format, bare])?;
     let repo = git::at(&bare);
@@ -431,7 +431,7 @@ impl RemoteHead {
 /// Ask the remote at `url` for its HEAD with `git ls-remote --symref`, run in `dir` with the
 /// clone's `-c` settings in effect, since they may choose the credentials (as
 /// `credential.username` does). Git's errors go to stderr, so that the user sees why it failed.
-fn remote_head(
+fn ask_remote_head(
     url: &str,
     dir: &Path,
     config: &[(OsString, OsString)],

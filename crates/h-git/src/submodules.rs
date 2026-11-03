@@ -283,8 +283,8 @@ pub fn read_paths(path: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The submodules `.gitmodules` in the checkout at `path` names, as `(name, url)`.
-pub fn gitmodules(path: &Path) -> Vec<(String, String)> {
+/// Read the submodules `.gitmodules` in the checkout at `path` names, as `(name, url)`.
+pub fn read_gitmodules(path: &Path) -> Vec<(String, String)> {
     let file = path.join(".gitmodules");
     if !file.is_file() {
         return Vec::new();
@@ -397,7 +397,7 @@ pub fn resolve_fork_urls(
     let git_dir = repo.capture(&["rev-parse", "--absolute-git-dir"])?;
     let modules = Path::new(git_dir.trim()).join("modules");
     let mut from_upstream = Vec::new();
-    for (name, url) in gitmodules(path).into_iter().filter(|(_, url)| is_relative(url)) {
+    for (name, url) in read_gitmodules(path).into_iter().filter(|(_, url)| is_relative(url)) {
         let (Some(fork), Some(upstream)) =
             (relative_url(own_url, &url), relative_url(upstream_url, &url))
         else {

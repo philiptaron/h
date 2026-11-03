@@ -52,15 +52,15 @@ fn credential_host(api_base: &str) -> Option<(String, String)> {
     Some((protocol, host))
 }
 
-/// The token git's credential helpers keep for the API at `api_base` (github.com's, for GitHub's
-/// own; see [`credential_host`]), as `git credential fill` gives it, with the `credential.*`
-/// settings among `config` (the `-c` pairs h is given), so that each identity's
+/// Ask git's credential helpers for the token they keep for the API at `api_base` (github.com's,
+/// for GitHub's own; see [`credential_host`]), as `git credential fill` gives it, with the
+/// `credential.*` settings among `config` (the `-c` pairs h is given), so that each identity's
 /// `credential.username` picks its own. `None` when no helper has one.
 ///
 /// Nothing ever prompts: `credential.interactive=false` keeps git from asking at all (git 2.46),
 /// and for older versions an empty `GIT_ASKPASS` stops every askpass program, since git tries
 /// none when the first it finds is empty, and `GIT_TERMINAL_PROMPT=0` stops the terminal.
-pub fn credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Option<String> {
+pub fn ask_credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Option<String> {
     let (protocol, host) = credential_host(api_base)?;
     let is_credential = |key: &OsString| {
         key.as_bytes().get(..11).is_some_and(|prefix| {
@@ -196,7 +196,7 @@ impl Lookup {
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();
         }
-        let token = || credential_token(&self.api, &self.config);
+        let token = || ask_credential_token(&self.api, &self.config);
         let answer = fetch_repo_info(&self.api, user, repo, token);
         self.answers.borrow_mut().insert(key, answer.clone());
         answer

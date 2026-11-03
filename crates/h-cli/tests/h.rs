@@ -549,6 +549,19 @@ fn rejected_tokens_leave_the_casing_as_typed() {
 }
 
 #[test]
+fn repositories_github_lacks_even_with_the_token_are_not_cloned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    credential_helper(home, "s3cret");
+    let api = MockGitHub::serve(|_, _| (404, r#"{"message": "Not Found"}"#.into()));
+
+    let out = go_with_git(home, &api, "me/gone", &[]);
+    assert_failed_in(&out, home, "me/gone not found on GitHub, even with this identity's token\n");
+    assert_eq!(tokens_sent(&api), [None, Some("s3cret".into())]);
+    assert!(!home.join("code").exists(), "{out:?}");
+}
+
+#[test]
 fn forks_get_an_unpushable_upstream() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("code");

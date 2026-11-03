@@ -60,6 +60,8 @@ Lookups go without a token first, so public repositories never touch git's crede
 Only when GitHub answers 404 (as for a private repository) or reports a rate limit does `h` ask
 `git credential fill` for the token git keeps for github.com, and try again. The `credential.*`
 settings in the git options apply, so each identity's `credential.username` picks its own token.
+When GitHub answers 404 even with the token, `h` says the repository is not found and clones
+nothing, unless there is a checkout of it already.
 
 Nothing ever prompts. With no stored credential, or one GitHub turns down, the casing stays as
 typed. The token only goes to the host it was stored for: an API other than

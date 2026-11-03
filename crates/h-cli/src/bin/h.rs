@@ -172,7 +172,7 @@ fn resolve_term(
     casing: Casing,
     lookup: &github::Lookup,
 ) -> Result<Resolution, String> {
-    resolve(&config.root, term, casing, |user, repo| lookup.repo(user, repo))
+    resolve(&config.root, term, casing, |user, repo| lookup.answer(user, repo))
 }
 
 /// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
@@ -318,7 +318,7 @@ fn resolve_cmd(config: &Config, args: &[OsString]) -> ExitCode {
         Err(msg) => return fail(&msg),
     };
     // Only existing checkouts are printed, and those are found in any casing without GitHub.
-    match resolve(&config.root, term, Casing::Local, |_, _| None) {
+    match resolve(&config.root, term, Casing::Local, |_, _| github::Answer::Unknown) {
         Ok(resolution) if resolution.path.is_dir() => {
             print_path(&resolution.path);
             ExitCode::SUCCESS

@@ -96,7 +96,32 @@ pub fn credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Opti
         .map(String::from)
 }
 
-/// Ask GitHub for the canonical casing of `user/repo`. Returns `None` on any failure.
+/// What GitHub said about a repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// GitHub knows it, by this name.
+    Found(RepoInfo),
+    /// GitHub does not know it, even asked with a token: it does not exist, or the token's
+    /// account cannot see it.
+    Missing,
+    /// GitHub could not be asked, or gave no answer to go by.
+    Unknown,
+}
+
+impl Answer {
+    /// The repository GitHub found, if it found one.
+    pub fn found(self) -> Option<RepoInfo> {
+        match self {
+            Answer::Found(info) => Some(info),
+            Answer::Missing | Answer::Unknown => None,
+        }
+    }
+}
+
+/// Ask GitHub for the canonical casing of `user/repo`.
+///
+/// Only a 404 to a request with a token is [`Answer::Missing`]: without one, a private
+/// repository looks the same, and every other failure is [`Answer::Unknown`].
 ///
 /// The first request carries no token, so public repositories never touch git's credential
 /// helpers, and a locked keyring is never asked to unlock for one. Only an answer a token could
@@ -108,7 +133,7 @@ pub fn fetch_repo_info(
     user: &str,
     repo: &str,
     token: impl FnOnce() -> Option<String>,
-) -> Option<RepoInfo> {
+) -> Answer {
     let agent: Agent = Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .http_status_as_error(false)
@@ -127,7 +152,9 @@ pub fn fetch_repo_info(
         }
         request.call().ok()
     };
-    let mut response = get(None)?;
+    let Some(mut response) = get(None) else {
+        return Answer::Unknown;
+    };
     let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
     let could_help = token_could_help(
         response.status().as_u16(),
@@ -135,13 +162,22 @@ pub fn fetch_repo_info(
         header("retry-after").is_some(),
     );
     if could_help {
-        response = get(Some(&token()?))?;
+        let Some(again) = token().and_then(|token| get(Some(&token))) else {
+            return Answer::Unknown;
+        };
+        response = again;
+        if response.status() == 404 {
+            return Answer::Missing;
+        }
     }
     if response.status() != 200 {
-        return None;
+        return Answer::Unknown;
     }
-    let body = response.body_mut().read_to_string().ok()?;
-    parse_repo_info(&body)
+    let body = response.body_mut().read_to_string().ok();
+    match body.as_deref().and_then(parse_repo_info) {
+        Some(info) => Answer::Found(info),
+        None => Answer::Unknown,
+    }
 }
 
 /// GitHub lookups for one run of h, as [`fetch_repo_info`] makes them, with the token for the
@@ -150,7 +186,7 @@ pub fn fetch_repo_info(
 pub struct Lookup {
     api: String,
     config: Vec<(OsString, OsString)>,
-    answers: RefCell<HashMap<String, Option<RepoInfo>>>,
+    answers: RefCell<HashMap<String, Answer>>,
 }
 
 impl Lookup {
@@ -161,6 +197,11 @@ impl Lookup {
     /// GitHub's canonical owner and name for `user/repo`, its current one if it was renamed or
     /// transferred. `None` when GitHub could not be asked or does not know it.
     pub fn repo(&self, user: &str, repo: &str) -> Option<RepoInfo> {
+        self.answer(user, repo).found()
+    }
+
+    /// What GitHub says about `user/repo`, as [`fetch_repo_info`] asks it.
+    pub fn answer(&self, user: &str, repo: &str) -> Answer {
         let key = format!("{user}/{repo}").to_ascii_lowercase();
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();
@@ -244,7 +285,7 @@ mod tests {
     fn unreachable_api_returns_none() {
         // Port 1 on localhost is essentially never listening; the connection is refused at once.
         let token = || panic!("no answer at all, so no reason to ask for a token");
-        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", token), None);
+        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", token), Answer::Unknown);
     }
 
     #[test]

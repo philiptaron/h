@@ -484,7 +484,7 @@ pub fn repair_prefixes(store: &Store, git_dir: &Path) -> Result<(), GitError> {
 /// upstream's names in the store. Never its local branches, and never its `<remote>/HEAD`, which
 /// fetching from the upstream itself sets.
 fn fetch_local(store: &Store, git_dir: &Path, source: &Source) -> Result<(), GitError> {
-    let prefix = store.prefix(&source.name)?;
+    let prefix = store.find_prefix(&source.name)?;
     let remote = &source.remote;
     let mut args: Vec<OsString> =
         ["fetch", "--quiet", "--no-tags", "--no-prune", "--no-write-fetch-head"]

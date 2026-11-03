@@ -190,7 +190,7 @@ impl Store {
     /// are deleted here.
     pub fn remove_remote(&self, name: &str) -> Result<(), GitError> {
         let repo = self.git();
-        let prefix = self.prefix(name)?;
+        let prefix = self.find_prefix(name)?;
         let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, name)).collect();
         let namespaces = [format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/")];
         let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
@@ -232,7 +232,7 @@ impl Store {
         }
         self.add_remote(new, url)?;
         let repo = self.git();
-        let (from, to) = (self.prefix(old)?, self.prefix(new)?);
+        let (from, to) = (self.find_prefix(old)?, self.find_prefix(new)?);
         let inner: Vec<String> = self.remotes()?.into_iter().filter(|r| extends(r, old)).collect();
         let namespaces =
             [("remotes", format!("refs/remotes/{from}/")), ("tags", format!("refs/tags/{from}/"))];
@@ -326,14 +326,14 @@ impl Store {
 
     /// Whether upstream `name` has any branch or tag, as one that was ever fetched does.
     pub fn has_refs(&self, name: &str) -> Result<bool, GitError> {
-        let prefix = self.prefix(name)?;
+        let prefix = self.find_prefix(name)?;
         let (branches, tags) = (format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/"));
         let args = ["for-each-ref", "--count=1", "--format=x", &branches, &tags];
         Ok(!self.git().capture(&args)?.is_empty())
     }
 
-    /// What `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
-    pub fn prefix(&self, name: &str) -> Result<String, GitError> {
+    /// Find what `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
+    pub fn find_prefix(&self, name: &str) -> Result<String, GitError> {
         Ok(if self.is_nested(name)? { format!("{name}/-") } else { name.to_string() })
     }
 
@@ -430,7 +430,7 @@ impl Store {
         // restricted to its own HEAD instead, after an empty value drops the pattern.
         for name in self.without_relatives(&fetched)? {
             let key = format!("remote.{name}.negotiationRestrict");
-            let head = format!("refs/remotes/{}/HEAD", self.prefix(&name)?);
+            let head = format!("refs/remotes/{}/HEAD", self.find_prefix(&name)?);
             args.extend(["-c".into(), format!("{key}="), "-c".into(), format!("{key}={head}")]);
         }
         args.extend(
@@ -463,7 +463,7 @@ impl Store {
     /// qualified, so one the upstream lacks fails rather than naming something else in the
     /// store, as `HEAD` would name the store's own.
     fn revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
-        let qualified = format!("{}/{reference}", self.prefix(name)?);
+        let qualified = format!("{}/{reference}", self.find_prefix(name)?);
         let object = format!("{qualified}^{{object}}");
         let found = self.git().capture(&["rev-parse", "--verify", "--quiet", &object]).is_ok();
         Ok(if found || !is_object_name(reference) { qualified } else { reference.to_string() })
@@ -501,7 +501,7 @@ impl Store {
         dir: Option<PathBuf>,
         git_opts: &[OsString],
     ) -> Result<PathBuf, GitError> {
-        let prefix = self.prefix(name)?;
+        let prefix = self.find_prefix(name)?;
         let start = self.checkout_start(name, &prefix, reference)?;
         let dir = dir.unwrap_or_else(|| temp_worktree_dir(name, reference));
         let existed = dir.exists();

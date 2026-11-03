@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::clone::alternate_refs_prefixes;
 use crate::git::{self, Git, GitError, config_args};
 use crate::github::Lookup;
-use crate::hook::{find_common_dir, read_remotes, repository_root, store_of};
+use crate::hook::{find_common_dir, find_store, read_remotes, repository_root};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
 use crate::submodules::{self, negotiation_args};
@@ -104,7 +104,7 @@ pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
 /// The store the checkout at `dir` is a tenant of, else `fallback`, which need not exist yet.
 pub fn store_for(dir: &Path, fallback: Option<&Store>) -> Option<Store> {
     let common = find_common_dir(dir).ok();
-    common.and_then(|common| store_of(&common, None)).or_else(|| fallback.cloned())
+    common.and_then(|common| find_store(&common, None)).or_else(|| fallback.cloned())
 }
 
 /// Put the checkout at `dir` under `store`, as far as `scope` goes, with `identity` (`-c` pairs

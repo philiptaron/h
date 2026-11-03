@@ -104,9 +104,9 @@ pub(crate) fn repository_root(common: &Path) -> PathBuf {
     }
 }
 
-/// The store the repository at `common` is a tenant of: the one its `objects/info/alternates`
+/// Find the store the repository at `common` is a tenant of: the one its `objects/info/alternates`
 /// names, which is the store the clone was made with, else `fallback`.
-pub(crate) fn store_of(common: &Path, fallback: Option<&Store>) -> Option<Store> {
+pub(crate) fn find_store(common: &Path, fallback: Option<&Store>) -> Option<Store> {
     let objects = common.join("objects");
     let alternates = std::fs::read_to_string(objects.join("info/alternates")).unwrap_or_default();
     let named = alternates
@@ -159,7 +159,7 @@ fn find_base(
 ) -> Result<(String, String), GitError> {
     let repo = git::at(root);
     let (upstream, own) = read_remotes(repo);
-    if let Some(store) = store_of(common, fallback) {
+    if let Some(store) = find_store(common, fallback) {
         let url = upstream.iter().chain(&own).find_map(|remote| repo.read_remote_url(remote));
         if let Some(name) = url.and_then(|url| store_name(&store, &url)) {
             let nested = store.is_nested(&name).unwrap_or(false);
@@ -250,7 +250,7 @@ pub fn create(input: &str, fallback: Option<&Store>) -> Result<Created, GitError
         }
         (Err(err), None) => return Err(err),
     };
-    if let Some(store) = store_of(&common, None)
+    if let Some(store) = find_store(&common, None)
         && let Err(err) = ingest::repair_prefixes(&store, &common)
     {
         eprintln!("warning: could not update {}: {err}", common.display());
@@ -302,7 +302,7 @@ fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
     if !path.join(".gitmodules").is_file() {
         return;
     }
-    let Some(store) = store_of(common, fallback) else {
+    let Some(store) = find_store(common, fallback) else {
         return;
     };
     match ingest::ingest(&store, path, &[], ingest::Scope::Submodules) {

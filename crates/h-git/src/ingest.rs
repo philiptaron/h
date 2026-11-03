@@ -15,12 +15,12 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use crate::clone::alternate_refs_prefixes;
-use crate::git::{self, GitError};
+use crate::git::{self, GitError, config_args};
 use crate::github::Lookup;
 use crate::hook::{borrowed_store, common_dir, query, remotes, repository_root};
 use crate::resolve::{Target, parse_term, remote_name, store_upstream};
 use crate::store::{FetchReport, Store};
-use crate::submodules::{self, config_args, negotiation_args};
+use crate::submodules::{self, negotiation_args};
 
 /// What [`ingest`] covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Stdio;
 
-use crate::git::{self, GitError, config_pairs, non_config_opts};
+use crate::git::{self, GitError, config_args, config_pairs, non_config_opts};
 use crate::store::Store;
 use crate::submodules::{self, SubmoduleOptions};
 
@@ -81,7 +81,7 @@ fn plan<'a>(req: &CloneRequest<'a>) -> Plan<'a> {
 /// included, through the environment, so they fetch with the same credentials.
 pub fn git_clone_args(req: &CloneRequest) -> Vec<OsString> {
     let plan = plan(req);
-    let mut args = submodules::config_args(&config_pairs(req.git_opts));
+    let mut args = config_args(&config_pairs(req.git_opts));
     args.push("clone".into());
     if plan.submodules.recurse.is_none() && !plan.submodules.bare && !plan.split {
         args.push("--recursive".into());
@@ -446,13 +446,7 @@ fn remote_head(
     dir: Option<&Path>,
     config: &[(OsString, OsString)],
 ) -> Result<RemoteHead, GitError> {
-    let mut args: Vec<OsString> = Vec::new();
-    for (key, value) in config {
-        let mut setting = key.clone();
-        setting.push("=");
-        setting.push(value);
-        args.extend(["-c".into(), setting]);
-    }
+    let mut args = config_args(config);
     args.extend(["ls-remote".into(), "--symref".into(), url.into(), "HEAD".into()]);
     let out = git::command(dir, &args)
         .stdout(Stdio::piped())

@@ -15,7 +15,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use crate::git::{self, GitError};
+use crate::git::{self, GitError, config_args};
 use crate::resolve::store_upstream;
 use crate::store::Store;
 
@@ -160,18 +160,6 @@ impl SubmoduleOptions {
     pub fn is_submodule_only(opt: &OsStr) -> bool {
         opt == "--also-filter-submodules" || opt == "--no-also-filter-submodules"
     }
-}
-
-/// `-c key=value` arguments for git itself, one pair for each of `config`.
-pub fn config_args(config: &[(OsString, OsString)]) -> Vec<OsString> {
-    let mut args = Vec::new();
-    for (key, value) in config {
-        let mut setting = key.clone();
-        setting.push("=");
-        setting.push(value);
-        args.extend([OsString::from("-c"), setting]);
-    }
-    args
 }
 
 /// Clone the submodules of the new clone at `path`, borrowing from `store` when there is one, as
@@ -593,16 +581,6 @@ mod tests {
         assert_eq!(
             args,
             ["submodule", "update", "--require-init", "--recursive", "--no-single-branch"]
-        );
-    }
-
-    #[test]
-    fn config_becomes_git_options() {
-        let config = [("user.name", "Me Too"), ("credential.username", "me")]
-            .map(|(k, v)| (OsString::from(k), OsString::from(v)));
-        assert_eq!(
-            strings(config_args(&config)),
-            ["-c", "user.name=Me Too", "-c", "credential.username=me"]
         );
     }
 

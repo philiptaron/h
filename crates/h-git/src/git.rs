@@ -209,6 +209,18 @@ pub fn config_pairs(opts: &[OsString]) -> Vec<(OsString, OsString)> {
     pairs
 }
 
+/// `-c key=value` arguments for git itself, one pair for each of `config`.
+pub fn config_args(config: &[(OsString, OsString)]) -> Vec<OsString> {
+    let mut args = Vec::new();
+    for (key, value) in config {
+        let mut setting = key.clone();
+        setting.push("=");
+        setting.push(value);
+        args.extend([OsString::from("-c"), setting]);
+    }
+    args
+}
+
 /// The git options that are not `-c key=value` pairs.
 pub fn non_config_opts(opts: &[OsString]) -> Vec<OsString> {
     let mut rest = Vec::new();
@@ -240,6 +252,15 @@ mod tests {
             want.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect();
         assert_eq!(got, want);
         assert_eq!(config_pairs(&opts(&["-c", "novalue"])), []);
+    }
+
+    #[test]
+    fn config_becomes_git_options() {
+        let config = [("user.name", "Me Too"), ("credential.username", "me")]
+            .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let args: Vec<_> = config_args(&config).into_iter().map(|a| a.into_string()).collect();
+        let want = ["-c", "user.name=Me Too", "-c", "credential.username=me"];
+        assert_eq!(args, want.map(|a| Ok(a.to_string())));
     }
 
     #[test]

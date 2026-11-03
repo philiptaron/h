@@ -62,18 +62,13 @@ fn credential_host(api_base: &str) -> Option<(String, String)> {
 /// none when the first it finds is empty, and `GIT_TERMINAL_PROMPT=0` stops the terminal.
 pub fn credential_token(api_base: &str, config: &[(OsString, OsString)]) -> Option<String> {
     let (protocol, host) = credential_host(api_base)?;
-    let mut args: Vec<OsString> = Vec::new();
-    for (key, value) in config {
-        let is_credential = key.as_bytes().get(..11).is_some_and(|prefix| {
+    let is_credential = |key: &OsString| {
+        key.as_bytes().get(..11).is_some_and(|prefix| {
             prefix.eq_ignore_ascii_case(b"credential.") && key.len() > prefix.len()
-        });
-        if is_credential {
-            let mut setting = key.clone();
-            setting.push("=");
-            setting.push(value);
-            args.extend(["-c".into(), setting]);
-        }
-    }
+        })
+    };
+    let credential: Vec<_> = config.iter().filter(|(key, _)| is_credential(key)).cloned().collect();
+    let mut args = git::config_args(&credential);
     args.extend(["-c", "credential.interactive=false", "credential", "fill"].map(OsString::from));
     let mut child = git::command(None, &args)
         .env("GIT_ASKPASS", "")

@@ -319,7 +319,7 @@ fn clone_submodules(path: &Path, common: &Path, fallback: Option<&Store>) {
 /// submodules included.
 fn read_status(repo: Git<'_>) -> Result<String, GitError> {
     let args = ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"];
-    repo.capture(&args)
+    repo.capture_output(&args)
 }
 
 /// Commit everything uncommitted in the worktree at `path`, untracked files included, onto
@@ -332,7 +332,7 @@ fn save(path: &Path) -> Result<bool, GitError> {
         return Ok(false);
     }
     repo.run(&["add", "--all"])?;
-    if repo.capture(&["diff", "--cached", "--quiet"]).is_ok() {
+    if repo.capture_output(&["diff", "--cached", "--quiet"]).is_ok() {
         return Ok(false);
     }
     let message = format!(

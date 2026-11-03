@@ -397,7 +397,7 @@ pub fn refresh_container_head(path: &Path) {
         return;
     }
     let repo = git::at(&bare);
-    if repo.capture(&["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
+    if repo.capture_output(&["symbolic-ref", "--quiet", "HEAD"]).is_ok() {
         return;
     }
     let (Some(new), Some(old)) =
@@ -406,7 +406,7 @@ pub fn refresh_container_head(path: &Path) {
         return;
     };
     if new != old {
-        let _ = repo.capture(&["update-ref", "--no-deref", "HEAD", &new, &old]);
+        let _ = repo.capture_output(&["update-ref", "--no-deref", "HEAD", &new, &old]);
     }
 }
 
@@ -482,7 +482,7 @@ pub fn add_upstream(
     single_branch: bool,
 ) -> Result<(), GitError> {
     let repo = git::at(dir);
-    let remotes = repo.capture(&["remote"])?;
+    let remotes = repo.capture_output(&["remote"])?;
     let [origin] = remotes.lines().collect::<Vec<_>>()[..] else {
         let msg = format!("Cannot tell which remote of {} to push to: {remotes:?}", dir.display());
         return Err(GitError::Invalid(msg));
@@ -505,7 +505,7 @@ pub fn add_upstream(
 
 /// Ask the repository at `url` which branch its HEAD names, if it names one.
 fn ask_default_branch(repo: Git<'_>, url: &str) -> Result<Option<String>, GitError> {
-    let out = repo.capture(&["ls-remote", "--symref", url, "HEAD"])?;
+    let out = repo.capture_output(&["ls-remote", "--symref", url, "HEAD"])?;
     let branch =
         out.lines().find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"));
     Ok(branch.map(String::from))

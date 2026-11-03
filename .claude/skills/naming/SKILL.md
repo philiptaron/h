@@ -21,8 +21,8 @@ create a branch is `ensure_branch`, not `branch`.
 ### Where the rule applies
 
 - **Everything that does I/O**, meaning it runs git, touches files, talks to the network or
-  prints, is named for what it does: `capture`, `read_status`, `find_base`, `ensure_in_store`,
-  `check_out_worktree`, `report_fetch`.
+  prints, is named for what it does: `capture_output`, `read_status`, `find_base`,
+  `ensure_in_store`, `check_out_worktree`, `report_fetch`.
 - **Pure computations** that only derive a value from their arguments may keep Rust's noun style
   for getters (no `get_` prefix): `config_args`, `history_opts`, `remote_name`, `refspecs`.
 

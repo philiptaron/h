@@ -131,9 +131,9 @@ pub const LOCAL_REPO_ENV: &[&str] = &[
 ];
 
 /// Git working on the repository in one directory, as `git -C <dir>` does, made by [`at`]. The
-/// functions [`run`], [`capture`] and [`prepare`] are git working on no repository in particular,
-/// as for `git init <dir>` and `git clone`. Either way, git runs free of the repository h was
-/// started in.
+/// functions [`run`], [`capture_output`] and [`prepare`] are git working on no repository in
+/// particular, as for `git init <dir>` and `git clone`. Either way, git runs free of the repository
+/// h was started in.
 #[derive(Debug, Clone, Copy)]
 pub struct Git<'a> {
     dir: Option<&'a Path>,
@@ -155,8 +155,8 @@ pub fn run(args: &[impl AsRef<OsStr>]) -> Result<(), GitError> {
 }
 
 /// Run `git` with `args` and return what it printed on stdout.
-pub fn capture(args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
-    Git { dir: None }.capture(args)
+pub fn capture_output(args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
+    Git { dir: None }.capture_output(args)
 }
 
 impl Git<'_> {
@@ -190,7 +190,7 @@ impl Git<'_> {
     }
 
     /// Run `git` with `args` and return what it printed on stdout.
-    pub fn capture(self, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
+    pub fn capture_output(self, args: &[impl AsRef<OsStr>]) -> Result<String, GitError> {
         let out = self.prepare_attached(args).output().map_err(GitError::Spawn)?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -202,7 +202,7 @@ impl Git<'_> {
     /// What `git` with `args` printed on stdout, trimmed, or `None` when it fails or prints
     /// nothing: for asking about the repository.
     pub fn query(self, args: &[impl AsRef<OsStr>]) -> Option<String> {
-        let out = self.capture(args).ok()?;
+        let out = self.capture_output(args).ok()?;
         Some(out.trim().to_string()).filter(|out| !out.is_empty())
     }
 
@@ -357,13 +357,13 @@ mod tests {
 
     #[test]
     fn captures_output() {
-        assert!(capture(&["--version"]).unwrap().starts_with("git version"));
+        assert!(capture_output(&["--version"]).unwrap().starts_with("git version"));
     }
 
     #[test]
     fn clears_what_git_clears_for_another_repository() {
         let kept = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
-        let local = capture(&["rev-parse", "--local-env-vars"]).unwrap();
+        let local = capture_output(&["rev-parse", "--local-env-vars"]).unwrap();
         let mut want: Vec<&str> = local.lines().filter(|var| !kept.contains(var)).collect();
         want.sort();
         let mut have = LOCAL_REPO_ENV.to_vec();

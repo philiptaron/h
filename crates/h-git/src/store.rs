@@ -138,7 +138,7 @@ impl Store {
 
     /// List the names of the upstreams in the store.
     pub fn list_remotes(&self) -> Result<Vec<String>, GitError> {
-        let out = self.git().capture(&["remote"])?;
+        let out = self.git().capture_output(&["remote"])?;
         Ok(out.lines().map(String::from).collect())
     }
 
@@ -196,10 +196,11 @@ impl Store {
         let namespaces = [format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/")];
         let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
         args.extend(namespaces.iter().cloned());
-        let mut refs: Vec<String> = repo.capture(&args)?.lines().map(String::from).collect();
+        let mut refs: Vec<String> = repo.capture_output(&args)?.lines().map(String::from).collect();
         // A HEAD whose branch is gone is a broken ref, which for-each-ref leaves out.
         let head = format!("refs/remotes/{prefix}/HEAD");
-        if !refs.contains(&head) && repo.capture(&["symbolic-ref", "--quiet", &head]).is_ok() {
+        if !refs.contains(&head) && repo.capture_output(&["symbolic-ref", "--quiet", &head]).is_ok()
+        {
             refs.push(head);
         }
         let inner_ref = |refname: &str| {
@@ -241,7 +242,7 @@ impl Store {
         let format = "--format=%(refname)%00%(objectname)%00%(symref)";
         let mut args = vec!["for-each-ref", format];
         args.extend(namespaces.iter().map(|(_, ns)| ns.as_str()));
-        let refs = repo.capture(&args)?;
+        let refs = repo.capture_output(&args)?;
         let (mut away, mut back, mut heads) = (String::new(), String::new(), Vec::new());
         for line in refs.lines() {
             let mut fields = line.split('\0');
@@ -306,7 +307,7 @@ impl Store {
     /// nothing.
     fn find_without_relatives(&self, names: &[String]) -> Result<Vec<String>, GitError> {
         let format = "--format=%(refname)";
-        let branches = self.git().capture(&["for-each-ref", format, "refs/remotes/"])?;
+        let branches = self.git().capture_output(&["for-each-ref", format, "refs/remotes/"])?;
         let branches: Vec<&str> =
             branches.lines().filter_map(|r| r.strip_prefix("refs/remotes/")).collect();
         Ok(names
@@ -322,7 +323,7 @@ impl Store {
     /// Whether upstream `name` keeps its refs under `<name>/-/`.
     pub fn is_nested(&self, name: &str) -> Result<bool, GitError> {
         let key = format!("remote.{name}.fetch");
-        let configured = self.git().capture(&["config", "--get-all", &key])?;
+        let configured = self.git().capture_output(&["config", "--get-all", &key])?;
         let [nested_heads, _] = refspecs(name, true);
         Ok(configured.lines().any(|r| r == nested_heads))
     }
@@ -332,7 +333,7 @@ impl Store {
         let prefix = self.find_prefix(name)?;
         let (branches, tags) = (format!("refs/remotes/{prefix}/"), format!("refs/tags/{prefix}/"));
         let args = ["for-each-ref", "--count=1", "--format=x", &branches, &tags];
-        Ok(!self.git().capture(&args)?.is_empty())
+        Ok(!self.git().capture_output(&args)?.is_empty())
     }
 
     /// Find what `name` is called in revisions: `<name>`, or `<name>/-` when it is nested.
@@ -346,7 +347,7 @@ impl Store {
     /// whether HEAD was set.
     pub fn set_head(&self, name: &str) -> Result<bool, GitError> {
         let repo = self.git();
-        let out = repo.capture(&["ls-remote", "--symref", name, "HEAD"])?;
+        let out = repo.capture_output(&["ls-remote", "--symref", name, "HEAD"])?;
         let Some(branch) = out
             .lines()
             .find_map(|line| line.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
@@ -354,7 +355,7 @@ impl Store {
             return Ok(false);
         };
         let target = format!("refs/remotes/{name}/-/{branch}");
-        if repo.capture(&["rev-parse", "--verify", "--quiet", &target]).is_err() {
+        if repo.capture_output(&["rev-parse", "--verify", "--quiet", &target]).is_err() {
             return Ok(false);
         }
         let head = format!("refs/remotes/{name}/-/HEAD");
@@ -372,7 +373,7 @@ impl Store {
         let tags = format!("refs/tags/{name}/");
         let inner: Vec<String> = remotes.iter().filter(|r| extends(r, name)).cloned().collect();
         let format = "--format=%(refname)%00%(objectname)%00%(symref)";
-        let refs = repo.capture(&["for-each-ref", format, &branches, &tags])?;
+        let refs = repo.capture_output(&["for-each-ref", format, &branches, &tags])?;
         let mut input = String::new();
         let mut heads = Vec::new();
         for line in refs.lines() {
@@ -468,7 +469,8 @@ impl Store {
     fn qualify_revision(&self, name: &str, reference: &str) -> Result<String, GitError> {
         let qualified = format!("{}/{reference}", self.find_prefix(name)?);
         let object = format!("{qualified}^{{object}}");
-        let found = self.git().capture(&["rev-parse", "--verify", "--quiet", &object]).is_ok();
+        let found =
+            self.git().capture_output(&["rev-parse", "--verify", "--quiet", &object]).is_ok();
         Ok(if found || !is_object_name(reference) { qualified } else { reference.to_string() })
     }
 
@@ -532,12 +534,12 @@ impl Store {
         let branches = format!("refs/remotes/{prefix}/");
         let branch = if reference == "HEAD" {
             let head = format!("{branches}HEAD");
-            repo.capture(&["symbolic-ref", "--quiet", &head])
+            repo.capture_output(&["symbolic-ref", "--quiet", &head])
                 .ok()
                 .and_then(|target| target.trim().strip_prefix(&branches).map(String::from))
         } else {
             let exact = format!("{branches}{reference}");
-            repo.capture(&["show-ref", "--verify", "--quiet", &exact])
+            repo.capture_output(&["show-ref", "--verify", "--quiet", &exact])
                 .ok()
                 .map(|_| reference.to_string())
         };
@@ -545,7 +547,7 @@ impl Store {
             return Ok(Start::Branch(branch));
         }
         let commit = format!("{}^{{commit}}", self.qualify_revision(name, reference)?);
-        match repo.capture(&["rev-parse", "--verify", "--quiet", &commit]) {
+        match repo.capture_output(&["rev-parse", "--verify", "--quiet", &commit]) {
             Ok(oid) => Ok(Start::Detached(oid.trim().to_string())),
             Err(_) => {
                 let msg = format!("{reference} is not a branch, tag or commit of {name}");
@@ -564,7 +566,7 @@ impl Store {
         git_opts: &[OsString],
     ) -> Result<(), GitError> {
         let store = self.git();
-        let format = store.capture(&["rev-parse", "--show-object-format"])?;
+        let format = store.capture_output(&["rev-parse", "--show-object-format"])?;
         let format = format!("--object-format={}", format.trim());
         std::fs::create_dir_all(dir).map_err(git::file_error("create", dir))?;
         git::run(&git::args!["init", "--quiet", format, dir])?;
@@ -603,7 +605,7 @@ impl Store {
         clone.run(&["fetch", "--quiet", "origin"])?;
 
         let head = format!("refs/remotes/{prefix}/HEAD");
-        if let Ok(target) = store.capture(&["symbolic-ref", "--quiet", &head])
+        if let Ok(target) = store.capture_output(&["symbolic-ref", "--quiet", &head])
             && let Some(branch) = target.trim().strip_prefix(&format!("refs/remotes/{prefix}/"))
         {
             let origin_head = format!("refs/remotes/origin/{branch}");

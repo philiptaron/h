@@ -600,7 +600,7 @@ fn store_ingest(config: &Config, store: &Store, dir: Option<PathBuf>) -> Result<
         Some(dir) => dir,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
     };
-    let target = ingest::store_for(&dir, Some(store)).unwrap_or_else(|| store.clone());
+    let target = ingest::find_checkout_store(&dir, Some(store)).unwrap_or_else(|| store.clone());
     let identity = if target == *store {
         config_pairs(&config.git_opts)
     } else {

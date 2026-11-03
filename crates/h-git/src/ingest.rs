@@ -101,8 +101,8 @@ pub fn local_identity(dir: &Path) -> Vec<(OsString, OsString)> {
         .collect()
 }
 
-/// The store the checkout at `dir` is a tenant of, else `fallback`, which need not exist yet.
-pub fn store_for(dir: &Path, fallback: Option<&Store>) -> Option<Store> {
+/// Find the store the checkout at `dir` is a tenant of, else `fallback`, which need not exist yet.
+pub fn find_checkout_store(dir: &Path, fallback: Option<&Store>) -> Option<Store> {
     let common = find_common_dir(dir).ok();
     common.and_then(|common| find_store(&common, None)).or_else(|| fallback.cloned())
 }

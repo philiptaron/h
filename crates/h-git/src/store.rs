@@ -555,12 +555,12 @@ impl Store {
     ) -> Result<(), GitError> {
         let format = git::output(self.dir(), &["rev-parse", "--show-object-format"])?;
         let format = format!("--object-format={}", format.trim());
-        std::fs::create_dir_all(dir).map_err(GitError::Spawn)?;
+        std::fs::create_dir_all(dir).map_err(git::file_error("create", dir))?;
         git::run(None, &git::args!["init", "--quiet", format, dir])?;
         let mut alternates = self.path.join("objects").into_os_string().into_vec();
         alternates.push(b'\n');
-        std::fs::write(dir.join(".git/objects/info/alternates"), alternates)
-            .map_err(GitError::Spawn)?;
+        let file = dir.join(".git/objects/info/alternates");
+        std::fs::write(&file, alternates).map_err(git::file_error("write", &file))?;
 
         let clone = Some(dir);
         git::run(clone, &git::args!["config", "remote.origin.url", self.path])?;

@@ -351,7 +351,7 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         let alternates = bare.join("objects/info/alternates");
         let mut line = reference.join("objects").into_os_string().into_vec();
         line.push(b'\n');
-        std::fs::write(&alternates, line).map_err(GitError::Spawn)?;
+        std::fs::write(&alternates, line).map_err(git::file_error("write", &alternates))?;
         if let Some(prefixes) = alternate_refs_prefixes(req.reference_names) {
             git::run(Some(&bare), &["config", "core.alternateRefsPrefixes", &prefixes])?;
         }
@@ -377,8 +377,9 @@ fn fill_container(req: &CloneRequest, fetch_opts: Vec<OsString>) -> Result<(), G
         None => &head.oid,
     };
     git::run(Some(&bare), &["update-ref", "--no-deref", "HEAD", start])?;
-    std::fs::write(req.path.join(".git"), format!("gitdir: ./{BARE_DIR}\n"))
-        .map_err(GitError::Spawn)
+    let dot_git = req.path.join(".git");
+    std::fs::write(&dot_git, format!("gitdir: ./{BARE_DIR}\n"))
+        .map_err(git::file_error("write", &dot_git))
 }
 
 /// Detach the HEAD of the container clone at `path`, if it is one, at `origin/HEAD` again.

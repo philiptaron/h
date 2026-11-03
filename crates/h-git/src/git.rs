@@ -8,7 +8,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
 /// Arguments for git of different types, such as `&str`, `String`, `OsString` and `&Path`, as
@@ -30,6 +30,9 @@ pub enum GitError {
     Failed { args: Vec<OsString>, code: u8 },
     /// The request made no sense, so `git` was not run.
     Invalid(String),
+    /// A file or directory h works on itself, beside git, could not be made or written:
+    /// `action` is what h was doing to `path`, such as `write`.
+    File { action: &'static str, path: PathBuf, err: std::io::Error },
     /// What h could not do, because of `cause`.
     Context { what: String, cause: Box<GitError> },
 }
@@ -40,7 +43,7 @@ impl GitError {
         match self {
             GitError::Spawn(_) => 127,
             GitError::Failed { code, .. } => *code,
-            GitError::Invalid(_) => 1,
+            GitError::Invalid(_) | GitError::File { .. } => 1,
             GitError::Context { cause, .. } => cause.code(),
         }
     }
@@ -80,9 +83,18 @@ impl fmt::Display for GitError {
                 None => write!(f, "git exited with status {code}"),
             },
             GitError::Invalid(msg) => f.write_str(msg),
+            GitError::File { action, path, err } => {
+                write!(f, "could not {action} {}: {err}", path.display())
+            }
             GitError::Context { what, cause } => write!(f, "{what}: {cause}"),
         }
     }
+}
+
+/// The [`GitError::File`] for `action`, such as `write`, failing on `path`, for `map_err`.
+pub fn file_error(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> GitError {
+    let path = path.to_path_buf();
+    move |err| GitError::File { action, path, err }
 }
 
 /// The exit code of a finished process, or 1 when it was killed by a signal.
@@ -287,6 +299,16 @@ mod tests {
         assert_eq!(err.to_string(), "git exited with status 129");
         let err = run(None, &["-c", "user.name=A B", "-C", "/", "no-such-command", "x"]);
         assert_eq!(err.unwrap_err().to_string(), "git no-such-command exited with status 1");
+    }
+
+    #[test]
+    fn says_which_file_could_not_be_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("no/such/dir/alternates");
+        let err = std::fs::write(&file, "x").map_err(file_error("write", &file)).unwrap_err();
+        let said = format!("could not write {}: No such file or directory", file.display());
+        assert!(err.to_string().starts_with(&said), "{err}");
+        assert_eq!(err.code(), 1);
     }
 
     #[test]

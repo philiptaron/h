@@ -593,8 +593,9 @@ fn borrow(store: &Store, git_dir: &Path, names: &[String]) -> Result<(), GitErro
         }
         content.extend(theirs.into_os_string().into_vec());
         content.push(b'\n');
-        std::fs::create_dir_all(objects.join("info")).map_err(GitError::Spawn)?;
-        std::fs::write(&file, content).map_err(GitError::Spawn)?;
+        let info = objects.join("info");
+        std::fs::create_dir_all(&info).map_err(git::file_error("create", &info))?;
+        std::fs::write(&file, content).map_err(git::file_error("write", &file))?;
     }
     repair_prefixes(store, git_dir)?;
     let key = "core.alternateRefsPrefixes";

@@ -172,7 +172,7 @@ fn resolve_term(
     casing: Casing,
     lookup: &github::Lookup,
 ) -> Result<Resolution, String> {
-    resolve(&config.root, term, casing, |user, repo| lookup.ask(user, repo))
+    resolve(&config.root, term, casing, |user, repo| lookup.ask_github(user, repo))
 }
 
 /// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
@@ -362,7 +362,7 @@ fn resolve_upstream(
     };
     if ask
         && let (Target::GitHub { user, repo }, Some(candidate)) = (&target, &candidate)
-        && let Some(info) = lookup(config).ask(user, repo).found()
+        && let Some(info) = lookup(config).ask_github(user, repo).found()
     {
         let full = format!("{}/{}", info.owner, info.name);
         let name = remote_name("github.com", &full);

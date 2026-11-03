@@ -191,7 +191,7 @@ impl Lookup {
 
     /// Ask GitHub about `user/repo`, as [`fetch_repo_info`] does, once whatever the casing: its
     /// canonical owner and name, its current one if it was renamed or transferred.
-    pub fn ask(&self, user: &str, repo: &str) -> Answer {
+    pub fn ask_github(&self, user: &str, repo: &str) -> Answer {
         let key = format!("{user}/{repo}").to_ascii_lowercase();
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();

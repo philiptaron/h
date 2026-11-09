@@ -4,7 +4,7 @@
 
 use std::borrow::BorrowMut;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -80,6 +80,38 @@ pub fn checkouts(root: &Path, dirs: &[&str]) {
     for dir in dirs {
         fs::create_dir_all(root.join(dir).join(".git")).unwrap();
     }
+}
+
+/// Install a credential helper in the isolated git configuration under `home` that answers
+/// every request with `password`, and return the file where it records what git asked it.
+pub fn credential_helper(home: &Path, password: &str) -> PathBuf {
+    credential_helper_for(home, None, password)
+}
+
+/// Like [`credential_helper`], answering only requests for `host` when there is one.
+pub fn credential_helper_for(home: &Path, host: Option<&str>, password: &str) -> PathBuf {
+    let asked = home.join("helper-asked");
+    let helper = home.join("credential-helper");
+    let answer = "echo username=me; echo password=".to_string() + password;
+    let answer = match host {
+        Some(host) => {
+            format!("printf '%s\\n' \"$input\" | grep -qx 'host={host}' && {{ {answer}; }}")
+        }
+        None => answer,
+    };
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = get ] || exit 0\ninput=$(cat)\nprintf '%s\\n' \"$input\" >> '{}'\n{answer}\nexit 0\n",
+        asked.display()
+    );
+    fs::write(&helper, script).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = run(git_command(home)
+        .args(["config", "--file"])
+        .arg(global_gitconfig(home))
+        .arg("credential.helper")
+        .arg(&helper));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    asked
 }
 
 /// The canonical form of `path`, which is what `getcwd` reports.
@@ -161,7 +193,8 @@ impl MockGitHub {
         })
     }
 
-    /// Answer each request with the status and body `respond` gives for its path and head.
+    /// Answer each request with the status and body `respond` gives for its path and head. A
+    /// request's body, if it has one, follows its head after a blank line.
     pub fn serve(respond: impl Fn(&str, &str) -> (u16, String) + Send + 'static) -> MockGitHub {
         MockGitHub::serve_with_headers(move |path, head| {
             let (status, body) = respond(path, head);
@@ -189,6 +222,18 @@ impl MockGitHub {
                         break;
                     }
                     head.push_str(&line);
+                }
+                let length = head.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().ok())?
+                });
+                if let Some(length) = length {
+                    let mut body = vec![0; length];
+                    if reader.read_exact(&mut body).is_ok() {
+                        head.push_str("\r\n");
+                        head.push_str(&String::from_utf8_lossy(&body));
+                    }
                 }
                 let path = head.split_whitespace().nth(1).unwrap_or_default().to_string();
                 let (status, headers, body) = respond(&path, &head);

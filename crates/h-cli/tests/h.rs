@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use common::*;
 
@@ -398,38 +398,6 @@ fn github_paths_clone_from_github() {
     assert_resolved(&out, &path);
     let url = "https://github.com/Zimbatm/h.git";
     assert_eq!(git.invocations(), [["clone", "--recursive", "--", url, path.to_str().unwrap()]]);
-}
-
-/// Install a credential helper in the isolated git configuration under `home` that answers
-/// every request with `password`, and return the file where it records what git asked it.
-fn credential_helper(home: &Path, password: &str) -> PathBuf {
-    credential_helper_for(home, None, password)
-}
-
-/// Like [`credential_helper`], answering only requests for `host` when there is one.
-fn credential_helper_for(home: &Path, host: Option<&str>, password: &str) -> PathBuf {
-    let asked = home.join("helper-asked");
-    let helper = home.join("credential-helper");
-    let answer = "echo username=me; echo password=".to_string() + password;
-    let answer = match host {
-        Some(host) => {
-            format!("printf '%s\\n' \"$input\" | grep -qx 'host={host}' && {{ {answer}; }}")
-        }
-        None => answer,
-    };
-    let script = format!(
-        "#!/bin/sh\n[ \"$1\" = get ] || exit 0\ninput=$(cat)\nprintf '%s\\n' \"$input\" >> '{}'\n{answer}\nexit 0\n",
-        asked.display()
-    );
-    fs::write(&helper, script).unwrap();
-    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
-    let out = run(git_command(home)
-        .args(["config", "--file"])
-        .arg(global_gitconfig(home))
-        .arg("credential.helper")
-        .arg(&helper));
-    assert_eq!(out.code, Some(0), "{out:?}");
-    asked
 }
 
 /// `h go <term> -- <git options>` with real, isolated git and the mock API at `api`.

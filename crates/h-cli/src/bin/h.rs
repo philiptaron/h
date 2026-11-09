@@ -56,7 +56,9 @@ Commands:
                               upstreams and its submodules' in the store, missing submodules
                               cloned, and its objects borrowed from the store instead of kept
   store maintain [hourly|daily|weekly]
-                              run the store's maintenance tasks (default: daily)
+                              run the store's maintenance tasks (default: daily), rewrite its
+                              index of the projects, and, daily, list again the owners'
+                              repositories on GitHub kept for completion
   hook worktree-create        Claude Code's WorktreeCreate hook: read its JSON on stdin, add a
                               worktree to the session's clone, and print the worktree's path
   hook worktree-remove        Claude Code's WorktreeRemove hook: commit what is left in the
@@ -664,8 +666,8 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
             _ => Err("Usage: h store ingest [DIR]".into()),
         },
         Some("maintain") => match terms.as_slice() {
-            [] => store.maintain("daily").map_err(|e| e.to_string()),
-            [schedule] => store.maintain(schedule).map_err(|e| e.to_string()),
+            [] => maintain_store(config, store, "daily"),
+            [schedule] => maintain_store(config, store, schedule),
             _ => Err("Usage: h store maintain [hourly|daily|weekly]".into()),
         },
         _ => Err(format!("Unknown store command: {}\n{USAGE}", sub.to_string_lossy())),
@@ -673,6 +675,53 @@ fn run_store_command(config: &Config, args: &[OsString]) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => fail(&msg),
+    }
+}
+
+/// `h store maintain [<schedule>]`: run git's maintenance tasks for `schedule` on the store, and
+/// bring what h keeps there up to date: always the index of the projects, under the code root
+/// it was written for, and daily every owner's repositories on GitHub, listed in full however
+/// long that takes, since nobody is waiting. None of it waits on the rest: what fails is named,
+/// and the rest is still done.
+fn maintain_store(config: &Config, store: &Store, schedule: &str) -> Result<(), String> {
+    let maintained = store.maintain(schedule).map_err(|e| e.to_string());
+    if let Some(projects) = Projects::from_index(store.projects_index()) {
+        projects.refresh();
+    }
+    if schedule != "daily" {
+        return maintained;
+    }
+    let listed = list_github_owners_again(config, store);
+    maintained.and(listed)
+}
+
+/// List again, in full, the repositories of every owner whose are kept in `store`.
+fn list_github_owners_again(config: &Config, store: &Store) -> Result<(), String> {
+    // Run from a timer, this is seldom given an identity, so the store's own, which it was made
+    // with, stands in; what is given still wins.
+    let mut credentials = store.read_credential_config();
+    credentials.extend(config_pairs(&config.git_opts));
+    let lookup = github::Lookup::new(&credentials);
+    let mut failures = 0;
+    for owner in store.list_github_owners() {
+        let listing = match lookup.list_repos(&owner, None) {
+            github::Listed::Found(repos) => Listing::Repos(repos),
+            github::Listed::Missing => Listing::NoSuchOwner,
+            github::Listed::Unknown => {
+                eprintln!("could not list {owner}'s repositories");
+                failures += 1;
+                continue;
+            }
+        };
+        let path = store.github_listing(&owner);
+        if let Err(err) = write_listing(&path, &listing) {
+            eprintln!("could not write {}: {err}", path.display());
+            failures += 1;
+        }
+    }
+    match failures {
+        0 => Ok(()),
+        n => Err(format!("could not refresh the GitHub listings of {n} owner(s)")),
     }
 }
 

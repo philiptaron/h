@@ -1021,6 +1021,73 @@ fn graphql_page(login: &str, names: &[&str], next: Option<&str>) -> String {
 }
 
 #[test]
+fn maintain_brings_the_index_and_the_github_listings_up_to_date() {
+    let sb = Sandbox::new();
+    sb.ok(&["add", PROJ_URL, "--", "-c", "credential.username=StoreMe"]);
+    let asked = credential_helper(sb.root(), "s3cret");
+    let root = sb.tmp.path().join("code");
+    checkouts(&root, &["github.com/qumulo/core"]);
+    // Many pages of Qumulo's, and none of Broken's.
+    let api = MockGitHub::serve(|path, request| {
+        let (head, body) = request.split_once("\r\n\r\n").unwrap_or((request, ""));
+        if path != "/graphql" || !head.to_ascii_lowercase().contains("bearer s3cret") {
+            return (500, String::new());
+        }
+        let wants = |login: &str| body.contains(&format!(r#""login":"{login}""#));
+        let after = |cursor: &str| body.contains(&format!(r#""after":{cursor}"#));
+        let reply = if wants("qumulo") && after("null") {
+            graphql_page("Qumulo", &["core", "new"], Some("c1"))
+        } else if wants("qumulo") && after(r#""c1""#) {
+            graphql_page("Qumulo", &["newer"], None)
+        } else if wants("broken") {
+            r#"{"data": null, "errors": [{"message": "Something went wrong"}]}"#.into()
+        } else {
+            r#"{"data": {"repositoryOwner": null}}"#.into()
+        };
+        (200, reply)
+    });
+    let h = |args: &[&str]| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        cmd.current_dir(sb.root()).env("H_GITHUB_API", &api.url).arg("--store").arg(&sb.store);
+        run(cmd.args(args))
+    };
+    // Completion writes the index, for its code root; maintenance has none of its own.
+    assert_eq!(h(&["--root", root.to_str().unwrap(), "complete", "co"]).stdout, "core\n");
+    let listings = sb.store.join("h/github");
+    let old = "h github repos 1\nowner Qumulo\ncore\n";
+    fs::create_dir_all(&listings).unwrap();
+    for (owner, listing) in [("qumulo", old), ("gone", old), ("broken", old)] {
+        fs::write(listings.join(owner), listing).unwrap();
+    }
+    fs::write(listings.join("qumulo.refreshing"), "").unwrap();
+    checkouts(&root, &["github.com/qumulo/other"]);
+    let index =
+        || String::from_utf8_lossy(&fs::read(sb.store.join("h/projects")).unwrap()).into_owned();
+    assert!(!index().contains("qumulo/other"));
+
+    let out = h(&["store", "maintain", "hourly"]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert!(index().contains("github.com/qumulo/other"), "every schedule rewrites the index");
+    assert_eq!(fs::read_to_string(listings.join("qumulo")).unwrap(), old, "hourly lists nothing");
+    assert!(api.requests().is_empty());
+
+    let out = h(&["store", "maintain"]);
+    assert_eq!(out.code, Some(1), "{out:?}");
+    assert_eq!(
+        out.stderr,
+        "could not list broken's repositories\n\
+         could not refresh the GitHub listings of 1 owner(s)\n"
+    );
+    let listing = |owner| fs::read_to_string(listings.join(owner)).unwrap();
+    assert_eq!(listing("qumulo"), "h github repos 1\nowner Qumulo\ncore\nnew\nnewer\n");
+    assert_eq!(listing("gone"), "h github repos 1\nno such owner\n");
+    assert_eq!(listing("broken"), old, "what could not be listed is kept");
+    let asked = fs::read_to_string(asked).unwrap();
+    assert!(asked.contains("username=StoreMe"), "the store's identity: {asked}");
+}
+
+#[test]
 fn with_a_token_completion_lists_repositories_through_graphql() {
     let sb = Sandbox::new();
     sb.ok(&["init"]);

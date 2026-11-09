@@ -32,7 +32,9 @@ internal repositories are in it, and the identity's own private ones, and is kep
 (`<store>/h/github/<owner>`) for a day, then fetched again in the background. The first completion
 of an owner waits up to ten seconds for GitHub, with a spinner after the cursor when it is at the
 end of the line; Ctrl-C stops waiting, and the list still arrives for the next Tab. zsh lists the
-two apart, under "checked out" and "on GitHub".
+two apart, under "checked out" and "on GitHub". Completion lists at most eight seconds' worth of
+an owner's repositories, the most recently pushed to first; `h store maintain daily` lists every
+kept owner again in full, however long that takes.
 
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.
@@ -60,7 +62,8 @@ none, such as a virtualenv.
 With a [store](#the-object-store), `h` keeps the projects it finds in an index there
 (`<store>/h/projects`), so completion and `h <name>` need not walk the code root each time. A clone
 updates it; a checkout made or removed some other way is noticed the first time the index cannot
-answer, when `h` walks the code root again and rewrites it.
+answer, when `h` walks the code root again and rewrites it, and by `h store maintain`, which does
+the same on every schedule.
 
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 
@@ -142,7 +145,8 @@ h store show torvalds/linux v6.12             # a commit
 h store show nixpkgs 1f0e2d3:flake.nix        # commit hashes work too
 h store worktree nixpkgs staging              # a cheap clone at staging, in a temporary directory
 h store ingest ~/code/github.com/me/project   # make a checkout and its submodules tenants
-h store maintain daily                        # commit-graph, incremental repack, prune worktrees
+h store maintain daily                        # commit-graph, incremental repack, prune worktrees,
+                                              # and bring h's index and GitHub listings up to date
 ```
 
 The store needs git 2.45 or later, and so does every tenant.

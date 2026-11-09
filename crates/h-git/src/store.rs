@@ -96,6 +96,33 @@ impl Store {
         self.path.join("h").join("github").join(owner.to_ascii_lowercase())
     }
 
+    /// The owners whose repositories on GitHub are kept in the store, by their names in
+    /// lowercase, in sorted order. See [`Store::github_listing`].
+    pub fn list_github_owners(&self) -> Vec<String> {
+        let dir = self.path.join("h").join("github");
+        let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
+        // A login has no `.`; the files with one are being written, or mark a refresh.
+        let mut owners: Vec<String> = entries
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| !name.contains('.'))
+            .collect();
+        owners.sort();
+        owners
+    }
+
+    /// Read the store's own `credential.*` settings, which it was made with (see
+    /// [`Store::init`]), as `key=value` pairs.
+    pub fn read_credential_config(&self) -> Vec<(OsString, OsString)> {
+        let args = ["config", "--local", "--null", "--get-regexp", r"^credential\."];
+        let Ok(out) = self.git().capture_output(&args) else {
+            return Vec::new(); // none set
+        };
+        out.split_terminator('\0')
+            .map(|entry| entry.split_once('\n').unwrap_or((entry, "")))
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect()
+    }
+
     /// Whether the store has been created.
     pub fn exists(&self) -> bool {
         self.path.join("objects").is_dir() && self.path.join("HEAD").is_file()

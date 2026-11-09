@@ -59,6 +59,14 @@ impl Projects {
         Projects { index: Some(index.into()), ..Projects::new(root) }
     }
 
+    /// The projects kept in `index`, under the code root it was written for. `None` when there
+    /// is no index, or it cannot be read.
+    pub fn from_index(index: impl Into<PathBuf>) -> Option<Projects> {
+        let index = index.into();
+        let root = read_index_root(&index)?;
+        Some(Projects::with_index(root, index))
+    }
+
     /// Walk the code root again, and write what is found to the index. This is for after
     /// something that changes what is under the code root, such as a clone.
     pub fn refresh(&self) {
@@ -212,6 +220,14 @@ fn read_index(path: &Path, root: &Path) -> Option<Vec<Project>> {
             }
         })
         .collect()
+}
+
+/// Read the code root the index at `path` was written for. `None` when it cannot be read.
+fn read_index_root(path: &Path) -> Option<PathBuf> {
+    let bytes = fs::read(path).ok()?;
+    let rest = bytes.strip_prefix(INDEX_HEADER)?;
+    let root = rest.split(|&b| b == 0).next().filter(|_| rest.contains(&0))?;
+    Some(PathBuf::from(OsStr::from_bytes(root)))
 }
 
 /// Write `paths`, the projects under `root`, to the index at `path`, replacing it whole.
@@ -511,6 +527,22 @@ mod tests {
             assert_eq!(read_index(&index, &root), None, "{junk:?}");
             assert_eq!(Projects::with_index(&root, &index).find("proj"), Some(root.join("proj")));
         }
+    }
+
+    #[test]
+    fn an_index_knows_its_code_root() {
+        let tmp = tree(&["code/one"]);
+        let (root, index) = (tmp.path().join("code"), tmp.path().join("index"));
+        assert!(Projects::from_index(&index).is_none(), "no index yet");
+        Projects::with_index(&root, &index).refresh();
+        fs::create_dir_all(root.join("two/.git")).unwrap();
+
+        let projects = Projects::from_index(&index).unwrap();
+        assert_eq!(projects.root(), root);
+        projects.refresh();
+        assert_eq!(read_index(&index, &root).map(|p| p.len()), Some(2), "two is in it now");
+        fs::write(&index, b"h projects 1\0").unwrap();
+        assert!(Projects::from_index(&index).is_none(), "no root");
     }
 
     #[test]

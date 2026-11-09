@@ -1005,6 +1005,68 @@ fn completion_offers_repositories_on_github() {
     assert_eq!(api.requests().len(), asked + 2);
 }
 
+/// A reply to h's GraphQL query for a page of `login`'s repositories, `names`, followed by the
+/// page after `next` when there is one.
+fn graphql_page(login: &str, names: &[&str], next: Option<&str>) -> String {
+    let nodes: Vec<String> = names.iter().map(|name| format!(r#"{{"name": "{name}"}}"#)).collect();
+    let page_info = match next {
+        Some(cursor) => format!(r#""hasNextPage": true, "endCursor": "{cursor}""#),
+        None => r#""hasNextPage": false, "endCursor": null"#.to_string(),
+    };
+    format!(
+        r#"{{"data": {{"repositoryOwner": {{"login": "{login}", "repositories": {{
+            "nodes": [{}], "pageInfo": {{{page_info}}}}}}}}}}}"#,
+        nodes.join(",")
+    )
+}
+
+#[test]
+fn with_a_token_completion_lists_repositories_through_graphql() {
+    let sb = Sandbox::new();
+    sb.ok(&["init"]);
+    let root = sb.tmp.path().join("code");
+    credential_helper(sb.root(), "s3cret");
+    // Two pages of an organization's, a user's own private ones, and no one at all; the REST
+    // API is asked only about one GraphQL fails for.
+    let api = MockGitHub::serve(|path, request| {
+        let (head, body) = request.split_once("\r\n\r\n").unwrap_or((request, ""));
+        if path.starts_with("/orgs/fallback/repos?") {
+            return (200, repo_list("Fallback", &["rest".into()]));
+        }
+        if path != "/graphql" || !head.to_ascii_lowercase().contains("bearer s3cret") {
+            return (500, String::new());
+        }
+        let wants = |login: &str| body.contains(&format!(r#""login":"{login}""#));
+        let reply = if wants("qumulo") && body.contains(r#""after":null"#) {
+            graphql_page("Qumulo", &["core", "internal-tool"], Some("cursor1"))
+        } else if wants("qumulo") && body.contains(r#""after":"cursor1""#) {
+            graphql_page("Qumulo", &["private-thing"], None)
+        } else if wants("fallback") {
+            r#"{"data": null, "errors": [{"message": "Something went wrong"}]}"#.into()
+        } else if wants("me") {
+            graphql_page("Me", &["dotfiles", "secret-notes"], None)
+        } else {
+            r#"{"data": {"repositoryOwner": null}}"#.into()
+        };
+        (200, reply)
+    });
+    let complete = |word: &str| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        cmd.current_dir(sb.root()).env("H_GITHUB_API", &api.url);
+        cmd.arg("--root").arg(&root).arg("--store").arg(&sb.store);
+        let out = run(cmd.args(["complete", word, "--", "-c", "credential.username=Me"]));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout
+    };
+
+    assert_eq!(complete("qumulo/"), "\nQumulo/core\nQumulo/internal-tool\nQumulo/private-thing\n");
+    assert_eq!(complete("me/s"), "\nMe/secret-notes\n");
+    assert_eq!(complete("nobody/"), "");
+    assert_eq!(api.requests().len(), 4, "two pages, then one each");
+    assert_eq!(complete("fallback/"), "\nFallback/rest\n");
+}
+
 #[test]
 fn completion_waits_for_github_with_a_spinner_when_it_can() {
     let sb = Sandbox::new();

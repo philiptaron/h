@@ -27,12 +27,12 @@ offered.
 
 With a [store](#the-object-store), `owner/<Tab>` (or `github.com/owner/<Tab>`) also offers the
 owner's repositories on GitHub that are not checked out, after the ones that are; choosing one
-clones it. The list comes from GitHub with the identity's token, so an organization's private
-repositories are in it, and is kept in the store (`<store>/h/github/<owner>`) for a day, then
-fetched again in the background. The first completion of an owner waits up to ten seconds for
-GitHub, with a spinner after the cursor when it is at the end of the line; Ctrl-C stops waiting, and
-the list still arrives for the next Tab. zsh lists the two apart, under "checked out" and "on
-GitHub".
+clones it. The list comes from GitHub with the identity's token, so an organization's private and
+internal repositories are in it, and the identity's own private ones, and is kept in the store
+(`<store>/h/github/<owner>`) for a day, then fetched again in the background. The first completion
+of an owner waits up to ten seconds for GitHub, with a spinner after the cursor when it is at the
+end of the line; Ctrl-C stops waiting, and the list still arrives for the next Tab. zsh lists the
+two apart, under "checked out" and "on GitHub".
 
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.

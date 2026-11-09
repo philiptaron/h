@@ -137,6 +137,61 @@ pub enum Listed {
     Unknown,
 }
 
+/// Asks for one page of the names of the repositories `$login` owns, after the cursor `$after`.
+const LIST_REPOS_QUERY: &str = "query($login: String!, $after: String) { \
+    repositoryOwner(login: $login) { login \
+    repositories(first: 100, after: $after, ownerAffiliations: OWNER) { \
+    nodes { name } pageInfo { hasNextPage endCursor } } } }";
+
+/// The GraphQL endpoint of the REST API at `api`: `/graphql` beside it, or for GitHub Enterprise
+/// Server, whose REST API is at `/api/v3`, `/api/graphql`.
+fn graphql_url(api: &str) -> String {
+    match api.strip_suffix("/v3") {
+        Some(base) if base.ends_with("/api") => format!("{base}/graphql"),
+        _ => format!("{api}/graphql"),
+    }
+}
+
+/// A page of an owner's repositories from [`LIST_REPOS_QUERY`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReposPage {
+    Repos(OwnerReposPage),
+    NoSuchOwner,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnerReposPage {
+    login: String,
+    names: Vec<String>,
+    /// The cursor to ask for the next page after, when there is one.
+    next: Option<String>,
+}
+
+/// Read a reply to [`LIST_REPOS_QUERY`]. `None` when it has errors, or not what was asked for.
+fn parse_repos_page(body: &str) -> Option<ReposPage> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    if json.get("errors").is_some() {
+        return None;
+    }
+    let owner = json.get("data")?.get("repositoryOwner")?;
+    if owner.is_null() {
+        return Some(ReposPage::NoSuchOwner);
+    }
+    let repos = owner.get("repositories")?;
+    let names = repos.get("nodes")?.as_array()?.iter();
+    let names = names.map(|node| Some(node.get("name")?.as_str()?.to_string()));
+    let page_info = repos.get("pageInfo")?;
+    let next = match page_info.get("hasNextPage")?.as_bool()? {
+        true => Some(page_info.get("endCursor")?.as_str()?.to_string()),
+        false => None,
+    };
+    Some(ReposPage::Repos(OwnerReposPage {
+        login: owner.get("login")?.as_str()?.to_string(),
+        names: names.collect::<Option<_>>()?,
+        next,
+    }))
+}
+
 /// The body of `response` when it is a 200, as [`Reply::Body`].
 fn read_reply(mut response: http::Response<Body>) -> Reply {
     if response.status() != 200 {
@@ -271,10 +326,68 @@ impl Lookup {
     }
 
     /// List the repositories `owner`, a user or an organization, has on GitHub, as far as the
-    /// identity's token lets it see: an organization's private ones too, with a token from one
-    /// of its members, but only a user's public ones. Owners with more than
-    /// [`MAX_LISTED_PAGES`] pages of them are listed only in part.
+    /// identity's token lets it see. Owners with more than [`MAX_LISTED_PAGES`] pages of them are
+    /// listed only in part.
+    ///
+    /// With a token, the GraphQL API is asked, for the names alone, which is several times
+    /// faster than the REST API's whole records, and sees everything the token's account can: an
+    /// organization's private and internal repositories, and a user's private ones. Without
+    /// one, or should that fail, the REST API is, which shows only a user's public repositories.
     pub fn list_repos(&self, owner: &str) -> Listed {
+        if let Some(token) = self.ask_token()
+            && let Some(listed) = self.list_repos_with_graphql(token, owner)
+        {
+            return listed;
+        }
+        self.list_repos_with_rest(owner)
+    }
+
+    /// List `owner`'s repositories through the GraphQL API with `token`. `None` when that fails.
+    fn list_repos_with_graphql(&self, token: &str, owner: &str) -> Option<Listed> {
+        let (mut login, mut names, mut after) = (None, Vec::new(), None);
+        for _ in 0..MAX_LISTED_PAGES {
+            let variables = serde_json::json!({ "login": owner, "after": after });
+            let body = self.post_graphql(token, LIST_REPOS_QUERY, variables)?;
+            let page = match parse_repos_page(&body)? {
+                ReposPage::NoSuchOwner => return Some(Listed::Missing),
+                ReposPage::Repos(page) => page,
+            };
+            login.get_or_insert(page.login);
+            names.extend(page.names);
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        Some(Listed::Found(OwnerRepos { login: login?, names }))
+    }
+
+    /// Post a GraphQL `query`, with `variables`, to the API with `token`, and return the body of
+    /// the reply. `None` when there is no reply, or it is not a 200.
+    fn post_graphql(
+        &self,
+        token: &str,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Option<String> {
+        let body = serde_json::json!({ "query": query, "variables": variables }).to_string();
+        let response = self
+            .agent
+            .post(graphql_url(&self.api))
+            .header("User-Agent", "h-cli")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .send(body.as_str())
+            .ok()?;
+        match read_reply(response) {
+            Reply::Body(body) => Some(body),
+            Reply::Missing | Reply::Failed => None,
+        }
+    }
+
+    /// List `owner`'s repositories through the REST API: an organization's from
+    /// `/orgs/<owner>/repos`, else a user's public ones from `/users/<owner>/repos`.
+    fn list_repos_with_rest(&self, owner: &str) -> Listed {
         'kinds: for kind in ["orgs", "users"] {
             let (mut login, mut names) = (None, Vec::new());
             for page in 1..=MAX_LISTED_PAGES {
@@ -384,6 +497,43 @@ mod tests {
         assert_eq!(parse_repo_list("[]"), Some(vec![]));
         assert_eq!(parse_repo_list(r#"[{"name": "x"}]"#), None);
         assert_eq!(parse_repo_list(r#"{"message": "Not Found"}"#), None);
+    }
+
+    #[test]
+    fn finds_the_graphql_endpoint() {
+        assert_eq!(graphql_url("https://api.github.com"), "https://api.github.com/graphql");
+        assert_eq!(
+            graphql_url("https://ghe.example.com/api/v3"),
+            "https://ghe.example.com/api/graphql"
+        );
+        assert_eq!(graphql_url("http://127.0.0.1:8080"), "http://127.0.0.1:8080/graphql");
+    }
+
+    #[test]
+    fn parses_pages_of_repositories() {
+        let page = |next: &str| {
+            format!(
+                r#"{{"data": {{"repositoryOwner": {{"login": "NixOS", "repositories": {{
+                    "nodes": [{{"name": "nix"}}, {{"name": "nixpkgs"}}],
+                    "pageInfo": {{{next}}}}}}}}}}}"#
+            )
+        };
+        let repos = |next: Option<&str>| {
+            Some(ReposPage::Repos(OwnerReposPage {
+                login: "NixOS".into(),
+                names: vec!["nix".into(), "nixpkgs".into()],
+                next: next.map(String::from),
+            }))
+        };
+        let more = page(r#""hasNextPage": true, "endCursor": "Y3Vy""#);
+        assert_eq!(parse_repos_page(&more), repos(Some("Y3Vy")));
+        let last = page(r#""hasNextPage": false, "endCursor": null"#);
+        assert_eq!(parse_repos_page(&last), repos(None));
+        let missing = r#"{"data": {"repositoryOwner": null}}"#;
+        assert_eq!(parse_repos_page(missing), Some(ReposPage::NoSuchOwner));
+        let error = r#"{"data": null, "errors": [{"message": "Bad credentials"}]}"#;
+        assert_eq!(parse_repos_page(error), None);
+        assert_eq!(parse_repos_page(r#"{"message": "Bad credentials"}"#), None);
     }
 
     #[test]

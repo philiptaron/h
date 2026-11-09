@@ -38,30 +38,26 @@ impl Projects {
     /// Find the directory `term` names.
     ///
     /// A term is a name, or several joined by `/`, and names each directory whose path ends in
-    /// those segments: any directory can be where it starts, so `nixos/nixpkgs` names
-    /// `github.com/NixOS/nixpkgs`. The match is case-insensitive unless `term` contains an
-    /// uppercase letter. Deeper matches win, since `<domain>/<owner>/<repo>` is the usual layout;
-    /// among matches at the same depth, the first in sorted order wins.
+    /// those segments, in any case: any directory can be where it starts, so `nixos/nixpkgs`
+    /// names `github.com/NixOS/nixpkgs`. When several match, a term with a capital letter in it
+    /// prefers those in its own case. Then deeper matches win, since `<domain>/<owner>/<repo>` is
+    /// the usual layout; among those as deep, one in the term's case, and then the first in
+    /// sorted order.
     pub fn find(&self, term: &str) -> Option<PathBuf> {
-        let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
-        let same = |name: &[u8], wanted: &str| match case_sensitive {
-            true => name == wanted.as_bytes(),
-            false => name.eq_ignore_ascii_case(wanted.as_bytes()),
-        };
+        let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
         let wanted: Vec<&str> = term.split('/').collect();
-        let mut best: Option<&Vec<OsString>> = None;
-        for segments in &self.paths {
-            let Some(tail) = segments.len().checked_sub(wanted.len()).map(|i| &segments[i..])
-            else {
-                continue;
-            };
-            let matches =
-                tail.iter().zip(&wanted).all(|(name, wanted)| same(name.as_bytes(), wanted));
-            if matches && best.is_none_or(|b| segments.len() > b.len()) {
-                best = Some(segments);
+        // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
+        let best = self.paths.iter().rev().filter_map(|segments| {
+            let tail = &segments[segments.len().checked_sub(wanted.len())?..];
+            let pairs = || tail.iter().map(|name| name.as_bytes()).zip(&wanted);
+            if !pairs().all(|(name, wanted)| name.eq_ignore_ascii_case(wanted.as_bytes())) {
+                return None;
             }
-        }
-        best.map(|segments| segments.iter().fold(self.root.clone(), |path, s| path.join(s)))
+            let exact = pairs().all(|(name, wanted)| name == wanted.as_bytes());
+            Some(((has_capitals && exact, segments.len(), exact), segments))
+        });
+        let (_, segments) = best.max_by_key(|(rank, _)| *rank)?;
+        Some(segments.iter().fold(self.root.clone(), |path, s| path.join(s)))
     }
 
     /// List the terms that complete `word`, best first.
@@ -218,7 +214,7 @@ mod tests {
         assert_eq!(search(tmp.path(), "nixos/nixpkgs"), nixpkgs);
         assert_eq!(search(tmp.path(), "github.com/nixos/nixpkgs"), nixpkgs);
         assert_eq!(search(tmp.path(), "NixOS/nixpkgs"), nixpkgs);
-        assert_eq!(search(tmp.path(), "NIXOS/nixpkgs"), None);
+        assert_eq!(search(tmp.path(), "NIXOS/nixpkgs"), nixpkgs);
         let linux = Some(tmp.path().join("git.kernel.org/pub/scm/torvalds/linux"));
         assert_eq!(search(tmp.path(), "torvalds/linux"), linux);
         assert_eq!(search(tmp.path(), "scm/torvalds/linux"), linux);
@@ -246,10 +242,24 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_terms_match_exactly() {
+    fn terms_with_capitals_prefer_their_case() {
         let tmp = tree(&["a/b/myproj", "a/MyProj"]);
         assert_eq!(search(tmp.path(), "MyProj"), Some(tmp.path().join("a/MyProj")));
-        assert_eq!(search(tmp.path(), "MYPROJ"), None);
+        assert_eq!(search(tmp.path(), "MYPROJ"), Some(tmp.path().join("a/b/myproj")));
+    }
+
+    #[test]
+    fn as_deep_matches_prefer_the_terms_case() {
+        let tmp = tree(&["github.com/NixOS/nixpkgs", "github.com/nixos/nixpkgs"]);
+        if fs::read_dir(tmp.path().join("github.com")).unwrap().count() < 2 {
+            return; // a case-insensitive filesystem cannot hold both
+        }
+        let nixos = Some(tmp.path().join("github.com/nixos/nixpkgs"));
+        let upper = Some(tmp.path().join("github.com/NixOS/nixpkgs"));
+        assert_eq!(search(tmp.path(), "nixos/nixpkgs"), nixos);
+        assert_eq!(search(tmp.path(), "NixOS/nixpkgs"), upper);
+        // In no one's case, the first in sorted order, which puts capitals first.
+        assert_eq!(search(tmp.path(), "nixOS/nixpkgs"), upper);
     }
 
     #[test]

@@ -217,20 +217,19 @@ pub fn find_github_dir(
     found.into_iter().nth(exact.unwrap_or(0))
 }
 
-/// Search `code_root` for the project `term` names, as [`Projects::find`] does.
-fn search_code_root(code_root: &Path, term: &str) -> Option<Resolution> {
-    let path = Projects::walk(code_root).find(term)?;
+/// Where a project found under `code_root` at `path` leads: there, with nothing to clone.
+fn found_by_search(code_root: &Path, path: PathBuf) -> Resolution {
     let remote = path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(escape_name);
-    Some(Resolution { path, clone_url: None, remote, upstream_url: None })
+    Resolution { path, clone_url: None, remote, upstream_url: None }
 }
 
 /// Resolve `term` against `code_root`.
 ///
-/// `lookup` is consulted for GitHub repositories to fix up the casing of `user/repo`: always
-/// with [`Casing::GitHub`], and with [`Casing::Local`] only when the repository has no directory
-/// in any casing yet, under `github.com` or as the end of some other path (`torvalds/linux` for
-/// `git.kernel.org/pub/scm/.../torvalds/linux`). Either way an existing directory for the resulting name, in any casing, is
-/// where it leads. A repository GitHub does not know even when asked with a token, and that has
+/// With [`Casing::Local`], `user/repo` is first a term like any other: the project whose path
+/// ends that way, in any casing, under `github.com` or elsewhere (`torvalds/linux` for
+/// `git.kernel.org/pub/scm/.../torvalds/linux`). Only when there is none is `lookup` consulted
+/// for its casing on GitHub, which [`Casing::GitHub`] always does. Either way an existing
+/// directory for the resulting name, in any casing, is where it leads. A repository GitHub does not know even when asked with a token, and that has
 /// no directory, is not found: cloning it could only fail. On failure, returns the message to
 /// show the user.
 pub fn resolve(
@@ -248,26 +247,21 @@ pub fn resolve(
 
     match target {
         Target::GitHub { user, repo } => {
-            let existing = match casing {
-                Casing::Local => find_github_dir(code_root, &user, &repo),
-                Casing::GitHub => None,
-            };
-            if casing == Casing::Local
-                && existing.is_none()
-                && let Some(resolution) = search_code_root(code_root, term)
-            {
-                return Ok(resolution);
+            if casing == Casing::Local {
+                // `user/repo.git` names a checkout spelled with or without the `.git`.
+                let projects = Projects::walk(code_root);
+                let path = projects.find(term).or_else(|| projects.find(&format!("{user}/{repo}")));
+                if let Some(path) = path {
+                    return Ok(found_by_search(code_root, path));
+                }
             }
-            let (user, repo, parent) = match existing {
-                Some((user, repo)) => (user, repo, None),
-                None => match lookup(&user, &repo) {
-                    Answer::Found(info) => (info.owner, info.name, info.parent),
-                    Answer::Missing if find_github_dir(code_root, &user, &repo).is_none() => {
-                        let msg = "not found on GitHub, even with this identity's token";
-                        return Err(format!("{user}/{repo} {msg}"));
-                    }
-                    Answer::Missing | Answer::Unknown => (user, repo, None),
-                },
+            let (user, repo, parent) = match lookup(&user, &repo) {
+                Answer::Found(info) => (info.owner, info.name, info.parent),
+                Answer::Missing if find_github_dir(code_root, &user, &repo).is_none() => {
+                    let msg = "not found on GitHub, even with this identity's token";
+                    return Err(format!("{user}/{repo} {msg}"));
+                }
+                Answer::Missing | Answer::Unknown => (user, repo, None),
             };
             // A checkout of the resulting name wins in any casing too: with Casing::GitHub, or
             // when GitHub gives a renamed repository's new name.
@@ -286,7 +280,10 @@ pub fn resolve(
             remote: Some(remote_name(&host, &path)),
             upstream_url: None,
         }),
-        Target::Name(name) => search_code_root(code_root, &name).ok_or_else(not_found),
+        Target::Name(name) => {
+            let path = Projects::walk(code_root).find(&name).ok_or_else(not_found)?;
+            Ok(found_by_search(code_root, path))
+        }
     }
 }
 
@@ -449,17 +446,19 @@ mod tests {
     #[test]
     fn checkouts_in_any_casing_win_without_a_lookup() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(tmp.path().join("github.com/NixOS/nixpkgs")).unwrap();
-        let res = resolve(tmp.path(), "nixos/NIXPKGS", Casing::Local, not_asked);
-        assert_eq!(
-            res,
-            Ok(Resolution {
-                path: tmp.path().join("github.com/NixOS/nixpkgs"),
-                clone_url: Some("https://github.com/NixOS/nixpkgs.git".into()),
-                remote: Some("github.com/NixOS/nixpkgs".into()),
-                upstream_url: None,
-            })
-        );
+        fs::create_dir_all(tmp.path().join("github.com/NixOS/nixpkgs/.git")).unwrap();
+        for term in ["nixos/NIXPKGS", "nixos/nixpkgs.git"] {
+            let res = resolve(tmp.path(), term, Casing::Local, not_asked);
+            assert_eq!(
+                res,
+                Ok(Resolution {
+                    path: tmp.path().join("github.com/NixOS/nixpkgs"),
+                    clone_url: None,
+                    remote: Some("github.com/NixOS/nixpkgs".into()),
+                    upstream_url: None,
+                })
+            );
+        }
 
         // The store always asks GitHub, and still finds the checkout.
         let res = resolve(tmp.path(), "nixos/nixpkgs", Casing::GitHub, found("NixOS/nixpkgs"));
@@ -586,13 +585,11 @@ mod tests {
             resolve(tmp.path(), "git.kernel.org/pub/scm/torvalds/linux", Casing::Local, not_asked),
             want
         );
-        // `user/repo` is a GitHub repository, found elsewhere only when it is not under github.com.
+        // `user/repo` is found like any other term, the deeper checkout winning.
         assert_eq!(resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked), want);
-        fs::create_dir_all(tmp.path().join("github.com/torvalds/linux")).unwrap();
-        let res = resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked);
-        assert_eq!(res.unwrap().path, tmp.path().join("github.com/torvalds/linux"));
+        fs::create_dir_all(tmp.path().join("github.com/torvalds/linux/.git")).unwrap();
+        assert_eq!(resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked), want);
         // The store always means GitHub.
-        fs::remove_dir_all(tmp.path().join("github.com")).unwrap();
         let res = resolve(tmp.path(), "torvalds/linux", Casing::GitHub, found("torvalds/linux"));
         assert_eq!(res.unwrap().path, tmp.path().join("github.com/torvalds/linux"));
         assert_eq!(

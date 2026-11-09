@@ -30,17 +30,18 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 | Command | What it does |
 | --- | --- |
 | `h <name>` | go to the project matching `<name>`, at any depth |
-| `h <user>/<repo>` | go to `~/code/github.com/<user>/<repo>`, in any casing, or else to a project whose path ends in `<user>/<repo>`, or clone it |
+| `h <user>/<repo>` | go to the project whose path ends in `<user>/<repo>`, or else clone it from GitHub into `~/code/github.com/<user>/<repo>` |
 | `h <a>/<b>/<c>...` | go to the project whose path ends in `<a>/<b>/<c>...`, starting at any directory |
 | `h <url>` | go to `~/code/<domain>/<path>`, or clone it |
 | `h <term> [clone options]` | pass extra options to `git clone` |
 | `h <term> --container` | clone with no working tree, for [worktrees only](#container-clones) |
 | `h store <command>` | the [object store](#the-object-store) commands |
 
-Names match in any case unless they contain a capital letter. Projects are repositories (git,
-Mercurial or Jujutsu checkouts, and bare git repositories) and the directories that hold them;
-the search does not look inside a repository, or in directories with none, such as a virtualenv.
-When several projects match, the deepest wins.
+Names match in any case. When several projects match, a term with a capital letter prefers those in
+its own case; then the deepest wins, then one in the term's case, then the first in sorted order.
+Projects are repositories (git, Mercurial or Jujutsu checkouts, and bare git repositories) and the
+directories that hold them; the search does not look inside a repository, or in directories with
+none, such as a virtualenv.
 
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 

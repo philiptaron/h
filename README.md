@@ -32,6 +32,7 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 | `h <name>` | go to the project matching `<name>`, at any depth |
 | `h <user>/<repo>` | go to the project whose path ends in `<user>/<repo>`, or else clone it from GitHub into `~/code/github.com/<user>/<repo>` |
 | `h <a>/<b>/<c>...` | go to the project whose path ends in `<a>/<b>/<c>...`, starting at any directory |
+| `h <name>/` | go to the directory holding repositories that matches `<name>`, such as an owner |
 | `h <url>` | go to `~/code/<domain>/<path>`, or clone it |
 | `h <term> [clone options]` | pass extra options to `git clone` |
 | `h <term> --container` | clone with no working tree, for [worktrees only](#container-clones) |

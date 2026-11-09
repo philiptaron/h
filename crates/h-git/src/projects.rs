@@ -18,8 +18,17 @@ use crate::resolve::is_simple_name;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projects {
     root: PathBuf,
-    /// Each directory's path relative to `root`, split into segments, in sorted order.
-    paths: Vec<Vec<OsString>>,
+    /// In sorted order of their paths.
+    paths: Vec<Project>,
+}
+
+/// A directory a term can name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Project {
+    /// Its path relative to the code root, split into segments.
+    segments: Vec<OsString>,
+    /// Whether it is a repository, rather than a directory that holds them.
+    is_repository: bool,
 }
 
 impl Projects {
@@ -39,15 +48,25 @@ impl Projects {
     ///
     /// A term is a name, or several joined by `/`, and names each directory whose path ends in
     /// those segments, in any case: any directory can be where it starts, so `nixos/nixpkgs`
-    /// names `github.com/NixOS/nixpkgs`. When several match, a term with a capital letter in it
+    /// names `github.com/NixOS/nixpkgs`. With a `/` at the end, it names only the directories
+    /// that hold repositories, so `alacritty/` is the owner when `alacritty` is its repository,
+    /// as in `github.com/alacritty/alacritty`. When several match, a term with a capital letter in it
     /// prefers those in its own case. Then deeper matches win, since `<domain>/<owner>/<repo>` is
     /// the usual layout; among those as deep, one in the term's case, and then the first in
     /// sorted order.
     pub fn find(&self, term: &str) -> Option<PathBuf> {
+        let (term, holders_only) = match term.strip_suffix('/') {
+            Some(term) => (term, true),
+            None => (term, false),
+        };
         let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
         let wanted: Vec<&str> = term.split('/').collect();
         // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
-        let best = self.paths.iter().rev().filter_map(|segments| {
+        let best = self.paths.iter().rev().filter_map(|project| {
+            if holders_only && project.is_repository {
+                return None;
+            }
+            let segments = &project.segments;
             let tail = &segments[segments.len().checked_sub(wanted.len())?..];
             let pairs = || tail.iter().map(|name| name.as_bytes()).zip(&wanted);
             if !pairs().all(|(name, wanted)| name.eq_ignore_ascii_case(wanted.as_bytes())) {
@@ -72,7 +91,7 @@ impl Projects {
         let mut found: Vec<(usize, String)> = self
             .paths
             .iter()
-            .filter_map(|segments| {
+            .filter_map(|Project { segments, .. }| {
                 let tail = &segments[segments.len().checked_sub(wanted)?..];
                 let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
                 if !tail.iter().all(|s| is_simple_name(s)) {
@@ -95,18 +114,27 @@ impl Projects {
 
 /// Add the projects below `dir`, which is at `segments` below the root, to `found`, and say
 /// whether `dir` is a repository or holds one.
+/// What a directory the walk visits turns out to be.
+enum Visited {
+    Repository,
+    /// A directory holding repositories.
+    Holder,
+    /// Neither, so not a project.
+    Nothing,
+}
+
 fn walk(
     dir: &Path,
     segments: &mut Vec<OsString>,
     ancestors: &mut Vec<(u64, u64)>,
-    found: &mut Vec<Vec<OsString>>,
-) -> bool {
+    found: &mut Vec<Project>,
+) -> Visited {
     let Ok(entries) = fs::read_dir(dir) else {
-        return false;
+        return Visited::Nothing;
     };
     let mut names: Vec<OsString> = entries.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
     if !segments.is_empty() && is_repository(&names) {
-        return true;
+        return Visited::Repository;
     }
     names.sort();
 
@@ -126,17 +154,18 @@ fn walk(
         }
         segments.push(name);
         let at = found.len();
-        found.push(segments.clone());
+        found.push(Project { segments: segments.clone(), is_repository: false });
         ancestors.push(id);
-        if walk(&path, segments, ancestors, found) {
-            holds_repository = true;
-        } else {
-            found.truncate(at);
+        match walk(&path, segments, ancestors, found) {
+            Visited::Repository => found[at].is_repository = true,
+            Visited::Holder => {}
+            Visited::Nothing => found.truncate(at),
         }
+        holds_repository |= found.len() > at;
         ancestors.pop();
         segments.pop();
     }
-    holds_repository
+    if holds_repository { Visited::Holder } else { Visited::Nothing }
 }
 
 /// Whether a directory holding `names` is a repository: a git, Mercurial or Jujutsu checkout, or
@@ -220,6 +249,20 @@ mod tests {
         assert_eq!(search(tmp.path(), "scm/torvalds/linux"), linux);
         assert_eq!(search(tmp.path(), "pub/torvalds/linux"), None);
         assert_eq!(search(tmp.path(), "nixos/nixpkgs/more"), None);
+    }
+
+    #[test]
+    fn a_trailing_slash_names_a_directory_holding_repositories() {
+        let tmp = tree(&["github.com/alacritty/alacritty", "gitlab.com/group/alacritty"]);
+        let owner = Some(tmp.path().join("github.com/alacritty"));
+        assert_eq!(
+            search(tmp.path(), "alacritty"),
+            Some(tmp.path().join("github.com/alacritty/alacritty"))
+        );
+        assert_eq!(search(tmp.path(), "alacritty/"), owner);
+        assert_eq!(search(tmp.path(), "github.com/alacritty/"), owner);
+        assert_eq!(search(tmp.path(), "github.com/"), Some(tmp.path().join("github.com")));
+        assert_eq!(search(tmp.path(), "group/alacritty/"), None);
     }
 
     #[test]

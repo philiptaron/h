@@ -15,7 +15,7 @@ pub enum Target {
     /// A repository on another host, cloned from `url` into `<code-root>/<host>/<path>`.
     Remote { url: String, host: String, path: String },
     /// A project name, or a path of them (`group/sub/project`), to search for under the code
-    /// root.
+    /// root; with a `/` at the end, only among the directories that hold repositories.
     Name(String),
 }
 
@@ -95,7 +95,7 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
         let (_, rest) = term.split_once('@').expect("term starts with user@");
         let (host, path) = rest.split_once(':').ok_or(ParseError::NotFound)?;
         Ok(remote(host, path))
-    } else if term.split('/').all(is_simple_name) {
+    } else if term.strip_suffix('/').unwrap_or(term).split('/').all(is_simple_name) {
         Ok(Target::Name(term.to_string()))
     } else {
         Err(ParseError::UnknownPattern)
@@ -343,9 +343,8 @@ mod tests {
     #[test]
     fn rejects_malformed_shorthand() {
         assert_eq!(parse_term("/h"), Err(ParseError::UnknownPattern));
-        assert_eq!(parse_term("zimbatm/"), Err(ParseError::UnknownPattern));
+        assert_eq!(parse_term("zimbatm//"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a//b"), Err(ParseError::UnknownPattern));
-        assert_eq!(parse_term("a/b/"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a b/c"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a/b c"), Err(ParseError::UnknownPattern));
     }
@@ -358,6 +357,9 @@ mod tests {
         assert_eq!(parse_term("caf\u{e9}"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a/b/c"), Ok(Target::Name("a/b/c".into())));
         assert_eq!(parse_term("gitlab.com/x/y"), Ok(Target::Name("gitlab.com/x/y".into())));
+        assert_eq!(parse_term("zimbatm/"), Ok(Target::Name("zimbatm/".into())));
+        assert_eq!(parse_term("a/b/"), Ok(Target::Name("a/b/".into())));
+        assert_eq!(parse_term("/"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a b"), Err(ParseError::UnknownPattern));
     }
 

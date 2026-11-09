@@ -119,6 +119,11 @@ fn goes_to_paths_starting_at_any_directory() {
     {
         assert_resolved(&go(tmp.path(), term), &linux);
     }
+    // With a `/` at the end, the directory that holds the repository instead.
+    assert_resolved(
+        &go(tmp.path(), "torvalds/"),
+        &tmp.path().join("git.kernel.org/pub/scm/torvalds"),
+    );
     assert_failed_in(
         &go(tmp.path(), "pub/torvalds/linux"),
         tmp.path(),

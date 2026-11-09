@@ -57,7 +57,8 @@ Commands:
                               worktree to its branch, then remove the worktree
 
 A term is a project name, the end of a project's path (<user>/<repo>, which is cloned from
-GitHub when no checkout ends that way, or more of the path), or a git URL. The code root
+GitHub when no checkout ends that way, or more of the path; with a `/` at the end, the
+directory holding repositories rather than a repository), or a git URL. The code root
 defaults to $H_CODE_ROOT, then ~/src; the store to $H_STORE. Git options after `--`
 (`-c key=value`), or else in $H_GIT_OPTS, are written into every clone and into the store.";
 

@@ -901,6 +901,33 @@ fn clones_borrow_objects_from_the_store() {
     assert!(objects.contains("count: 0\n") && objects.contains("in-pack: 0\n"), "{objects}");
 }
 
+#[test]
+fn the_store_keeps_an_index_of_the_projects() {
+    let sb = Sandbox::new();
+    sb.ok(&["init"]);
+    let root = sb.tmp.path().join("code");
+    checkouts(&root, &["example.com/old/one"]);
+    let h = |args: &[&str]| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        cmd.current_dir(sb.root()).arg("--root").arg(&root).arg("--store").arg(&sb.store);
+        run(cmd.args(args))
+    };
+    let index = sb.store.join("h/projects");
+
+    let out = h(&["complete", "o"]);
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), "old/\none\n"), "{out:?}");
+    assert!(index.is_file(), "completing walked the code root and wrote the index");
+    // A clone goes into the index at once.
+    let out = h(&["go", PROJ_URL]);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let entry = format!("/{PROJ}\0");
+    let written = fs::read(&index).unwrap();
+    assert!(written.windows(entry.len()).any(|w| w == entry.as_bytes()), "{written:?}");
+    // The store is a git repository like any other to git, which leaves the index alone.
+    assert_eq!(run(sb.git(&sb.store).args(["fsck", "--no-progress"])).code, Some(0));
+}
+
 /// Publish a bare repository of `commits` commits, unrelated to any other, at `url`.
 fn publish_history(sb: &Sandbox, url: &str, commits: usize) {
     let dir = sb.tmp.path().join("src/history.git");

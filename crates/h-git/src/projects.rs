@@ -1,9 +1,10 @@
 //! The project directories under a code root, and finding them by search term.
 
-use std::cell::OnceCell;
-use std::ffi::OsString;
+use std::cell::{Cell, Ref, RefCell};
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
+use std::io::Write;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -16,11 +17,19 @@ use crate::resolve::is_simple_name;
 /// Python virtualenv or an empty directory. What is inside a repository is left out too: its own
 /// directories are not projects, and not looking keeps the walk small however deep the code root
 /// goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// They can be kept in an index between runs, which stands in for the walk. An index can be out
+/// of date, since checkouts come and go without h; so when what it has does not answer a
+/// question, the code root is walked again, and the index rewritten, before the answer is given.
+#[derive(Debug)]
 pub struct Projects {
     root: PathBuf,
-    /// In sorted order of their paths; walked for when first needed.
-    paths: OnceCell<Vec<Project>>,
+    /// The file they are kept in between runs, if any.
+    index: Option<PathBuf>,
+    /// In sorted order of their paths; read or walked for when first needed.
+    paths: RefCell<Option<Vec<Project>>>,
+    /// Whether `paths` came from the index, and so may be out of date.
+    from_index: Cell<bool>,
 }
 
 /// A directory a term can name.
@@ -36,7 +45,30 @@ impl Projects {
     /// The projects under `root`, which are walked for when first needed. Symbolic links are
     /// followed, except back into a directory the walk is already in. A missing `root` has none.
     pub fn new(root: impl AsRef<Path>) -> Projects {
-        Projects { root: root.as_ref().to_path_buf(), paths: OnceCell::new() }
+        Projects {
+            root: root.as_ref().to_path_buf(),
+            index: None,
+            paths: RefCell::new(None),
+            from_index: Cell::new(false),
+        }
+    }
+
+    /// The projects under `root`, kept in `index` between runs: read from it when first needed,
+    /// if it has them for `root`, and otherwise walked for and written to it.
+    pub fn with_index(root: impl AsRef<Path>, index: impl Into<PathBuf>) -> Projects {
+        Projects { index: Some(index.into()), ..Projects::new(root) }
+    }
+
+    /// Walk the code root again, and write what is found to the index. This is for after
+    /// something that changes what is under the code root, such as a clone.
+    pub fn refresh(&self) {
+        let paths = walk_root(&self.root);
+        if let Some(index) = &self.index {
+            // The index only saves a walk, so failing to write it costs no more than that.
+            let _ = write_index(index, &self.root, &paths);
+        }
+        *self.paths.borrow_mut() = Some(paths);
+        self.from_index.set(false);
     }
 
     /// The code root they are under.
@@ -44,15 +76,29 @@ impl Projects {
         &self.root
     }
 
-    fn paths(&self) -> &[Project] {
-        self.paths.get_or_init(|| {
-            let mut paths = Vec::new();
-            if let Ok(meta) = fs::metadata(&self.root) {
-                let mut ancestors = vec![(meta.dev(), meta.ino())];
-                walk(&self.root, &mut Vec::new(), &mut ancestors, &mut paths);
+    fn paths(&self) -> Ref<'_, [Project]> {
+        if self.paths.borrow().is_none() {
+            let read = self.index.as_deref().and_then(|index| read_index(index, &self.root));
+            match read {
+                Some(paths) => {
+                    *self.paths.borrow_mut() = Some(paths);
+                    self.from_index.set(true);
+                }
+                None => self.refresh(),
             }
-            paths
-        })
+        }
+        Ref::map(self.paths.borrow(), |paths| paths.as_deref().unwrap_or_default())
+    }
+
+    /// Ask `question` of the projects, and when what came from the index does not answer it, as
+    /// `answers` decides, ask again after walking the code root.
+    fn ask<T>(&self, question: impl Fn(&[Project]) -> T, answers: impl Fn(&T) -> bool) -> T {
+        let answer = question(&self.paths());
+        if answers(&answer) || !self.from_index.get() {
+            return answer;
+        }
+        self.refresh();
+        question(&self.paths())
     }
 
     /// Find the directory `term` names.
@@ -66,6 +112,12 @@ impl Projects {
     /// the usual layout; among those as deep, one in the term's case, and then the first in
     /// sorted order.
     pub fn find(&self, term: &str) -> Option<PathBuf> {
+        // A directory the index has may have gone since.
+        let found = |paths: &[Project]| self.find_among(paths, term).filter(|path| path.is_dir());
+        self.ask(found, Option::is_some)
+    }
+
+    fn find_among(&self, paths: &[Project], term: &str) -> Option<PathBuf> {
         let (term, holders_only) = match term.strip_suffix('/') {
             Some(term) => (term, true),
             None => (term, false),
@@ -73,7 +125,7 @@ impl Projects {
         let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
         let wanted: Vec<&str> = term.split('/').collect();
         // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
-        let best = self.paths().iter().rev().filter_map(|project| {
+        let best = paths.iter().rev().filter_map(|project| {
             if holders_only && project.is_repository {
                 return None;
             }
@@ -100,36 +152,106 @@ impl Projects {
     /// for it is spelled, which also leaves it ready for the next segment; one whose name is also
     /// a repository's is offered both ways. Only what can be spelled as a term is offered.
     pub fn list_completions(&self, word: &str) -> Vec<String> {
-        let wanted = word.split('/').count();
-        let mut found: Vec<(usize, String)> = self
-            .paths()
-            .iter()
-            .filter_map(|Project { segments, is_repository }| {
-                let tail = &segments[segments.len().checked_sub(wanted)?..];
-                let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
-                if !tail.iter().all(|s| is_simple_name(s)) {
-                    return None;
-                }
-                let mut term = tail.join("/");
-                if !is_repository {
-                    term.push('/');
-                }
-                let start = term.as_bytes().get(..word.len())?;
-                if !start.eq_ignore_ascii_case(word.as_bytes()) {
-                    return None;
-                }
-                let differences = start.iter().zip(word.as_bytes()).filter(|(a, b)| a != b).count();
-                Some((differences, term))
-            })
-            .collect();
-        found.sort();
-        found.dedup();
-        found.into_iter().map(|(_, term)| term).collect()
+        self.ask(|paths| list_completions(paths, word), |found| !found.is_empty())
     }
 }
 
-/// Add the projects below `dir`, which is at `segments` below the root, to `found`, and say
-/// whether `dir` is a repository or holds one.
+fn list_completions(paths: &[Project], word: &str) -> Vec<String> {
+    let wanted = word.split('/').count();
+    let mut found: Vec<(usize, String)> = paths
+        .iter()
+        .filter_map(|Project { segments, is_repository }| {
+            let tail = &segments[segments.len().checked_sub(wanted)?..];
+            let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
+            if !tail.iter().all(|s| is_simple_name(s)) {
+                return None;
+            }
+            let mut term = tail.join("/");
+            if !is_repository {
+                term.push('/');
+            }
+            let start = term.as_bytes().get(..word.len())?;
+            if !start.eq_ignore_ascii_case(word.as_bytes()) {
+                return None;
+            }
+            let differences = start.iter().zip(word.as_bytes()).filter(|(a, b)| a != b).count();
+            Some((differences, term))
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found.into_iter().map(|(_, term)| term).collect()
+}
+
+/// The first line of an index, which says what it holds and how.
+const INDEX_HEADER: &[u8] = b"h projects 1\0";
+
+/// Read the projects under `root` from the index at `path`. `None` when it cannot be read, or
+/// holds another code root's.
+///
+/// After [`INDEX_HEADER`] and the code root, each project is a `/` for a repository or a `+` for
+/// a directory holding them, then its path relative to the code root; everything ends in a NUL,
+/// which no path can hold.
+fn read_index(path: &Path, root: &Path) -> Option<Vec<Project>> {
+    let bytes = fs::read(path).ok()?;
+    let rest = bytes.strip_prefix(INDEX_HEADER)?.strip_suffix(b"\0")?;
+    let mut records = rest.split(|&b| b == 0);
+    if records.next()? != root.as_os_str().as_bytes() {
+        return None;
+    }
+    records
+        .map(|record| {
+            let (&kind, path) = record.split_first()?;
+            let segments = path.split(|&b| b == b'/').map(|s| OsStr::from_bytes(s).into());
+            let segments: Vec<OsString> = segments.collect();
+            match kind {
+                _ if path.is_empty() => None,
+                b'/' => Some(Project { segments, is_repository: true }),
+                b'+' => Some(Project { segments, is_repository: false }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Write `paths`, the projects under `root`, to the index at `path`, replacing it whole.
+fn write_index(path: &Path, root: &Path, paths: &[Project]) -> std::io::Result<()> {
+    let mut bytes = INDEX_HEADER.to_vec();
+    bytes.extend_from_slice(root.as_os_str().as_bytes());
+    bytes.push(0);
+    for project in paths {
+        bytes.push(if project.is_repository { b'/' } else { b'+' });
+        let segments: Vec<&[u8]> = project.segments.iter().map(|s| s.as_bytes()).collect();
+        bytes.extend_from_slice(&segments.join(&b'/'));
+        bytes.push(0);
+    }
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    // Write beside it and rename over it, so no reader ever sees half an index.
+    let mut temp = path.as_os_str().to_owned().into_vec();
+    temp.extend_from_slice(format!(".{}", std::process::id()).as_bytes());
+    let temp = PathBuf::from(OsString::from_vec(temp));
+    let written = fs::File::create(&temp).and_then(|mut file| file.write_all(&bytes));
+    match written.and_then(|()| fs::rename(&temp, path)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(&temp);
+            Err(err)
+        }
+    }
+}
+
+/// Walk `root` for its projects.
+fn walk_root(root: &Path) -> Vec<Project> {
+    let mut paths = Vec::new();
+    if let Ok(meta) = fs::metadata(root) {
+        let mut ancestors = vec![(meta.dev(), meta.ino())];
+        walk(root, &mut Vec::new(), &mut ancestors, &mut paths);
+    }
+    paths
+}
+
 /// What a directory the walk visits turns out to be.
 enum Visited {
     Repository,
@@ -139,6 +261,8 @@ enum Visited {
     Nothing,
 }
 
+/// Add the projects below `dir`, which is at `segments` below the root, to `found`, and say
+/// whether `dir` is a repository or holds one.
 fn walk(
     dir: &Path,
     segments: &mut Vec<OsString>,
@@ -353,6 +477,66 @@ mod tests {
         assert_eq!(search(tmp.path(), "owner/empty"), None);
         assert_eq!(list_completions(tmp.path(), ""), ["github.com/", "owner/", "proj"]);
         assert_eq!(list_completions(tmp.path(), "owner/"), ["owner/proj"]);
+    }
+
+    #[test]
+    fn the_index_stands_in_for_the_walk() {
+        let tmp = tree(&["code/github.com/owner/one"]);
+        let (root, index) = (tmp.path().join("code"), tmp.path().join("store/h/projects"));
+        assert_eq!(Projects::with_index(&root, &index).list_completions("o"), ["one", "owner/"]);
+        assert!(index.is_file(), "the first walk writes the index");
+
+        // A checkout made since is not in the index, so it is not offered while something else is.
+        fs::create_dir_all(root.join("github.com/owner/other/.git")).unwrap();
+        let projects = Projects::with_index(&root, &index);
+        assert_eq!(projects.list_completions("o"), ["one", "owner/"]);
+        // Nothing in the index answers this, so the code root is walked again.
+        assert_eq!(projects.list_completions("oth"), ["other"]);
+        let projects = Projects::with_index(&root, &index);
+        assert_eq!(projects.list_completions("o"), ["one", "other", "owner/"]);
+    }
+
+    #[test]
+    fn a_term_the_index_does_not_answer_walks_again() {
+        let tmp = tree(&["code/a/one", "code/b/two"]);
+        let (root, index) = (tmp.path().join("code"), tmp.path().join("index"));
+        Projects::with_index(&root, &index).refresh();
+
+        // Made since the index was written.
+        fs::create_dir_all(root.join("c/three/.git")).unwrap();
+        let three = Some(root.join("c/three"));
+        assert_eq!(Projects::with_index(&root, &index).find("three"), three);
+        // Gone since: the index has it, but the walk does not.
+        fs::remove_dir_all(root.join("a")).unwrap();
+        let projects = Projects::with_index(&root, &index);
+        assert_eq!(projects.find("one"), None);
+        assert_eq!(projects.find("two"), Some(root.join("b/two")));
+    }
+
+    #[test]
+    fn an_index_of_another_root_or_unreadable_is_walked_over() {
+        let tmp = tree(&["code/proj", "other/elsewhere"]);
+        let (root, index) = (tmp.path().join("code"), tmp.path().join("index"));
+        Projects::with_index(tmp.path().join("other"), &index).refresh();
+        assert_eq!(Projects::with_index(&root, &index).list_completions(""), ["proj"]);
+        assert_eq!(read_index(&index, &root).map(|p| p.len()), Some(1), "rewritten for this root");
+        for junk in [&b""[..], b"h projects 1\0", b"h projects 2\0/x\0", b"garbage"] {
+            fs::write(&index, junk).unwrap();
+            assert_eq!(read_index(&index, &root), None, "{junk:?}");
+            assert_eq!(Projects::with_index(&root, &index).find("proj"), Some(root.join("proj")));
+        }
+    }
+
+    #[test]
+    fn the_index_keeps_any_path() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let odd = OsStr::from_bytes(b"caf\xe9 dir");
+        fs::create_dir_all(tmp.path().join(odd).join("proj/.git")).unwrap();
+        let index = tmp.path().join("index");
+        let walked = walk_root(tmp.path());
+        write_index(&index, tmp.path(), &walked).unwrap();
+        assert_eq!(read_index(&index, tmp.path()), Some(walked));
     }
 
     #[test]

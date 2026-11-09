@@ -172,16 +172,23 @@ fn utf8(arg: &OsStr) -> Result<&str, String> {
     arg.to_str().ok_or_else(|| format!("Unknown pattern for {}", arg.to_string_lossy()))
 }
 
-/// Resolve `term` against the code root, asking GitHub through `lookup` for the canonical casing
+/// The projects under the code root, kept in the store's index when there is a store.
+fn projects(config: &Config) -> Projects {
+    match config.store.as_ref().filter(|store| store.exists()) {
+        Some(store) => Projects::with_index(&config.root, store.projects_index()),
+        None => Projects::new(&config.root),
+    }
+}
+
+/// Resolve `term` against `projects`, asking GitHub through `lookup` for the canonical casing
 /// when `casing` calls for it.
 fn resolve_term(
-    config: &Config,
+    projects: &Projects,
     term: &str,
     casing: Casing,
     lookup: &github::Lookup,
 ) -> Result<Resolution, String> {
-    let projects = Projects::new(&config.root);
-    resolve(&projects, term, casing, |user, repo| lookup.ask_github(user, repo))
+    resolve(projects, term, casing, |user, repo| lookup.ask_github(user, repo))
 }
 
 /// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
@@ -207,7 +214,8 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     let extra: Vec<OsString> = args[1..].iter().filter(|a| *a != "--container").cloned().collect();
 
     let lookup = lookup(config);
-    let resolution = match resolve_term(config, term, Casing::Local, lookup) {
+    let projects = projects(config);
+    let resolution = match resolve_term(&projects, term, Casing::Local, lookup) {
         Ok(resolution) => resolution,
         Err(msg) => return fail_with_cwd(&msg),
     };
@@ -269,6 +277,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
                     Err(err) => eprintln!("could not put the submodules under the store: {err}"),
                 }
             }
+            projects.refresh();
             print_path(&resolution.path);
             ExitCode::SUCCESS
         }
@@ -326,7 +335,7 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
     };
-    for term in Projects::new(&config.root).list_completions(word) {
+    for term in projects(config).list_completions(word) {
         println!("{term}");
     }
     ExitCode::SUCCESS
@@ -342,8 +351,7 @@ fn run_resolve_command(config: &Config, args: &[OsString]) -> ExitCode {
         Err(msg) => return fail(&msg),
     };
     // Only existing checkouts are printed, and those are found in any casing without GitHub.
-    match resolve(&Projects::new(&config.root), term, Casing::Local, |_, _| github::Answer::Unknown)
-    {
+    match resolve(&projects(config), term, Casing::Local, |_, _| github::Answer::Unknown) {
         Ok(resolution) if resolution.path.is_dir() => {
             print_path(&resolution.path);
             ExitCode::SUCCESS
@@ -425,7 +433,7 @@ fn resolve_upstream(
             }
         };
     }
-    let resolution = resolve_term(config, term, Casing::GitHub, lookup(config))?;
+    let resolution = resolve_term(&projects(config), term, Casing::GitHub, lookup(config))?;
     let renames = Vec::new();
     match (resolution.remote, resolution.clone_url) {
         (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None, renames }),

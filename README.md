@@ -47,6 +47,11 @@ Projects are repositories (git, Mercurial or Jujutsu checkouts, and bare git rep
 directories that hold them; the search does not look inside a repository, or in directories with
 none, such as a virtualenv.
 
+With a [store](#the-object-store), `h` keeps the projects it finds in an index there
+(`<store>/h/projects`), so completion and `h <name>` need not walk the code root each time. A clone
+updates it; a checkout made or removed some other way is noticed the first time the index cannot
+answer, when `h` walks the code root again and rewrites it.
+
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 
 When git fails, it says why, and `h` says what it could not do, such as `could not clone <url>:

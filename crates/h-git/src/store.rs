@@ -84,6 +84,12 @@ impl Store {
         Store { path: path.into() }
     }
 
+    /// The file the projects under a code root are kept in between runs, which is h's own: git
+    /// pays no attention to it.
+    pub fn projects_index(&self) -> PathBuf {
+        self.path.join("h").join("projects")
+    }
+
     /// Whether the store has been created.
     pub fn exists(&self) -> bool {
         self.path.join("objects").is_dir() && self.path.join("HEAD").is_file()

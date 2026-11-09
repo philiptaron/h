@@ -325,14 +325,14 @@ impl Lookup {
 
     /// List the repositories `owner`, a user or an organization, has on GitHub, as far as the
     /// identity's token lets it see, the most recently pushed to first. Pages of them are asked
-    /// for until there are no more or `until` has passed, so an owner with more than can be
-    /// listed in time is listed in part, with its liveliest repositories.
+    /// for until there are no more, or `until` has passed, if there is one: an owner with more
+    /// than can be listed in time is listed in part, with its liveliest repositories.
     ///
     /// With a token, the GraphQL API is asked, for the names alone, which is several times
     /// faster than the REST API's whole records, and sees everything the token's account can: an
     /// organization's private and internal repositories, and a user's private ones. Without
     /// one, or should that fail, the REST API is, which shows only a user's public repositories.
-    pub fn list_repos(&self, owner: &str, until: Instant) -> Listed {
+    pub fn list_repos(&self, owner: &str, until: Option<Instant>) -> Listed {
         if let Some(token) = self.ask_token()
             && let Some(listed) = self.list_repos_with_graphql(token, owner, until)
         {
@@ -342,10 +342,15 @@ impl Lookup {
     }
 
     /// List `owner`'s repositories through the GraphQL API with `token`. `None` when that fails.
-    fn list_repos_with_graphql(&self, token: &str, owner: &str, until: Instant) -> Option<Listed> {
+    fn list_repos_with_graphql(
+        &self,
+        token: &str,
+        owner: &str,
+        until: Option<Instant>,
+    ) -> Option<Listed> {
         let (mut login, mut names, mut after) = (None, Vec::new(), None);
         for page in 1.. {
-            if page > 1 && Instant::now() >= until {
+            if page > 1 && until.is_some_and(|until| Instant::now() >= until) {
                 break;
             }
             let variables = serde_json::json!({ "login": owner, "after": after });
@@ -389,11 +394,11 @@ impl Lookup {
 
     /// List `owner`'s repositories through the REST API: an organization's from
     /// `/orgs/<owner>/repos`, else a user's public ones from `/users/<owner>/repos`.
-    fn list_repos_with_rest(&self, owner: &str, until: Instant) -> Listed {
+    fn list_repos_with_rest(&self, owner: &str, until: Option<Instant>) -> Listed {
         'kinds: for kind in ["orgs", "users"] {
             let (mut login, mut names) = (None, Vec::new());
             for page in 1.. {
-                if page > 1 && Instant::now() >= until {
+                if page > 1 && until.is_some_and(|until| Instant::now() >= until) {
                     break;
                 }
                 let path =
@@ -545,9 +550,9 @@ mod tests {
         assert_eq!(parse_repos_page(r#"{"message": "Bad credentials"}"#), None);
     }
 
-    /// Serve every request, after `delay`, with a full page of repositories, and note the paths
-    /// asked for.
-    fn serve_endless_pages(delay: Duration) -> (String, Arc<Mutex<Vec<String>>>) {
+    /// Serve every request, after `delay`, with a full page of repositories, or an empty one after
+    /// `full` full pages, if given; and note the paths asked for.
+    fn serve_pages(full: Option<usize>, delay: Duration) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let paths = Arc::new(Mutex::new(Vec::new()));
@@ -563,7 +568,12 @@ mod tests {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 while reader.read_line(&mut request).unwrap_or(0) > 2 {}
                 let path = request.split_whitespace().nth(1).unwrap_or_default().to_string();
-                log.lock().unwrap().push(path);
+                let served = {
+                    let mut log = log.lock().unwrap();
+                    log.push(path);
+                    log.len() - 1
+                };
+                let body = if full.is_some_and(|full| served >= full) { "[]" } else { &body };
                 std::thread::sleep(delay);
                 let _ = write!(
                     stream,
@@ -577,12 +587,12 @@ mod tests {
 
     #[test]
     fn lists_pages_until_the_time_is_up() {
-        let (url, paths) = serve_endless_pages(Duration::from_millis(50));
+        let (url, paths) = serve_pages(None, Duration::from_millis(50));
         let lookup = Lookup::with_api(&url, &[]);
         lookup.token.set(None).unwrap(); // no token, so no git credential helpers, and REST
         let started = Instant::now();
-        let Listed::Found(repos) = lookup.list_repos("big", started + Duration::from_millis(300))
-        else {
+        let until = Some(started + Duration::from_millis(300));
+        let Listed::Found(repos) = lookup.list_repos("big", until) else {
             panic!("listed nothing");
         };
         assert!(started.elapsed() < Duration::from_secs(2), "stopped in time");
@@ -591,6 +601,18 @@ mod tests {
         assert_eq!(repos.names.len(), pages.len() * PER_PAGE);
         assert_eq!(repos.login, "Big");
         assert_eq!(pages[1], "/orgs/big/repos?sort=pushed&per_page=100&page=2");
+    }
+
+    #[test]
+    fn lists_every_page_without_a_time_limit() {
+        let (url, paths) = serve_pages(Some(12), Duration::from_millis(50));
+        let lookup = Lookup::with_api(&url, &[]);
+        lookup.token.set(None).unwrap();
+        let Listed::Found(repos) = lookup.list_repos("big", None) else {
+            panic!("listed nothing");
+        };
+        assert_eq!(paths.lock().unwrap().len(), 13, "twelve full pages and an empty one");
+        assert_eq!(repos.names.len(), 12 * PER_PAGE);
     }
 
     #[test]

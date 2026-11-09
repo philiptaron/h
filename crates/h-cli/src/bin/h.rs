@@ -487,7 +487,7 @@ fn refresh_listing(config: &Config, owner: &str) -> ExitCode {
         return fail("h complete --refresh needs a store");
     };
     let path = store.github_listing(owner);
-    let listing = match lookup(config).list_repos(owner, Instant::now() + LISTING_TIME) {
+    let listing = match lookup(config).list_repos(owner, Some(Instant::now() + LISTING_TIME)) {
         github::Listed::Found(repos) => Listing::Repos(repos),
         github::Listed::Missing => Listing::NoSuchOwner,
         github::Listed::Unknown => return fail(&format!("could not list {owner}'s repositories")),

@@ -1,58 +1,92 @@
 //! Searching the code root for a project directory by name.
 
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-/// How many directory levels below the code root are searched.
-pub const MAX_DEPTH: usize = 3;
-
-/// Find a directory named `term` up to [`MAX_DEPTH`] levels below `root`.
+/// Find a directory named `term` below `root`, at any depth.
 ///
 /// The match is case-insensitive unless `term` contains an uppercase letter. Hidden directories
-/// are skipped. Deeper matches win, since `<domain>/<owner>/<repo>` is the usual layout; among
-/// matches at the same depth, the first in sorted order wins.
+/// are skipped, and so is everything inside a repository. Deeper matches win, since
+/// `<domain>/<owner>/<repo>` is the usual layout; among matches at the same depth, the first in
+/// sorted order wins.
 pub fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
+    let root = root.as_ref();
     let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
-    let mut best = None;
-    walk(root.as_ref(), term.as_bytes(), case_sensitive, 1, &mut best);
-    best.map(|(_, path)| path)
+    let term = term.as_bytes();
+    let mut best: Option<&Vec<OsString>> = None;
+    let projects = list_projects(root);
+    for segments in &projects {
+        let name = segments.last().expect("paths have segments").as_bytes();
+        let matches = if case_sensitive { name == term } else { name.eq_ignore_ascii_case(term) };
+        if matches && best.is_none_or(|b| segments.len() > b.len()) {
+            best = Some(segments);
+        }
+    }
+    best.map(|segments| segments.iter().fold(root.to_path_buf(), |path, s| path.join(s)))
+}
+
+/// List the directories below `root` a term can name, each as its path relative to `root` split
+/// into segments, in sorted order.
+///
+/// Hidden directories are skipped. A repository is listed, but not what is inside it: its own
+/// directories are not projects, and skipping them keeps the walk small however deep the code
+/// root goes. Symbolic links are followed, except back into a directory the walk is already in.
+fn list_projects(root: impl AsRef<Path>) -> Vec<Vec<OsString>> {
+    let root = root.as_ref();
+    let mut found = Vec::new();
+    let Ok(meta) = fs::metadata(root) else {
+        return found;
+    };
+    let mut ancestors = vec![(meta.dev(), meta.ino())];
+    walk(root, &mut Vec::new(), &mut ancestors, &mut found);
+    found
 }
 
 fn walk(
     dir: &Path,
-    term: &[u8],
-    case_sensitive: bool,
-    depth: usize,
-    best: &mut Option<(usize, PathBuf)>,
+    segments: &mut Vec<OsString>,
+    ancestors: &mut Vec<(u64, u64)>,
+    found: &mut Vec<Vec<OsString>>,
 ) {
-    if depth > MAX_DEPTH {
-        return;
-    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut names: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
+    let mut names: Vec<OsString> = entries.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
+    if !segments.is_empty() && is_repository(&names) {
+        return;
+    }
     names.sort();
 
     for name in names {
-        let name_bytes = OsStr::as_bytes(&name);
-        if name_bytes.starts_with(b".") {
+        if name.as_bytes().starts_with(b".") {
             continue;
         }
         let path = dir.join(&name);
         // Follows symlinks, so linked projects are found too.
-        if !path.is_dir() {
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        let id = (meta.dev(), meta.ino());
+        if !meta.is_dir() || ancestors.contains(&id) {
             continue;
         }
-        let matches =
-            if case_sensitive { name_bytes == term } else { name_bytes.eq_ignore_ascii_case(term) };
-        if matches && best.as_ref().is_none_or(|(d, _)| depth > *d) {
-            *best = Some((depth, path.clone()));
-        }
-        walk(&path, term, case_sensitive, depth + 1, best);
+        segments.push(name);
+        found.push(segments.clone());
+        ancestors.push(id);
+        walk(&path, segments, ancestors, found);
+        ancestors.pop();
+        segments.pop();
     }
+}
+
+/// Whether a directory holding `names` is a repository: a git, Mercurial or Jujutsu checkout, or
+/// a bare git repository.
+fn is_repository(names: &[OsString]) -> bool {
+    let has = |name: &str| names.iter().any(|n| n == name);
+    has(".git") || has(".hg") || has(".jj") || (has("HEAD") && has("objects") && has("refs"))
 }
 
 #[cfg(test)]
@@ -76,9 +110,32 @@ mod tests {
     }
 
     #[test]
-    fn does_not_search_past_max_depth() {
-        let tmp = tree(&["a/b/c/four"]);
-        assert_eq!(search(tmp.path(), "four"), None);
+    fn searches_at_any_depth() {
+        let tmp = tree(&["a/b/c/d/e/six"]);
+        assert_eq!(search(tmp.path(), "six"), Some(tmp.path().join("a/b/c/d/e/six")));
+    }
+
+    #[test]
+    fn does_not_search_inside_repositories() {
+        let tmp = tree(&["a/repo/.git", "a/repo/sub", "hg/.hg", "hg/sub", "jj/.jj", "jj/sub"]);
+        fs::create_dir_all(tmp.path().join("bare.git/objects")).unwrap();
+        fs::create_dir_all(tmp.path().join("bare.git/refs")).unwrap();
+        fs::write(tmp.path().join("bare.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(search(tmp.path(), "repo"), Some(tmp.path().join("a/repo")));
+        assert_eq!(search(tmp.path(), "sub"), None);
+        assert_eq!(search(tmp.path(), "objects"), None);
+        // A worktree or submodule has a `.git` file instead of a directory.
+        let tmp = tree(&["wt/sub"]);
+        fs::write(tmp.path().join("wt/.git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(search(tmp.path(), "sub"), None);
+    }
+
+    #[test]
+    fn survives_symlink_loops() {
+        let tmp = tree(&["a/b"]);
+        std::os::unix::fs::symlink(tmp.path().join("a"), tmp.path().join("a/b/up")).unwrap();
+        assert_eq!(search(tmp.path(), "b"), Some(tmp.path().join("a/b")));
+        assert_eq!(search(tmp.path(), "nope"), None);
     }
 
     #[test]

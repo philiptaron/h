@@ -84,7 +84,14 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
         }
     };
 
+    // `github.com/user/repo` is the path a GitHub repository is cloned to, and means it too.
+    let github_path =
+        term.split_once('/').filter(|(host, _)| host.eq_ignore_ascii_case("github.com"));
     if let Some((user, repo)) = github_repo("github.com", term) {
+        Ok(Target::GitHub { user, repo })
+    } else if let Some((user, repo)) =
+        github_path.and_then(|(_, path)| github_repo("github.com", path))
+    {
         Ok(Target::GitHub { user, repo })
     } else if let Some((_, rest)) = term.split_once("://") {
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
@@ -337,6 +344,16 @@ mod tests {
         assert_eq!(parse_term("zimbatm/h"), github("zimbatm", "h"));
         assert_eq!(parse_term("a-b_c.d/e.f-g_h"), github("a-b_c.d", "e.f-g_h"));
         assert_eq!(parse_term("zimbatm/h.git"), github("zimbatm", "h"));
+        assert_eq!(parse_term("github.com/zimbatm/h"), github("zimbatm", "h"));
+        assert_eq!(parse_term("GitHub.com/zimbatm/h.git"), github("zimbatm", "h"));
+        assert_eq!(
+            parse_term("github.com/zimbatm/"),
+            Ok(Target::Name("github.com/zimbatm/".into()))
+        );
+        assert_eq!(
+            parse_term("gitlab.com/zimbatm/h"),
+            Ok(Target::Name("gitlab.com/zimbatm/h".into()))
+        );
     }
 
     #[test]

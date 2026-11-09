@@ -377,6 +377,26 @@ fn clones_missing_github_repos() {
     assert!(!head.contains("authorization:"), "no credential, no token: {head}");
 }
 
+#[test]
+fn github_paths_clone_from_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("code");
+    let git = FakeGit::install(tmp.path());
+    let api = MockGitHub::start(&[(
+        "/repos/zimbatm/h",
+        200,
+        r#"{"name": "h", "owner": {"login": "Zimbatm"}}"#,
+    )]);
+    let mut cmd = command(H);
+    git.apply(&mut cmd);
+    cmd.current_dir(tmp.path()).env("H_GITHUB_API", &api.url).arg("--root").arg(&root);
+    let out = run(cmd.args(["go", "github.com/zimbatm/h"]));
+    let path = root.join("github.com/Zimbatm/h");
+    assert_resolved(&out, &path);
+    let url = "https://github.com/Zimbatm/h.git";
+    assert_eq!(git.invocations(), [["clone", "--recursive", "--", url, path.to_str().unwrap()]]);
+}
+
 /// Install a credential helper in the isolated git configuration under `home` that answers
 /// every request with `password`, and return the file where it records what git asked it.
 fn credential_helper(home: &Path, password: &str) -> PathBuf {

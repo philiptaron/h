@@ -127,6 +127,25 @@ fn goes_to_paths_starting_at_any_directory() {
 }
 
 #[test]
+fn completes_words() {
+    let tmp = tempfile::tempdir().unwrap();
+    mkdirs(
+        tmp.path(),
+        &["github.com/NixOS/nixpkgs", "github.com/NixOS/nix", "gitlab.com/g/nixpkgs"],
+    );
+    let complete =
+        |word: &str| run(command(H).arg("--root").arg(tmp.path()).args(["complete", word, "--"]));
+    let out = complete("nixos/nix");
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), "NixOS/nix\nNixOS/nixpkgs\n"));
+    let out = complete("NIXP");
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), "nixpkgs\n"));
+    let out = complete("nope/");
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), ""));
+    let out = run(command(H).arg("--root").arg(tmp.path()).arg("complete"));
+    assert_eq!((out.code, out.stderr.as_str()), (Some(1), "Usage: h complete <word>\n"));
+}
+
+#[test]
 fn reports_scp_urls_without_path() {
     let tmp = tempfile::tempdir().unwrap();
     assert_failed_in(&go(tmp.path(), "git@host"), tmp.path(), "git@host not found\n");

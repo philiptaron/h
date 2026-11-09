@@ -20,6 +20,7 @@ use h_git::ingest;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
 };
+use h_git::search::list_completions;
 use h_git::store::{FetchReport, Store};
 use h_git::submodules::SubmoduleOptions;
 
@@ -139,6 +140,7 @@ fn main() -> ExitCode {
     match cmd.to_str() {
         Some("go") => go(&config, rest),
         Some("resolve") => run_resolve_command(&config, rest),
+        Some("complete") => print_completions(&config, rest),
         Some("store") => run_store_command(&config, rest),
         Some("hook") => run_hook_command(&config, rest),
         _ => fail(&format!("Unknown command: {}\n{USAGE}", cmd.to_string_lossy())),
@@ -307,6 +309,21 @@ fn find_shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> 
         found.cloned().unwrap_or(name)
     };
     resolution.remote.clone().into_iter().chain(parent).map(in_store).collect()
+}
+
+/// `h complete <word>`: print the terms that complete `word`, one per line, best first.
+fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
+    let [word] = args else {
+        return fail("Usage: h complete <word>");
+    };
+    // A word that is not UTF-8 cannot start a term.
+    let Some(word) = word.to_str() else {
+        return ExitCode::SUCCESS;
+    };
+    for term in list_completions(&config.root, word) {
+        println!("{term}");
+    }
+    ExitCode::SUCCESS
 }
 
 /// `h resolve <term>`: print the directory, or fail when it does not exist.

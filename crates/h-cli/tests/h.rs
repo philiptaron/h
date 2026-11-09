@@ -103,10 +103,27 @@ fn reports_missing_projects() {
 #[test]
 fn reports_unknown_patterns() {
     let tmp = tempfile::tempdir().unwrap();
-    for term in ["a/b/c", "two words", ""] {
+    for term in ["a//b", "two words", ""] {
         let msg = format!("Unknown pattern for {term}\n");
         assert_failed_in(&go(tmp.path(), term), tmp.path(), &msg);
     }
+}
+
+#[test]
+fn goes_to_paths_starting_at_any_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let linux = tmp.path().join("git.kernel.org/pub/scm/torvalds/linux");
+    std::fs::create_dir_all(&linux).unwrap();
+    for term in
+        ["torvalds/linux", "pub/scm/torvalds/linux", "git.kernel.org/pub/scm/torvalds/linux"]
+    {
+        assert_resolved(&go(tmp.path(), term), &linux);
+    }
+    assert_failed_in(
+        &go(tmp.path(), "pub/torvalds/linux"),
+        tmp.path(),
+        "pub/torvalds/linux not found\n",
+    );
 }
 
 #[test]

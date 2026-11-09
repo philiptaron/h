@@ -27,12 +27,17 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 
 | Command | What it does |
 | --- | --- |
-| `h <name>` | go to the project matching `<name>`, up to 3 levels deep |
-| `h <user>/<repo>` | go to `~/code/github.com/<user>/<repo>`, in any casing, or clone it |
+| `h <name>` | go to the project matching `<name>`, at any depth |
+| `h <user>/<repo>` | go to `~/code/github.com/<user>/<repo>`, in any casing, or else to a project whose path ends in `<user>/<repo>`, or clone it |
+| `h <a>/<b>/<c>...` | go to the project whose path ends in `<a>/<b>/<c>...`, starting at any directory |
 | `h <url>` | go to `~/code/<domain>/<path>`, or clone it |
 | `h <term> [clone options]` | pass extra options to `git clone` |
 | `h <term> --container` | clone with no working tree, for [worktrees only](#container-clones) |
 | `h store <command>` | the [object store](#the-object-store) commands |
+
+Names match in any case unless they contain a capital letter. The search does not look inside
+checkouts (git, Mercurial or Jujutsu) or bare repositories; when several projects match, the
+deepest wins.
 
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 

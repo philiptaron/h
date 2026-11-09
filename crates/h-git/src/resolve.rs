@@ -14,7 +14,8 @@ pub enum Target {
     GitHub { user: String, repo: String },
     /// A repository on another host, cloned from `url` into `<code-root>/<host>/<path>`.
     Remote { url: String, host: String, path: String },
-    /// A bare project name to search for under the code root.
+    /// A project name, or a path of them (`group/sub/project`), to search for under the code
+    /// root.
     Name(String),
 }
 
@@ -94,7 +95,7 @@ pub fn parse_term(term: &str) -> Result<Target, ParseError> {
         let (_, rest) = term.split_once('@').expect("term starts with user@");
         let (host, path) = rest.split_once(':').ok_or(ParseError::NotFound)?;
         Ok(remote(host, path))
-    } else if is_simple_name(term) {
+    } else if term.split('/').all(is_simple_name) {
         Ok(Target::Name(term.to_string()))
     } else {
         Err(ParseError::UnknownPattern)
@@ -216,11 +217,19 @@ pub fn find_github_dir(
     found.into_iter().nth(exact.unwrap_or(0))
 }
 
+/// Search `code_root` for the directory `term` names, as [`search`] does.
+fn search_code_root(code_root: &Path, term: &str) -> Option<Resolution> {
+    let path = search(code_root, term)?;
+    let remote = path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(escape_name);
+    Some(Resolution { path, clone_url: None, remote, upstream_url: None })
+}
+
 /// Resolve `term` against `code_root`.
 ///
 /// `lookup` is consulted for GitHub repositories to fix up the casing of `user/repo`: always
 /// with [`Casing::GitHub`], and with [`Casing::Local`] only when the repository has no directory
-/// in any casing yet. Either way an existing directory for the resulting name, in any casing, is
+/// in any casing yet, under `github.com` or as the end of some other path (`torvalds/linux` for
+/// `git.kernel.org/pub/scm/.../torvalds/linux`). Either way an existing directory for the resulting name, in any casing, is
 /// where it leads. A repository GitHub does not know even when asked with a token, and that has
 /// no directory, is not found: cloning it could only fail. On failure, returns the message to
 /// show the user.
@@ -243,6 +252,12 @@ pub fn resolve(
                 Casing::Local => find_github_dir(code_root, &user, &repo),
                 Casing::GitHub => None,
             };
+            if casing == Casing::Local
+                && existing.is_none()
+                && let Some(resolution) = search_code_root(code_root, term)
+            {
+                return Ok(resolution);
+            }
             let (user, repo, parent) = match existing {
                 Some((user, repo)) => (user, repo, None),
                 None => match lookup(&user, &repo) {
@@ -271,12 +286,7 @@ pub fn resolve(
             remote: Some(remote_name(&host, &path)),
             upstream_url: None,
         }),
-        Target::Name(name) => {
-            let path = search(code_root, &name).ok_or_else(not_found)?;
-            let remote =
-                path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(escape_name);
-            Ok(Resolution { path, clone_url: None, remote, upstream_url: None })
-        }
+        Target::Name(name) => search_code_root(code_root, &name).ok_or_else(not_found),
     }
 }
 
@@ -337,7 +347,8 @@ mod tests {
     fn rejects_malformed_shorthand() {
         assert_eq!(parse_term("/h"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("zimbatm/"), Err(ParseError::UnknownPattern));
-        assert_eq!(parse_term("a/b/c"), Err(ParseError::UnknownPattern));
+        assert_eq!(parse_term("a//b"), Err(ParseError::UnknownPattern));
+        assert_eq!(parse_term("a/b/"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a b/c"), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("a/b c"), Err(ParseError::UnknownPattern));
     }
@@ -348,6 +359,8 @@ mod tests {
         assert_eq!(parse_term("My.Project-1_x"), Ok(Target::Name("My.Project-1_x".into())));
         assert_eq!(parse_term(""), Err(ParseError::UnknownPattern));
         assert_eq!(parse_term("caf\u{e9}"), Err(ParseError::UnknownPattern));
+        assert_eq!(parse_term("a/b/c"), Ok(Target::Name("a/b/c".into())));
+        assert_eq!(parse_term("gitlab.com/x/y"), Ok(Target::Name("gitlab.com/x/y".into())));
         assert_eq!(parse_term("a b"), Err(ParseError::UnknownPattern));
     }
 
@@ -558,6 +571,33 @@ mod tests {
         assert_eq!(
             res,
             Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None })
+        );
+    }
+
+    #[test]
+    fn resolves_paths_by_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("git.kernel.org/pub/scm/torvalds/linux");
+        fs::create_dir_all(&project).unwrap();
+        let remote = Some("git.kernel.org/pub/scm/torvalds/linux".into());
+        let want = Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None });
+        assert_eq!(resolve(tmp.path(), "scm/torvalds/linux", Casing::Local, not_asked), want);
+        assert_eq!(
+            resolve(tmp.path(), "git.kernel.org/pub/scm/torvalds/linux", Casing::Local, not_asked),
+            want
+        );
+        // `user/repo` is a GitHub repository, found elsewhere only when it is not under github.com.
+        assert_eq!(resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked), want);
+        fs::create_dir_all(tmp.path().join("github.com/torvalds/linux")).unwrap();
+        let res = resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked);
+        assert_eq!(res.unwrap().path, tmp.path().join("github.com/torvalds/linux"));
+        // The store always means GitHub.
+        fs::remove_dir_all(tmp.path().join("github.com")).unwrap();
+        let res = resolve(tmp.path(), "torvalds/linux", Casing::GitHub, found("torvalds/linux"));
+        assert_eq!(res.unwrap().path, tmp.path().join("github.com/torvalds/linux"));
+        assert_eq!(
+            resolve(tmp.path(), "a/b/c", Casing::Local, not_asked),
+            Err("a/b/c not found".into())
         );
     }
 

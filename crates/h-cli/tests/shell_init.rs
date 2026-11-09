@@ -230,11 +230,16 @@ fn bash_completion() {
         tmp.path(),
         r#"eval "$("$H_SHELL_INIT" "$ROOT")"
            complete -p h
-           COMP_WORDS=(h o); COMP_CWORD=1; _h_complete; printf '%s\n' "${COMPREPLY[@]}"
+           c() { COMP_WORDS=(h "$1"); COMP_CWORD=1; _h_complete; printf '%s\n' "${COMPREPLY[@]}"; }
+           c o; c OWNER/p; c gitlab.com/group/
            COMP_WORDS=(h .); COMP_CWORD=1; _h_complete; echo "hidden=${#COMPREPLY[@]}""#,
     ));
     assert_eq!(out.stderr, "");
-    assert_eq!(out.stdout, "complete -F _h_complete h\nother\nowner\nhidden=0\n");
+    assert_eq!(
+        out.stdout,
+        "complete -o nosort -F _h_complete h\nother\nowner\nowner/project\n\
+         gitlab.com/group/deep\nhidden=0\n"
+    );
 }
 
 #[test]

@@ -106,35 +106,26 @@ pub fn render_h_init(
          }}\n"
     );
 
-    // Only emit completion code for the detected shell: bash fails to parse zsh glob qualifiers
-    // like `*(N/:t)` even inside an untaken branch of an `if`.
+    // Only emit completion code for the detected shell: bash fails to parse zsh's `${(f)...}`
+    // even inside an untaken branch of an `if`. `h complete` lists the terms best first, so
+    // neither shell sorts them; zsh is told to match them in any case, and bash takes them as
+    // they are, since only matching terms are listed.
+    let complete = format!("command {h_exe} --root \"{code_root}\" complete");
     match shell {
         Shell::Zsh => out.push_str(&format!(
             "_{name}_complete() {{\n\
-             \x20 local code_root='{code_root}'\n\
-             \x20 local -a projects\n\
-             \x20 [[ -d \"$code_root\" ]] || return\n\
-             \x20 projects=(\n\
-             \x20   \"$code_root\"/*(N/:t)\n\
-             \x20   \"$code_root\"/*/*(N/:t)\n\
-             \x20   \"$code_root\"/*/*/*(N/:t)\n\
-             \x20 )\n\
-             \x20 projects=(\"${{(u)projects[@]}}\")\n\
-             \x20 compadd -a projects\n\
+             \x20 local -a terms\n\
+             \x20 terms=(${{(f)\"$({complete} \"$PREFIX\" --)\"}})\n\
+             \x20 compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -a terms\n\
              }}\n\
              compdef _{name}_complete {name}\n"
         )),
         Shell::Bash => out.push_str(&format!(
             "_{name}_complete() {{\n\
-             \x20 local cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
-             \x20 local code_root='{code_root}'\n\
-             \x20 COMPREPLY=()\n\
-             \x20 [[ -d \"$code_root\" ]] || return\n\
-             \x20 local dirs\n\
-             \x20 dirs=$(find \"$code_root\" -mindepth 1 -maxdepth 3 -type d -not -name '.*' \
-             2>/dev/null | sed 's|.*/||' | sort -u)\n\
-             \x20 COMPREPLY=($(compgen -W \"$dirs\" -- \"$cur\"))\n\
+             \x20 local IFS=$'\\n'\n\
+             \x20 COMPREPLY=($({complete} \"${{COMP_WORDS[COMP_CWORD]}}\" --))\n\
              }}\n\
+             complete -o nosort -F _{name}_complete {name} 2>/dev/null || \
              complete -F _{name}_complete {name}\n"
         )),
         Shell::Unknown => {}
@@ -266,15 +257,10 @@ mod tests {
         assert_eq!(
             completion,
             r#"_h_complete() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local code_root='/code'
-  COMPREPLY=()
-  [[ -d "$code_root" ]] || return
-  local dirs
-  dirs=$(find "$code_root" -mindepth 1 -maxdepth 3 -type d -not -name '.*' 2>/dev/null | sed 's|.*/||' | sort -u)
-  COMPREPLY=($(compgen -W "$dirs" -- "$cur"))
+  local IFS=$'\n'
+  COMPREPLY=($(command /bin/h --root "/code" complete "${COMP_WORDS[COMP_CWORD]}" --))
 }
-complete -F _h_complete h
+complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
 "#
         );
     }
@@ -287,16 +273,9 @@ complete -F _h_complete h
         assert_eq!(
             completion,
             r#"_j_complete() {
-  local code_root='/code'
-  local -a projects
-  [[ -d "$code_root" ]] || return
-  projects=(
-    "$code_root"/*(N/:t)
-    "$code_root"/*/*(N/:t)
-    "$code_root"/*/*/*(N/:t)
-  )
-  projects=("${(u)projects[@]}")
-  compadd -a projects
+  local -a terms
+  terms=(${(f)"$(command /bin/h --root "/code" complete "$PREFIX" --)"})
+  compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -a terms
 }
 compdef _j_complete j
 "#

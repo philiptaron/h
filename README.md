@@ -18,7 +18,9 @@ eval "$(h-shell-init [options] [code-root])"
 | `--store DIR` | the [object store](#the-object-store) that clones are tenants of |
 | `--git-opts "OPTIONS"` | git options for every clone, typically `-c user.name=... -c user.email=...` |
 
-Tab completion for project names works in bash and zsh.
+Tab completion works in bash and zsh. It completes the end of any project's path, with as many
+`/`-separated names as you have typed (`nixos/m<Tab>`, `torvalds/li<Tab>`), ignoring case: the
+completion is spelled as the directory is, and the matches closest to your typed case come first.
 
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.

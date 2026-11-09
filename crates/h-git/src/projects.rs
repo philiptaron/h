@@ -85,19 +85,24 @@ impl Projects {
     /// directory is: every segment of `word` but the last is a whole segment of it, and the last
     /// starts the last. Case is ignored, so `nixos/n` completes to `NixOS/nixpkgs`. The terms
     /// with the fewest letters whose case differs from `word` come first, then the rest in sorted
-    /// order. Only what can be spelled as a term is offered.
+    /// order. A directory that holds repositories is offered with a `/` at the end, as a term
+    /// for it is spelled, which also leaves it ready for the next segment; one whose name is also
+    /// a repository's is offered both ways. Only what can be spelled as a term is offered.
     pub fn list_completions(&self, word: &str) -> Vec<String> {
         let wanted = word.split('/').count();
         let mut found: Vec<(usize, String)> = self
             .paths
             .iter()
-            .filter_map(|Project { segments, .. }| {
+            .filter_map(|Project { segments, is_repository }| {
                 let tail = &segments[segments.len().checked_sub(wanted)?..];
                 let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
                 if !tail.iter().all(|s| is_simple_name(s)) {
                     return None;
                 }
-                let term = tail.join("/");
+                let mut term = tail.join("/");
+                if !is_repository {
+                    term.push('/');
+                }
                 let start = term.as_bytes().get(..word.len())?;
                 if !start.eq_ignore_ascii_case(word.as_bytes()) {
                     return None;
@@ -335,7 +340,7 @@ mod tests {
         }
         assert_eq!(search(tmp.path(), "pip"), None);
         assert_eq!(search(tmp.path(), "owner/empty"), None);
-        assert_eq!(list_completions(tmp.path(), ""), ["github.com", "owner", "proj"]);
+        assert_eq!(list_completions(tmp.path(), ""), ["github.com/", "owner/", "proj"]);
         assert_eq!(list_completions(tmp.path(), "owner/"), ["owner/proj"]);
     }
 
@@ -361,7 +366,7 @@ mod tests {
         }
         let complete = |word| list_completions(tmp.path(), word);
         assert_eq!(complete("nixp"), ["nixpkgs"]);
-        assert_eq!(complete("NIX"), ["NixOS", "nix", "nixos", "nixpkgs"]);
+        assert_eq!(complete("NIX"), ["NixOS/", "nix", "nixos/", "nixpkgs"]);
         assert_eq!(complete("nixos/nixp"), ["NixOS/nixpkgs"]);
         assert_eq!(complete("github.com/nixos/nixp"), ["github.com/NixOS/nixpkgs"]);
         assert_eq!(complete("torvalds/l"), ["torvalds/linux"]);
@@ -375,9 +380,19 @@ mod tests {
     }
 
     #[test]
+    fn completes_holders_with_a_slash() {
+        let tmp = tree(&["github.com/alacritty/alacritty", "github.com/owner/proj"]);
+        let complete = |word| list_completions(tmp.path(), word);
+        assert_eq!(complete("alac"), ["alacritty", "alacritty/"]);
+        assert_eq!(complete("alacritty/"), ["alacritty/alacritty"]);
+        assert_eq!(complete("git"), ["github.com/"]);
+        assert_eq!(complete("github.com/"), ["github.com/alacritty/", "github.com/owner/"]);
+    }
+
+    #[test]
     fn completes_only_what_a_term_can_spell() {
         let tmp = tree(&["a/with space", "a/caf\u{e9}", "a/fine", "a/.hidden"]);
         assert_eq!(list_completions(tmp.path(), "a/"), ["a/fine"]);
-        assert_eq!(list_completions(tmp.path(), ""), ["a", "fine"]);
+        assert_eq!(list_completions(tmp.path(), ""), ["a/", "fine"]);
     }
 }

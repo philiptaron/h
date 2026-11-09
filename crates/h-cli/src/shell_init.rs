@@ -109,14 +109,20 @@ pub fn render_h_init(
     // Only emit completion code for the detected shell: bash fails to parse zsh's `${(f)...}`
     // even inside an untaken branch of an `if`. `h complete` lists the terms best first, so
     // neither shell sorts them; zsh is told to match them in any case, and bash takes them as
-    // they are, since only matching terms are listed.
+    // they are, since only matching terms are listed. A term ending in `/` gets no space after
+    // it, so the next segment can follow.
     let complete = format!("command {h_exe} --root \"{code_root}\" complete");
     match shell {
         Shell::Zsh => out.push_str(&format!(
             "_{name}_complete() {{\n\
-             \x20 local -a terms\n\
-             \x20 terms=(${{(f)\"$({complete} \"$PREFIX\" --)\"}})\n\
-             \x20 compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -a terms\n\
+             \x20 local term\n\
+             \x20 for term in ${{(f)\"$({complete} \"$PREFIX\" --)\"}}; do\n\
+             \x20   if [[ $term == */ ]]; then\n\
+             \x20     compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -S '' -- \"$term\"\n\
+             \x20   else\n\
+             \x20     compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -- \"$term\"\n\
+             \x20   fi\n\
+             \x20 done\n\
              }}\n\
              compdef _{name}_complete {name}\n"
         )),
@@ -124,6 +130,9 @@ pub fn render_h_init(
             "_{name}_complete() {{\n\
              \x20 local IFS=$'\\n'\n\
              \x20 COMPREPLY=($({complete} \"${{COMP_WORDS[COMP_CWORD]}}\" --))\n\
+             \x20 if [[ ${{#COMPREPLY[@]}} -eq 1 && ${{COMPREPLY[0]}} == */ ]]; then\n\
+             \x20   compopt -o nospace 2>/dev/null\n\
+             \x20 fi\n\
              }}\n\
              complete -o nosort -F _{name}_complete {name} 2>/dev/null || \
              complete -F _{name}_complete {name}\n"
@@ -259,6 +268,9 @@ mod tests {
             r#"_h_complete() {
   local IFS=$'\n'
   COMPREPLY=($(command /bin/h --root "/code" complete "${COMP_WORDS[COMP_CWORD]}" --))
+  if [[ ${#COMPREPLY[@]} -eq 1 && ${COMPREPLY[0]} == */ ]]; then
+    compopt -o nospace 2>/dev/null
+  fi
 }
 complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
 "#
@@ -273,9 +285,14 @@ complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
         assert_eq!(
             completion,
             r#"_j_complete() {
-  local -a terms
-  terms=(${(f)"$(command /bin/h --root "/code" complete "$PREFIX" --)"})
-  compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -a terms
+  local term
+  for term in ${(f)"$(command /bin/h --root "/code" complete "$PREFIX" --)"}; do
+    if [[ $term == */ ]]; then
+      compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -S '' -- "$term"
+    else
+      compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -- "$term"
+    fi
+  done
 }
 compdef _j_complete j
 "#

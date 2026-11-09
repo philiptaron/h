@@ -237,7 +237,7 @@ fn bash_completion() {
     assert_eq!(out.stderr, "");
     assert_eq!(
         out.stdout,
-        "complete -o nosort -F _h_complete h\nother\nowner\nowner/project\n\
+        "complete -o nosort -F _h_complete h\nother\nowner/\nowner/project\n\
          gitlab.com/group/deep\nhidden=0\n"
     );
 }

@@ -21,6 +21,9 @@ eval "$(h-shell-init [options] [code-root])"
 Tab completion works in bash and zsh. It completes the end of any project's path, with as many
 `/`-separated names as you have typed (`nixos/m<Tab>`, `torvalds/li<Tab>`), ignoring case: the
 completion is spelled as the directory is, and the matches closest to your typed case come first.
+A directory holding repositories, such as an owner, completes with a `/` at the end, ready for the
+next name; when it shares its name with a repository (`alacritty` and `alacritty/`), both are
+offered.
 
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.

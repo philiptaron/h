@@ -3,11 +3,11 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Write;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use crate::files::replace_file;
 use crate::resolve::is_simple_name;
 
 /// The directories under a code root that a term can name: its repositories, and the directories
@@ -225,21 +225,7 @@ fn write_index(path: &Path, root: &Path, paths: &[Project]) -> std::io::Result<(
         bytes.extend_from_slice(&segments.join(&b'/'));
         bytes.push(0);
     }
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    // Write beside it and rename over it, so no reader ever sees half an index.
-    let mut temp = path.as_os_str().to_owned().into_vec();
-    temp.extend_from_slice(format!(".{}", std::process::id()).as_bytes());
-    let temp = PathBuf::from(OsString::from_vec(temp));
-    let written = fs::File::create(&temp).and_then(|mut file| file.write_all(&bytes));
-    match written.and_then(|()| fs::rename(&temp, path)) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let _ = fs::remove_file(&temp);
-            Err(err)
-        }
-    }
+    replace_file(path, &bytes)
 }
 
 /// Walk `root` for its projects.

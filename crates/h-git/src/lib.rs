@@ -3,6 +3,7 @@
 //! store of upstream repositories, and making worktrees for Claude Code's hooks.
 
 pub mod clone;
+pub mod files;
 pub mod git;
 pub mod github;
 pub mod hook;

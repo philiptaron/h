@@ -1,6 +1,6 @@
-//! GitHub API lookups used to canonicalize the casing of `owner/repo`.
+//! GitHub's API: canonical casing of `owner/repo`, and the token for an identity.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write;
@@ -113,93 +113,114 @@ impl Answer {
     }
 }
 
-/// Ask GitHub for the canonical casing of `user/repo`.
-///
-/// Only a 404 to a request with a token is [`Answer::Missing`]: without one, a private
-/// repository looks the same, and every other failure is [`Answer::Unknown`].
-///
-/// The first request carries no token, so public repositories never touch git's credential
-/// helpers, and a locked keyring is never asked to unlock for one. Only an answer a token could
-/// change asks `token` for one and tries again with it: see [`token_could_help`]. The token is
-/// never rejected through git's credential helpers, even when GitHub turns it down: git uses it
-/// for more than the API, and h did not store it.
-pub fn fetch_repo_info(
-    api_base: &str,
-    user: &str,
-    repo: &str,
-    token: impl FnOnce() -> Option<String>,
-) -> Answer {
-    let agent: Agent = Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .http_status_as_error(false)
-        .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
-        .build()
-        .into();
-
-    let url = format!("{}/repos/{user}/{repo}", api_base.trim_end_matches('/'));
-    let get = |token: Option<&str>| {
-        let mut request = agent
-            .get(&url)
-            .header("User-Agent", "h-cli")
-            .header("Accept", "application/vnd.github.v3+json");
-        if let Some(token) = token {
-            request = request.header("Authorization", format!("Bearer {token}"));
-        }
-        request.call().ok()
-    };
-    let Some(mut response) = get(None) else {
-        return Answer::Unknown;
-    };
-    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
-    let could_help = token_could_help(
-        response.status().as_u16(),
-        header("x-ratelimit-remaining"),
-        header("retry-after").is_some(),
-    );
-    if could_help {
-        let Some(again) = token().and_then(|token| get(Some(&token))) else {
-            return Answer::Unknown;
-        };
-        response = again;
-        if response.status() == 404 {
-            return Answer::Missing;
-        }
-    }
-    if response.status() != 200 {
-        return Answer::Unknown;
-    }
-    let body = response.body_mut().read_to_string().ok();
-    match body.as_deref().and_then(parse_repo_info) {
-        Some(info) => Answer::Found(info),
-        None => Answer::Unknown,
-    }
+/// What GitHub replied to a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Reply {
+    /// A 200, with this body.
+    Body(String),
+    /// A 404 to a request with a token: there is nothing there that the token's account can see.
+    Missing,
+    /// No reply, or none to go by.
+    Failed,
 }
 
-/// GitHub lookups for one run of h, as [`fetch_repo_info`] makes them, with the token for the
-/// identity in `config` (the `-c` pairs h is given) when one could help. Each repository is asked
-/// about once, whatever casing it is asked in.
+/// GitHub's API, as one run of h talks to it, with the token for the identity in `config` (the
+/// `-c` pairs h is given) when one could help. Each repository is asked about once, whatever
+/// casing it is asked in, and the token is asked for at most once.
 pub struct Lookup {
     api: String,
+    agent: Agent,
     config: Vec<(OsString, OsString)>,
+    token: OnceCell<Option<String>>,
     answers: RefCell<HashMap<String, Answer>>,
 }
 
 impl Lookup {
+    /// Talk to the API at [`read_api_base`].
     pub fn new(config: &[(OsString, OsString)]) -> Lookup {
-        Lookup { api: read_api_base(), config: config.to_vec(), answers: RefCell::default() }
+        Lookup::with_api(&read_api_base(), config)
     }
 
-    /// Ask GitHub about `user/repo`, as [`fetch_repo_info`] does, once whatever the casing: its
-    /// canonical owner and name, its current one if it was renamed or transferred.
+    /// Talk to the API at `api`.
+    pub fn with_api(api: &str, config: &[(OsString, OsString)]) -> Lookup {
+        let agent = Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .http_status_as_error(false)
+            .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
+            .build()
+            .into();
+        Lookup {
+            api: api.trim_end_matches('/').to_string(),
+            agent,
+            config: config.to_vec(),
+            token: OnceCell::new(),
+            answers: RefCell::default(),
+        }
+    }
+
+    /// Ask GitHub about `user/repo`, once whatever the casing: its canonical owner and name, its
+    /// current one if it was renamed or transferred, and its parent if it is a fork.
+    ///
+    /// Only a 404 to a request with a token is [`Answer::Missing`]: without one, a private
+    /// repository looks the same, and every other failure is [`Answer::Unknown`].
     pub fn ask_github(&self, user: &str, repo: &str) -> Answer {
         let key = format!("{user}/{repo}").to_ascii_lowercase();
         if let Some(answer) = self.answers.borrow().get(&key) {
             return answer.clone();
         }
-        let token = || ask_credential_token(&self.api, &self.config);
-        let answer = fetch_repo_info(&self.api, user, repo, token);
+        let answer = match self.get(&format!("/repos/{user}/{repo}")) {
+            Reply::Body(body) => parse_repo_info(&body).map_or(Answer::Unknown, Answer::Found),
+            Reply::Missing => Answer::Missing,
+            Reply::Failed => Answer::Unknown,
+        };
         self.answers.borrow_mut().insert(key, answer.clone());
         answer
+    }
+
+    /// Get `path` from the API.
+    ///
+    /// The first request carries no token, so public repositories never touch git's credential
+    /// helpers, and a locked keyring is never asked to unlock for one. Only an answer a token
+    /// could change (see [`token_could_help`]) asks git for one, as [`ask_credential_token`]
+    /// does, and tries again with it. The token is never rejected through git's credential
+    /// helpers, even when GitHub turns it down: git uses it for more than the API, and h did not
+    /// store it.
+    fn get(&self, path: &str) -> Reply {
+        let url = format!("{}{path}", self.api);
+        let send = |token: Option<&str>| {
+            let mut request = self
+                .agent
+                .get(&url)
+                .header("User-Agent", "h-cli")
+                .header("Accept", "application/vnd.github.v3+json");
+            if let Some(token) = token {
+                request = request.header("Authorization", format!("Bearer {token}"));
+            }
+            request.call().ok()
+        };
+        let Some(mut response) = send(None) else {
+            return Reply::Failed;
+        };
+        let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+        let could_help = token_could_help(
+            response.status().as_u16(),
+            header("x-ratelimit-remaining"),
+            header("retry-after").is_some(),
+        );
+        if could_help {
+            let token = self.token.get_or_init(|| ask_credential_token(&self.api, &self.config));
+            let Some(again) = token.as_deref().and_then(|token| send(Some(token))) else {
+                return Reply::Failed;
+            };
+            response = again;
+            if response.status() == 404 {
+                return Reply::Missing;
+            }
+        }
+        if response.status() != 200 {
+            return Reply::Failed;
+        }
+        response.body_mut().read_to_string().map_or(Reply::Failed, Reply::Body)
     }
 }
 
@@ -274,8 +295,9 @@ mod tests {
     #[test]
     fn unreachable_api_returns_none() {
         // Port 1 on localhost is essentially never listening; the connection is refused at once.
-        let token = || panic!("no answer at all, so no reason to ask for a token");
-        assert_eq!(fetch_repo_info("http://127.0.0.1:1", "a", "b", token), Answer::Unknown);
+        let lookup = Lookup::with_api("http://127.0.0.1:1", &[]);
+        assert_eq!(lookup.ask_github("a", "b"), Answer::Unknown);
+        assert_eq!(lookup.token.get(), None, "no answer at all, so no reason to ask for a token");
     }
 
     #[test]

@@ -180,7 +180,8 @@ fn resolve_term(
     casing: Casing,
     lookup: &github::Lookup,
 ) -> Result<Resolution, String> {
-    resolve(&config.root, term, casing, |user, repo| lookup.ask_github(user, repo))
+    let projects = Projects::new(&config.root);
+    resolve(&projects, term, casing, |user, repo| lookup.ask_github(user, repo))
 }
 
 /// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
@@ -325,7 +326,7 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
     };
-    for term in Projects::walk(&config.root).list_completions(word) {
+    for term in Projects::new(&config.root).list_completions(word) {
         println!("{term}");
     }
     ExitCode::SUCCESS
@@ -341,7 +342,8 @@ fn run_resolve_command(config: &Config, args: &[OsString]) -> ExitCode {
         Err(msg) => return fail(&msg),
     };
     // Only existing checkouts are printed, and those are found in any casing without GitHub.
-    match resolve(&config.root, term, Casing::Local, |_, _| github::Answer::Unknown) {
+    match resolve(&Projects::new(&config.root), term, Casing::Local, |_, _| github::Answer::Unknown)
+    {
         Ok(resolution) if resolution.path.is_dir() => {
             print_path(&resolution.path);
             ExitCode::SUCCESS

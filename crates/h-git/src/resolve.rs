@@ -223,22 +223,22 @@ fn found_by_search(code_root: &Path, path: PathBuf) -> Resolution {
     Resolution { path, clone_url: None, remote, upstream_url: None }
 }
 
-/// Resolve `term` against `code_root`.
+/// Resolve `term` against the code root `projects` are under.
 ///
 /// With [`Casing::Local`], `user/repo` is first a term like any other: the project whose path
 /// ends that way, in any casing, under `github.com` or elsewhere (`torvalds/linux` for
 /// `git.kernel.org/pub/scm/.../torvalds/linux`). Only when there is none is `lookup` consulted
 /// for its casing on GitHub, which [`Casing::GitHub`] always does. Either way an existing
-/// directory for the resulting name, in any casing, is where it leads. A repository GitHub does not know even when asked with a token, and that has
-/// no directory, is not found: cloning it could only fail. On failure, returns the message to
-/// show the user.
+/// directory for the resulting name, in any casing, is where it leads. A repository GitHub does
+/// not know even when asked with a token, and that has no directory, is not found: cloning it
+/// could only fail. On failure, returns the message to show the user.
 pub fn resolve(
-    code_root: impl AsRef<Path>,
+    projects: &Projects,
     term: &str,
     casing: Casing,
     lookup: impl FnOnce(&str, &str) -> Answer,
 ) -> Result<Resolution, String> {
-    let code_root = code_root.as_ref();
+    let code_root = projects.root();
     let not_found = || format!("{term} not found");
     let target = parse_term(term).map_err(|err| match err {
         ParseError::UnknownPattern => format!("Unknown pattern for {term}"),
@@ -249,7 +249,6 @@ pub fn resolve(
         Target::GitHub { user, repo } => {
             if casing == Casing::Local {
                 // `user/repo.git` names a checkout spelled with or without the `.git`.
-                let projects = Projects::walk(code_root);
                 let path = projects.find(term).or_else(|| projects.find(&format!("{user}/{repo}")));
                 if let Some(path) = path {
                     return Ok(found_by_search(code_root, path));
@@ -281,7 +280,7 @@ pub fn resolve(
             upstream_url: None,
         }),
         Target::Name(name) => {
-            let path = Projects::walk(code_root).find(&name).ok_or_else(not_found)?;
+            let path = projects.find(&name).ok_or_else(not_found)?;
             Ok(found_by_search(code_root, path))
         }
     }
@@ -416,7 +415,7 @@ mod tests {
 
     #[test]
     fn resolves_github_with_lookup() {
-        let res = resolve("/code", "zimbatm/H", Casing::Local, |user, repo| {
+        let res = resolve(&Projects::new("/code"), "zimbatm/H", Casing::Local, |user, repo| {
             assert_eq!((user, repo), ("zimbatm", "H"));
             Answer::Found(repo_info("ZimBatm/h", None))
         });
@@ -433,7 +432,8 @@ mod tests {
 
     #[test]
     fn resolves_github_without_lookup() {
-        let res = resolve("/code", "git@github.com:a/b.git", Casing::Local, unknown);
+        let res =
+            resolve(&Projects::new("/code"), "git@github.com:a/b.git", Casing::Local, unknown);
         assert_eq!(
             res,
             Ok(Resolution {
@@ -450,7 +450,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("github.com/NixOS/nixpkgs/.git")).unwrap();
         for term in ["nixos/NIXPKGS", "nixos/nixpkgs.git"] {
-            let res = resolve(tmp.path(), term, Casing::Local, not_asked);
+            let res = resolve(&Projects::new(tmp.path()), term, Casing::Local, not_asked);
             assert_eq!(
                 res,
                 Ok(Resolution {
@@ -463,11 +463,17 @@ mod tests {
         }
 
         // The store always asks GitHub, and still finds the checkout.
-        let res = resolve(tmp.path(), "nixos/nixpkgs", Casing::GitHub, found("NixOS/nixpkgs"));
+        let res = resolve(
+            &Projects::new(tmp.path()),
+            "nixos/nixpkgs",
+            Casing::GitHub,
+            found("NixOS/nixpkgs"),
+        );
         assert_eq!(res.unwrap().path, tmp.path().join("github.com/NixOS/nixpkgs"));
 
         // A repository GitHub has renamed is found under its new name, in any casing.
-        let res = resolve(tmp.path(), "old/name", Casing::Local, found("nixos/nixpkgs"));
+        let res =
+            resolve(&Projects::new(tmp.path()), "old/name", Casing::Local, found("nixos/nixpkgs"));
         assert_eq!(res.unwrap().path, tmp.path().join("github.com/NixOS/nixpkgs"));
     }
 
@@ -493,36 +499,37 @@ mod tests {
     #[test]
     fn repositories_github_does_not_have_are_not_found() {
         let tmp = tempfile::tempdir().unwrap();
-        let res = resolve(tmp.path(), "me/gone", Casing::Local, missing);
+        let res = resolve(&Projects::new(tmp.path()), "me/gone", Casing::Local, missing);
         assert_eq!(res, Err("me/gone not found on GitHub, even with this identity's token".into()));
 
         // A checkout is still where it leads, whatever GitHub says.
         fs::create_dir_all(tmp.path().join("github.com/me/gone")).unwrap();
-        let res = resolve(tmp.path(), "me/gone", Casing::GitHub, missing);
+        let res = resolve(&Projects::new(tmp.path()), "me/gone", Casing::GitHub, missing);
         assert_eq!(res.unwrap().path, tmp.path().join("github.com/me/gone"));
     }
 
     #[test]
     fn resolves_forks_with_their_upstream() {
         let lookup = fork_of("me/nixpkgs", "NixOS/nixpkgs");
-        let res = resolve("/code", "me/nixpkgs", Casing::Local, lookup);
+        let res = resolve(&Projects::new("/code"), "me/nixpkgs", Casing::Local, lookup);
         assert_eq!(res.unwrap().upstream_url, Some("https://github.com/NixOS/nixpkgs.git".into()));
     }
 
     #[test]
     fn remote_names_have_no_empty_segments() {
-        let res = resolve("/code", "file:///srv/git/proj.git", Casing::Local, unknown);
+        let res =
+            resolve(&Projects::new("/code"), "file:///srv/git/proj.git", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("srv/git/proj".into()));
-        let res = resolve("/code", "https://host//a/b/", Casing::Local, unknown);
+        let res = resolve(&Projects::new("/code"), "https://host//a/b/", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("host/a/b".into()));
     }
 
     #[test]
     fn remote_names_are_valid_in_refs() {
         let url = "file:///home/me/.local/x.lock.git";
-        let res = resolve("/code", url, Casing::Local, unknown);
+        let res = resolve(&Projects::new("/code"), url, Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("home/me/_.local/x.lock_".into()));
-        let res = resolve("/code", "owner/.github", Casing::Local, unknown);
+        let res = resolve(&Projects::new("/code"), "owner/.github", Casing::Local, unknown);
         assert_eq!(res.unwrap().remote, Some("github.com/owner/_.github".into()));
         for (segment, escaped) in [
             ("plain-name_1.2", "plain-name_1.2"),
@@ -550,7 +557,7 @@ mod tests {
     #[test]
     fn resolves_remote_and_strips_git() {
         let url = "https://gitlab.com/group/project.git";
-        let res = resolve("/code", url, Casing::Local, not_asked);
+        let res = resolve(&Projects::new("/code"), url, Casing::Local, not_asked);
         assert_eq!(
             res,
             Ok(Resolution {
@@ -567,7 +574,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("example.com/owner/proj");
         fs::create_dir_all(project.join(".git")).unwrap();
-        let res = resolve(tmp.path(), "proj", Casing::Local, not_asked);
+        let res = resolve(&Projects::new(tmp.path()), "proj", Casing::Local, not_asked);
         let remote = Some("example.com/owner/proj".into());
         assert_eq!(
             res,
@@ -582,20 +589,39 @@ mod tests {
         fs::create_dir_all(project.join(".git")).unwrap();
         let remote = Some("git.kernel.org/pub/scm/torvalds/linux".into());
         let want = Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None });
-        assert_eq!(resolve(tmp.path(), "scm/torvalds/linux", Casing::Local, not_asked), want);
         assert_eq!(
-            resolve(tmp.path(), "git.kernel.org/pub/scm/torvalds/linux", Casing::Local, not_asked),
+            resolve(&Projects::new(tmp.path()), "scm/torvalds/linux", Casing::Local, not_asked),
+            want
+        );
+        assert_eq!(
+            resolve(
+                &Projects::new(tmp.path()),
+                "git.kernel.org/pub/scm/torvalds/linux",
+                Casing::Local,
+                not_asked
+            ),
             want
         );
         // `user/repo` is found like any other term, the deeper checkout winning.
-        assert_eq!(resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked), want);
+        assert_eq!(
+            resolve(&Projects::new(tmp.path()), "torvalds/linux", Casing::Local, not_asked),
+            want
+        );
         fs::create_dir_all(tmp.path().join("github.com/torvalds/linux/.git")).unwrap();
-        assert_eq!(resolve(tmp.path(), "torvalds/linux", Casing::Local, not_asked), want);
+        assert_eq!(
+            resolve(&Projects::new(tmp.path()), "torvalds/linux", Casing::Local, not_asked),
+            want
+        );
         // The store always means GitHub.
-        let res = resolve(tmp.path(), "torvalds/linux", Casing::GitHub, found("torvalds/linux"));
+        let res = resolve(
+            &Projects::new(tmp.path()),
+            "torvalds/linux",
+            Casing::GitHub,
+            found("torvalds/linux"),
+        );
         assert_eq!(res.unwrap().path, tmp.path().join("github.com/torvalds/linux"));
         assert_eq!(
-            resolve(tmp.path(), "a/b/c", Casing::Local, not_asked),
+            resolve(&Projects::new(tmp.path()), "a/b/c", Casing::Local, not_asked),
             Err("a/b/c not found".into())
         );
     }
@@ -608,7 +634,7 @@ mod tests {
         fs::create_dir_all(project.join("objects")).unwrap();
         fs::create_dir_all(project.join("refs")).unwrap();
         fs::write(project.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let res = resolve(tmp.path(), "bare.git", Casing::Local, unknown);
+        let res = resolve(&Projects::new(tmp.path()), "bare.git", Casing::Local, unknown);
         let remote = Some("example.com/bare.git".into());
         assert_eq!(
             res,
@@ -620,15 +646,15 @@ mod tests {
     fn reports_errors() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve(tmp.path(), "nope", Casing::Local, unknown),
+            resolve(&Projects::new(tmp.path()), "nope", Casing::Local, unknown),
             Err("nope not found".into())
         );
         assert_eq!(
-            resolve(tmp.path(), "a b", Casing::Local, unknown),
+            resolve(&Projects::new(tmp.path()), "a b", Casing::Local, unknown),
             Err("Unknown pattern for a b".into())
         );
         assert_eq!(
-            resolve(tmp.path(), "git@host", Casing::Local, unknown),
+            resolve(&Projects::new(tmp.path()), "git@host", Casing::Local, unknown),
             Err("git@host not found".into())
         );
     }

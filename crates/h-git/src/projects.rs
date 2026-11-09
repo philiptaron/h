@@ -1,5 +1,6 @@
 //! The project directories under a code root, and finding them by search term.
 
+use std::cell::OnceCell;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -18,8 +19,8 @@ use crate::resolve::is_simple_name;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projects {
     root: PathBuf,
-    /// In sorted order of their paths.
-    paths: Vec<Project>,
+    /// In sorted order of their paths; walked for when first needed.
+    paths: OnceCell<Vec<Project>>,
 }
 
 /// A directory a term can name.
@@ -32,16 +33,26 @@ struct Project {
 }
 
 impl Projects {
-    /// Walk `root` for its projects. Symbolic links are followed, except back into a directory
-    /// the walk is already in. A missing `root` has none.
-    pub fn walk(root: impl AsRef<Path>) -> Projects {
-        let root = root.as_ref().to_path_buf();
-        let mut paths = Vec::new();
-        if let Ok(meta) = fs::metadata(&root) {
-            let mut ancestors = vec![(meta.dev(), meta.ino())];
-            walk(&root, &mut Vec::new(), &mut ancestors, &mut paths);
-        }
-        Projects { root, paths }
+    /// The projects under `root`, which are walked for when first needed. Symbolic links are
+    /// followed, except back into a directory the walk is already in. A missing `root` has none.
+    pub fn new(root: impl AsRef<Path>) -> Projects {
+        Projects { root: root.as_ref().to_path_buf(), paths: OnceCell::new() }
+    }
+
+    /// The code root they are under.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn paths(&self) -> &[Project] {
+        self.paths.get_or_init(|| {
+            let mut paths = Vec::new();
+            if let Ok(meta) = fs::metadata(&self.root) {
+                let mut ancestors = vec![(meta.dev(), meta.ino())];
+                walk(&self.root, &mut Vec::new(), &mut ancestors, &mut paths);
+            }
+            paths
+        })
     }
 
     /// Find the directory `term` names.
@@ -62,7 +73,7 @@ impl Projects {
         let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
         let wanted: Vec<&str> = term.split('/').collect();
         // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
-        let best = self.paths.iter().rev().filter_map(|project| {
+        let best = self.paths().iter().rev().filter_map(|project| {
             if holders_only && project.is_repository {
                 return None;
             }
@@ -91,7 +102,7 @@ impl Projects {
     pub fn list_completions(&self, word: &str) -> Vec<String> {
         let wanted = word.split('/').count();
         let mut found: Vec<(usize, String)> = self
-            .paths
+            .paths()
             .iter()
             .filter_map(|Project { segments, is_repository }| {
                 let tail = &segments[segments.len().checked_sub(wanted)?..];
@@ -185,11 +196,11 @@ mod tests {
     use super::*;
 
     fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
-        Projects::walk(root).find(term)
+        Projects::new(root).find(term)
     }
 
     fn list_completions(root: impl AsRef<Path>, word: &str) -> Vec<String> {
-        Projects::walk(root).list_completions(word)
+        Projects::new(root).list_completions(word)
     }
 
     /// A code root with a checkout at each of `checkouts`.

@@ -43,7 +43,7 @@ jobs:
           up-shell-init | grep -F "command $out/bin/up"
           # completion follows the parent shell (/proc on Linux, proc_name on macOS). The `; :`
           # keeps the shell from exec'ing h-shell-init in its place
-          bash -c 'h-shell-init ~/code; :' | grep -Fx 'complete -F _h_complete h'
+          bash -c 'h-shell-init ~/code; :' | grep -Fx 'complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h'
           nix shell --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zsh --command zsh -fc 'h-shell-init ~/code; :' | grep -Fx 'compdef _h_complete h'
           # the functions themselves: h finds a project, up goes back to its root
           project=~/code/github.com/example/project

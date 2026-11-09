@@ -6,21 +6,29 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-/// Find a directory named `term` below `root`, at any depth.
+/// Find the directory `term` names below `root`, at any depth.
 ///
-/// The match is case-insensitive unless `term` contains an uppercase letter. Hidden directories
-/// are skipped, and so is everything inside a repository. Deeper matches win, since
-/// `<domain>/<owner>/<repo>` is the usual layout; among matches at the same depth, the first in
-/// sorted order wins.
+/// A term is a name, or several joined by `/`, and names each directory whose path ends in those
+/// segments: any directory can be where it starts, so `nixos/nixpkgs` names
+/// `github.com/NixOS/nixpkgs`. The match is case-insensitive unless `term` contains an uppercase
+/// letter. Hidden directories are skipped, and so is everything inside a repository. Deeper
+/// matches win, since `<domain>/<owner>/<repo>` is the usual layout; among matches at the same
+/// depth, the first in sorted order wins.
 pub fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
     let root = root.as_ref();
     let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
-    let term = term.as_bytes();
+    let same = |name: &[u8], wanted: &str| match case_sensitive {
+        true => name == wanted.as_bytes(),
+        false => name.eq_ignore_ascii_case(wanted.as_bytes()),
+    };
+    let wanted: Vec<&str> = term.split('/').collect();
     let mut best: Option<&Vec<OsString>> = None;
     let projects = list_projects(root);
     for segments in &projects {
-        let name = segments.last().expect("paths have segments").as_bytes();
-        let matches = if case_sensitive { name == term } else { name.eq_ignore_ascii_case(term) };
+        let Some(tail) = segments.len().checked_sub(wanted.len()).map(|i| &segments[i..]) else {
+            continue;
+        };
+        let matches = tail.iter().zip(&wanted).all(|(name, wanted)| same(name.as_bytes(), wanted));
         if matches && best.is_none_or(|b| segments.len() > b.len()) {
             best = Some(segments);
         }
@@ -136,6 +144,21 @@ mod tests {
         std::os::unix::fs::symlink(tmp.path().join("a"), tmp.path().join("a/b/up")).unwrap();
         assert_eq!(search(tmp.path(), "b"), Some(tmp.path().join("a/b")));
         assert_eq!(search(tmp.path(), "nope"), None);
+    }
+
+    #[test]
+    fn finds_paths_starting_at_any_directory() {
+        let tmp = tree(&["github.com/NixOS/nixpkgs", "git.kernel.org/pub/scm/torvalds/linux"]);
+        let nixpkgs = Some(tmp.path().join("github.com/NixOS/nixpkgs"));
+        assert_eq!(search(tmp.path(), "nixos/nixpkgs"), nixpkgs);
+        assert_eq!(search(tmp.path(), "github.com/nixos/nixpkgs"), nixpkgs);
+        assert_eq!(search(tmp.path(), "NixOS/nixpkgs"), nixpkgs);
+        assert_eq!(search(tmp.path(), "NIXOS/nixpkgs"), None);
+        let linux = Some(tmp.path().join("git.kernel.org/pub/scm/torvalds/linux"));
+        assert_eq!(search(tmp.path(), "torvalds/linux"), linux);
+        assert_eq!(search(tmp.path(), "scm/torvalds/linux"), linux);
+        assert_eq!(search(tmp.path(), "pub/torvalds/linux"), None);
+        assert_eq!(search(tmp.path(), "nixos/nixpkgs/more"), None);
     }
 
     #[test]

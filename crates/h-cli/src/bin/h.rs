@@ -337,7 +337,7 @@ const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `h complete <word>`: print the terms that complete `word`, one per line, best first: the
 /// projects', and then, with a store, those of the owner's repositories on GitHub that are not
-/// among them.
+/// among them, after a blank line that sets them apart.
 ///
 /// `h complete --refresh <owner>`, which completion starts in the background, asks GitHub for the
 /// owner's repositories and keeps them in the store.
@@ -354,19 +354,23 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
     };
-    let mut terms = projects(config).list_completions(word);
+    let checkouts = projects(config).list_completions(word);
     let store = config.store.as_ref().filter(|store| store.exists());
+    let mut on_github = Vec::new();
     if let Some(store) = store
         && let Some(github) = GitHubWord::parse(word)
         && let Some(repos) = read_github_repos(config, store, github.owner)
     {
-        for term in github.list_completions(&repos) {
-            if !terms.iter().any(|t| t.eq_ignore_ascii_case(&term)) {
-                terms.push(term);
-            }
-        }
+        let is_new = |term: &String| !checkouts.iter().any(|t| t.eq_ignore_ascii_case(term));
+        on_github = github.list_completions(&repos).into_iter().filter(is_new).collect();
     }
-    for term in terms {
+    for term in &checkouts {
+        println!("{term}");
+    }
+    if !on_github.is_empty() {
+        println!();
+    }
+    for term in &on_github {
         println!("{term}");
     }
     ExitCode::SUCCESS

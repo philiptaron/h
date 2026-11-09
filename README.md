@@ -30,7 +30,8 @@ owner's repositories on GitHub that are not checked out, after the ones that are
 clones it. The list comes from GitHub with the identity's token, so an organization's private
 repositories are in it, and is kept in the store (`<store>/h/github/<owner>`) for a day, then fetched
 again in the background. The first completion of an owner waits a moment for GitHub, and offers
-only the checkouts if GitHub is slower than that.
+only the checkouts if GitHub is slower than that. zsh lists the two apart, under "checked out" and
+"on GitHub".
 
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.

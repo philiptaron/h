@@ -110,7 +110,9 @@ pub fn render_h_init(
     // even inside an untaken branch of an `if`. `h complete` lists the terms best first, so
     // neither shell sorts them; zsh is told to match them in any case, and bash takes them as
     // they are, since only matching terms are listed. A term ending in `/` gets no space after
-    // it, so the next segment can follow. `h complete` gets the store and identity `h` itself
+    // it, so the next segment can follow. A blank line sets the repositories only on GitHub apart
+    // from the checkouts: zsh lists them under a heading of their own, and bash, splitting on
+    // newlines, never sees it. `h complete` gets the store and identity `h` itself
     // gets; whatever it says on stderr would only garble the command line.
     let complete = |word: &str| format!("{common} complete \"{word}\"{tail} 2>/dev/null");
     let (zsh_complete, bash_complete) =
@@ -119,11 +121,14 @@ pub fn render_h_init(
         Shell::Zsh => out.push_str(&format!(
             "_{name}_complete() {{\n\
              \x20 local term\n\
-             \x20 for term in ${{(f)\"$({zsh_complete})\"}}; do\n\
-             \x20   if [[ $term == */ ]]; then\n\
-             \x20     compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -S '' -- \"$term\"\n\
+             \x20 local -a group=(-V checkouts -X 'checked out')\n\
+             \x20 for term in \"${{(@f)$({zsh_complete})}}\"; do\n\
+             \x20   if [[ -z $term ]]; then\n\
+             \x20     group=(-V github -X 'on GitHub')\n\
+             \x20   elif [[ $term == */ ]]; then\n\
+             \x20     compadd \"${{group[@]}}\" -M 'm:{{a-zA-Z}}={{A-Za-z}}' -S '' -- \"$term\"\n\
              \x20   else\n\
-             \x20     compadd -V {name} -M 'm:{{a-zA-Z}}={{A-Za-z}}' -- \"$term\"\n\
+             \x20     compadd \"${{group[@]}}\" -M 'm:{{a-zA-Z}}={{A-Za-z}}' -- \"$term\"\n\
              \x20   fi\n\
              \x20 done\n\
              }}\n\
@@ -298,11 +303,14 @@ complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
             completion,
             r#"_j_complete() {
   local term
-  for term in ${(f)"$(command /bin/h --root "/code" complete "$PREFIX" 2>/dev/null)"}; do
-    if [[ $term == */ ]]; then
-      compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -S '' -- "$term"
+  local -a group=(-V checkouts -X 'checked out')
+  for term in "${(@f)$(command /bin/h --root "/code" complete "$PREFIX" 2>/dev/null)}"; do
+    if [[ -z $term ]]; then
+      group=(-V github -X 'on GitHub')
+    elif [[ $term == */ ]]; then
+      compadd "${group[@]}" -M 'm:{a-zA-Z}={A-Za-z}' -S '' -- "$term"
     else
-      compadd -V j -M 'm:{a-zA-Z}={A-Za-z}' -- "$term"
+      compadd "${group[@]}" -M 'm:{a-zA-Z}={A-Za-z}' -- "$term"
     fi
   done
 }

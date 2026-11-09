@@ -971,19 +971,19 @@ fn completion_offers_repositories_on_github() {
     };
 
     // The checkout first, then what is only on GitHub, spelled as GitHub spells it.
-    let want = "NixOS/nix\nNixOS/nixpkgs\nNixOS/nixpkgs-vet\n";
+    let want = "NixOS/nix\n\nNixOS/nixpkgs\nNixOS/nixpkgs-vet\n";
     assert_eq!(complete("nixos/nix"), want);
     assert_eq!(api.requests().len(), 2, "both pages");
     assert_eq!(
         complete("github.com/NixOS/nixpkgs"),
-        "github.com/NixOS/nixpkgs\ngithub.com/NixOS/nixpkgs-vet\n"
+        "\ngithub.com/NixOS/nixpkgs\ngithub.com/NixOS/nixpkgs-vet\n"
     );
-    assert_eq!(complete("someone/"), "SomeOne/dotfiles\n");
+    assert_eq!(complete("someone/"), "\nSomeOne/dotfiles\n");
     assert_eq!(complete("nobody/"), "");
     let asked = api.requests().len();
     assert_eq!(asked, 6, "an organization, then a user, for each of someone and nobody");
     // What was listed is kept, nobody's absence too, so GitHub is not asked again.
-    assert_eq!(complete("nixos/nixpkgs-v"), "NixOS/nixpkgs-vet\n");
+    assert_eq!(complete("nixos/nixpkgs-v"), "\nNixOS/nixpkgs-vet\n");
     assert_eq!(complete("nobody/x"), "");
     // Nor about what cannot be a GitHub owner.
     assert_eq!(complete("example.com/"), "");
@@ -993,7 +993,7 @@ fn completion_offers_repositories_on_github() {
     let listing = sb.store.join("h/github/someone");
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(25 * 60 * 60);
     fs::File::options().write(true).open(&listing).unwrap().set_modified(old).unwrap();
-    assert_eq!(complete("someone/"), "SomeOne/dotfiles\n");
+    assert_eq!(complete("someone/"), "\nSomeOne/dotfiles\n");
     let fresh = || fs::metadata(&listing).unwrap().modified().unwrap() > old;
     for _ in 0..200 {
         if fresh() {

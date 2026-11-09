@@ -120,34 +120,13 @@ impl Projects {
     /// the usual layout; among those as deep, one in the term's case, and then the first in
     /// sorted order.
     pub fn find(&self, term: &str) -> Option<PathBuf> {
-        // A directory the index has may have gone since.
-        let found = |paths: &[Project]| self.find_among(paths, term).filter(|path| path.is_dir());
-        self.ask(found, Option::is_some)
-    }
-
-    fn find_among(&self, paths: &[Project], term: &str) -> Option<PathBuf> {
-        let (term, holders_only) = match term.strip_suffix('/') {
-            Some(term) => (term, true),
-            None => (term, false),
+        let found = |paths: &[Project]| {
+            let project = find_project(paths, term)?;
+            let path = project.segments.iter().fold(self.root.clone(), |path, s| path.join(s));
+            // A directory the index has may have gone since.
+            path.is_dir().then_some(path)
         };
-        let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
-        let wanted: Vec<&str> = term.split('/').collect();
-        // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
-        let best = paths.iter().rev().filter_map(|project| {
-            if holders_only && project.is_repository {
-                return None;
-            }
-            let segments = &project.segments;
-            let tail = &segments[segments.len().checked_sub(wanted.len())?..];
-            let pairs = || tail.iter().map(|name| name.as_bytes()).zip(&wanted);
-            if !pairs().all(|(name, wanted)| name.eq_ignore_ascii_case(wanted.as_bytes())) {
-                return None;
-            }
-            let exact = pairs().all(|(name, wanted)| name == wanted.as_bytes());
-            Some(((has_capitals && exact, segments.len(), exact), segments))
-        });
-        let (_, segments) = best.max_by_key(|(rank, _)| *rank)?;
-        Some(segments.iter().fold(self.root.clone(), |path, s| path.join(s)))
+        self.ask(found, Option::is_some)
     }
 
     /// List the terms that complete `word`, best first.
@@ -159,8 +138,46 @@ impl Projects {
     /// order. A directory that holds repositories is offered with a `/` at the end, as a term
     /// for it is spelled, which also leaves it ready for the next segment; one whose name is also
     /// a repository's is offered both ways. Only what can be spelled as a term is offered.
+    ///
+    /// A `word` that is the whole name of several repositories completes instead to a longer
+    /// term for each, which names it alone, so that one can be chosen: `proj` to `x/proj` and
+    /// `y/proj`, the one `proj` goes to first.
     pub fn list_completions(&self, word: &str) -> Vec<String> {
         self.ask(|paths| list_completions(paths, word), |found| !found.is_empty())
+    }
+}
+
+/// Find the project `term` names among `paths`; see [`Projects::find`].
+fn find_project<'a>(paths: &'a [Project], term: &str) -> Option<&'a Project> {
+    let (term, holders_only) = match term.strip_suffix('/') {
+        Some(term) => (term, true),
+        None => (term, false),
+    };
+    let has_capitals = term.bytes().any(|b| b.is_ascii_uppercase());
+    let wanted: Vec<&str> = term.split('/').collect();
+    // `max_by_key` keeps the last of equals, so going backwards keeps the first in sorted order.
+    let best = paths.iter().rev().filter_map(|project| {
+        if (holders_only && project.is_repository) || !project.ends_with(&wanted) {
+            return None;
+        }
+        let segments = &project.segments;
+        let tail = &segments[segments.len() - wanted.len()..];
+        let exact = tail.iter().zip(&wanted).all(|(name, wanted)| name == *wanted);
+        Some(((has_capitals && exact, segments.len(), exact), project))
+    });
+    best.max_by_key(|(rank, _)| *rank).map(|(_, project)| project)
+}
+
+impl Project {
+    /// Whether the last segments of its path are `wanted`, in any case.
+    fn ends_with(&self, wanted: &[&str]) -> bool {
+        let Some(start) = self.segments.len().checked_sub(wanted.len()) else {
+            return false;
+        };
+        let pairs = self.segments[start..].iter().zip(wanted);
+        pairs
+            .into_iter()
+            .all(|(name, wanted)| name.as_bytes().eq_ignore_ascii_case(wanted.as_bytes()))
     }
 }
 
@@ -188,7 +205,59 @@ fn list_completions(paths: &[Project], word: &str) -> Vec<String> {
         .collect();
     found.sort();
     found.dedup();
-    found.into_iter().map(|(_, term)| term).collect()
+    let qualified = qualify(paths, word);
+    let is_ambiguous = qualified.len() > 1;
+    let mut qualified = Some(qualified);
+    let mut terms = Vec::new();
+    for (_, term) in found {
+        if is_ambiguous && term.eq_ignore_ascii_case(word) {
+            // Only once, though the word may be listed in more than one case.
+            terms.extend(qualified.take().into_iter().flatten());
+        } else {
+            terms.push(term);
+        }
+    }
+    terms
+}
+
+/// When `word` names repositories, a longer term for each, which names it alone: the fewest
+/// segments of its path that no other ends in, spelled as they are, and that find it. The one
+/// `word` itself names comes first, then the rest in sorted order. A repository that no longer term names, such as `proj` at the top of the code
+/// root when `owner/proj` is deeper, is left out, as is one only a term that cannot be spelled
+/// would name.
+///
+/// A word that names several repositories completes to these terms instead, so the one that is
+/// meant can be chosen from them.
+fn qualify(paths: &[Project], word: &str) -> Vec<String> {
+    if word.is_empty() || word.ends_with('/') {
+        return Vec::new();
+    }
+    let wanted: Vec<&str> = word.split('/').collect();
+    let first = find_project(paths, word);
+    let named: Vec<&Project> = paths
+        .iter()
+        .filter(|project| project.is_repository && project.ends_with(&wanted))
+        .collect();
+    let mut terms: Vec<(bool, String)> = named
+        .iter()
+        .filter_map(|&project| {
+            let segments = &project.segments;
+            let term = (wanted.len() + 1..=segments.len()).find_map(|len| {
+                let tail = &segments[segments.len() - len..];
+                let is_shared = named
+                    .iter()
+                    .any(|other| !std::ptr::eq(*other, project) && other.segments.ends_with(tail));
+                let tail = tail.iter().map(|s| s.to_str().filter(|s| is_simple_name(s)));
+                let term = tail.collect::<Option<Vec<&str>>>()?.join("/");
+                let found = find_project(paths, &term)?;
+                (!is_shared && std::ptr::eq(found, project)).then_some(term)
+            })?;
+            let is_first = first.is_some_and(|first| std::ptr::eq(first, project));
+            Some((!is_first, term))
+        })
+        .collect();
+    terms.sort();
+    terms.into_iter().map(|(_, term)| term).collect()
 }
 
 /// The first line of an index, which says what it holds and how.
@@ -600,6 +669,51 @@ mod tests {
         assert_eq!(complete("alacritty/"), ["alacritty/alacritty"]);
         assert_eq!(complete("git"), ["github.com/"]);
         assert_eq!(complete("github.com/"), ["github.com/alacritty/", "github.com/owner/"]);
+    }
+
+    #[test]
+    fn completes_a_name_several_repositories_share_to_a_term_for_each() {
+        let tmp = tree(&[
+            "github.com/x/proj",
+            "github.com/y/proj",
+            "github.com/y/project",
+            "gitlab.com/x/proj",
+            "proj",
+            "a/b/only",
+        ]);
+        let complete = |word| list_completions(tmp.path(), word);
+        // `proj` itself goes to github.com/x/proj, so that comes first. The one at the top of
+        // the code root has no longer term, so it is left out.
+        assert_eq!(
+            complete("proj"),
+            ["github.com/x/proj", "gitlab.com/x/proj", "y/proj", "project"]
+        );
+        assert_eq!(
+            complete("PROJ"),
+            ["github.com/x/proj", "gitlab.com/x/proj", "y/proj", "project"]
+        );
+        assert_eq!(complete("x/proj"), ["github.com/x/proj", "gitlab.com/x/proj"]);
+        // Until the word is the whole name, or names one repository, it completes as before.
+        assert_eq!(complete("pro"), ["proj", "project"]);
+        assert_eq!(complete("y/proj"), ["y/proj", "y/project"]);
+        assert_eq!(complete("only"), ["only"]);
+        assert_eq!(complete("x/"), ["x/proj"]);
+        if fs::create_dir_all(tmp.path().join("github.com/X/proj/.git")).is_ok()
+            && fs::read_dir(tmp.path().join("github.com")).unwrap().count() == 3
+        {
+            // Each spelling names its own.
+            let complete = |word| list_completions(tmp.path(), word);
+            let want = ["github.com/x/proj", "github.com/X/proj", "gitlab.com/x/proj"];
+            assert_eq!(complete("x/proj"), want);
+        }
+    }
+
+    #[test]
+    fn qualifies_only_with_what_a_term_can_spell() {
+        let tmp = tree(&["a b/proj", "c/proj", "d/proj"]);
+        assert_eq!(list_completions(tmp.path(), "proj"), ["c/proj", "d/proj"]);
+        let tmp = tree(&["a b/proj", "c/proj"]);
+        assert_eq!(list_completions(tmp.path(), "proj"), ["proj"], "one is no choice");
     }
 
     #[test]

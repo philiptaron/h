@@ -23,7 +23,10 @@ Tab completion works in bash and zsh. It completes the end of any project's path
 completion is spelled as the directory is, and the matches closest to your typed case come first.
 A directory holding repositories, such as an owner, completes with a `/` at the end, ready for the
 next name; when it shares its name with a repository (`alacritty` and `alacritty/`), both are
-offered.
+offered. A name several repositories share, typed in full, completes to a longer term for each:
+`proj<Tab>` offers `x/proj` and `y/proj`, the one `h proj` goes to first. zsh steps through them
+with each Tab; bash lists them, and steps through them only where Tab (or another key) is bound to
+`menu-complete`.
 
 With a [store](#the-object-store), `owner/<Tab>` (or `github.com/owner/<Tab>`) also offers the
 owner's repositories on GitHub that are not checked out, after the ones that are; choosing one

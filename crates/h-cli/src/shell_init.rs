@@ -106,16 +106,19 @@ pub fn render_h_init(
          }}\n"
     );
 
-    // Only emit completion code for the detected shell: bash fails to parse zsh's `${(f)...}`
-    // even inside an untaken branch of an `if`. `h complete` lists the terms best first, so
-    // neither shell sorts them; zsh is told to match them in any case, and bash takes them as
-    // they are, since only matching terms are listed. A term ending in `/` gets no space after
-    // it, so the next segment can follow. A blank line sets the repositories only on GitHub apart
-    // from the checkouts: zsh lists them under a heading of their own, and bash, splitting on
-    // newlines, never sees it. While `h complete` waits for GitHub it draws a spinner after the
-    // cursor, which it can wipe without a trace only when nothing follows the cursor on the line;
-    // so `/dev/tty` is passed for it only then. `h complete` gets the store and identity `h` itself
-    // gets; whatever it says on stderr would only garble the command line.
+    // Only emit completion code for the detected shell: bash fails to parse zsh's `${(f)...}` even
+    // inside an untaken branch of an `if`. `h complete` lists the terms best first, so neither
+    // shell sorts them; zsh is told to match them in any case, and bash takes them as they are. A
+    // term ending in `/` gets no space after it, so the next segment can follow. A term that does
+    // not start with the word is a longer one for a name several repositories share (`x/proj` for
+    // `proj`): zsh puts it in place of the word, unmatched, and steps through the choices with each
+    // Tab; bash lists them, and steps through them only where a key is bound to `menu-complete`. A
+    // blank line sets the repositories only on GitHub apart from the checkouts: zsh lists them
+    // under a heading of their own, and bash, splitting on newlines, never sees it. While `h
+    // complete` waits for GitHub it draws a spinner after the cursor, which it can wipe without a
+    // trace only when nothing follows the cursor on the line; so `/dev/tty` is passed for it only
+    // then. `h complete` gets the store and identity `h` itself gets; whatever it says on stderr
+    // would only garble the command line.
     let complete = |word: &str| {
         format!("{common} complete --progress-to \"$tty\" \"{word}\"{tail} 2>/dev/null")
     };
@@ -132,8 +135,11 @@ pub fn render_h_init(
              \x20     group=(-V github -X 'on GitHub')\n\
              \x20   elif [[ $term == */ ]]; then\n\
              \x20     compadd \"${{group[@]}}\" -M 'm:{{a-zA-Z}}={{A-Za-z}}' -S '' -- \"$term\"\n\
-             \x20   else\n\
+             \x20   elif [[ ${{(L)term}} == \"${{(L)PREFIX}}\"* ]]; then\n\
              \x20     compadd \"${{group[@]}}\" -M 'm:{{a-zA-Z}}={{A-Za-z}}' -- \"$term\"\n\
+             \x20   else\n\
+             \x20     compadd \"${{group[@]}}\" -U -- \"$term\"\n\
+             \x20     compstate[insert]=menu\n\
              \x20   fi\n\
              \x20 done\n\
              }}\n\
@@ -317,8 +323,11 @@ complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
       group=(-V github -X 'on GitHub')
     elif [[ $term == */ ]]; then
       compadd "${group[@]}" -M 'm:{a-zA-Z}={A-Za-z}' -S '' -- "$term"
-    else
+    elif [[ ${(L)term} == "${(L)PREFIX}"* ]]; then
       compadd "${group[@]}" -M 'm:{a-zA-Z}={A-Za-z}' -- "$term"
+    else
+      compadd "${group[@]}" -U -- "$term"
+      compstate[insert]=menu
     fi
   done
 }

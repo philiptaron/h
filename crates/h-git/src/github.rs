@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{Agent, Body, http};
@@ -116,9 +116,6 @@ impl Answer {
 /// How many repositories a page of a list holds, which is the most GitHub gives.
 const PER_PAGE: usize = 100;
 
-/// How many pages of an owner's repositories are listed at most.
-pub const MAX_LISTED_PAGES: usize = 10;
-
 /// An owner's repositories on GitHub.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerRepos {
@@ -140,7 +137,8 @@ pub enum Listed {
 /// Asks for one page of the names of the repositories `$login` owns, after the cursor `$after`.
 const LIST_REPOS_QUERY: &str = "query($login: String!, $after: String) { \
     repositoryOwner(login: $login) { login \
-    repositories(first: 100, after: $after, ownerAffiliations: OWNER) { \
+    repositories(first: 100, after: $after, ownerAffiliations: OWNER, \
+    orderBy: { field: PUSHED_AT, direction: DESC }) { \
     nodes { name } pageInfo { hasNextPage endCursor } } } }";
 
 /// The GraphQL endpoint of the REST API at `api`: `/graphql` beside it, or for GitHub Enterprise
@@ -326,26 +324,30 @@ impl Lookup {
     }
 
     /// List the repositories `owner`, a user or an organization, has on GitHub, as far as the
-    /// identity's token lets it see. Owners with more than [`MAX_LISTED_PAGES`] pages of them are
-    /// listed only in part.
+    /// identity's token lets it see, the most recently pushed to first. Pages of them are asked
+    /// for until there are no more or `until` has passed, so an owner with more than can be
+    /// listed in time is listed in part, with its liveliest repositories.
     ///
     /// With a token, the GraphQL API is asked, for the names alone, which is several times
     /// faster than the REST API's whole records, and sees everything the token's account can: an
     /// organization's private and internal repositories, and a user's private ones. Without
     /// one, or should that fail, the REST API is, which shows only a user's public repositories.
-    pub fn list_repos(&self, owner: &str) -> Listed {
+    pub fn list_repos(&self, owner: &str, until: Instant) -> Listed {
         if let Some(token) = self.ask_token()
-            && let Some(listed) = self.list_repos_with_graphql(token, owner)
+            && let Some(listed) = self.list_repos_with_graphql(token, owner, until)
         {
             return listed;
         }
-        self.list_repos_with_rest(owner)
+        self.list_repos_with_rest(owner, until)
     }
 
     /// List `owner`'s repositories through the GraphQL API with `token`. `None` when that fails.
-    fn list_repos_with_graphql(&self, token: &str, owner: &str) -> Option<Listed> {
+    fn list_repos_with_graphql(&self, token: &str, owner: &str, until: Instant) -> Option<Listed> {
         let (mut login, mut names, mut after) = (None, Vec::new(), None);
-        for _ in 0..MAX_LISTED_PAGES {
+        for page in 1.. {
+            if page > 1 && Instant::now() >= until {
+                break;
+            }
             let variables = serde_json::json!({ "login": owner, "after": after });
             let body = self.post_graphql(token, LIST_REPOS_QUERY, variables)?;
             let page = match parse_repos_page(&body)? {
@@ -387,11 +389,15 @@ impl Lookup {
 
     /// List `owner`'s repositories through the REST API: an organization's from
     /// `/orgs/<owner>/repos`, else a user's public ones from `/users/<owner>/repos`.
-    fn list_repos_with_rest(&self, owner: &str) -> Listed {
+    fn list_repos_with_rest(&self, owner: &str, until: Instant) -> Listed {
         'kinds: for kind in ["orgs", "users"] {
             let (mut login, mut names) = (None, Vec::new());
-            for page in 1..=MAX_LISTED_PAGES {
-                let path = format!("/{kind}/{owner}/repos?per_page={PER_PAGE}&page={page}");
+            for page in 1.. {
+                if page > 1 && Instant::now() >= until {
+                    break;
+                }
+                let path =
+                    format!("/{kind}/{owner}/repos?sort=pushed&per_page={PER_PAGE}&page={page}");
                 let repos = match self.get_with_token(&path) {
                     Reply::Body(body) => parse_repo_list(&body),
                     Reply::Missing if page == 1 => continue 'kinds,
@@ -457,6 +463,9 @@ pub fn parse_repo_info(body: &str) -> Option<RepoInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn parses_repo_info() {
@@ -534,6 +543,54 @@ mod tests {
         let error = r#"{"data": null, "errors": [{"message": "Bad credentials"}]}"#;
         assert_eq!(parse_repos_page(error), None);
         assert_eq!(parse_repos_page(r#"{"message": "Bad credentials"}"#), None);
+    }
+
+    /// Serve every request, after `delay`, with a full page of repositories, and note the paths
+    /// asked for.
+    fn serve_endless_pages(delay: Duration) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&paths);
+        let page: Vec<String> = (0..PER_PAGE)
+            .map(|i| format!(r#"{{"name": "r{i}", "owner": {{"login": "Big"}}}}"#))
+            .collect();
+        let body = format!("[{}]", page.join(","));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = String::new();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                while reader.read_line(&mut request).unwrap_or(0) > 2 {}
+                let path = request.split_whitespace().nth(1).unwrap_or_default().to_string();
+                log.lock().unwrap().push(path);
+                std::thread::sleep(delay);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (url, paths)
+    }
+
+    #[test]
+    fn lists_pages_until_the_time_is_up() {
+        let (url, paths) = serve_endless_pages(Duration::from_millis(50));
+        let lookup = Lookup::with_api(&url, &[]);
+        lookup.token.set(None).unwrap(); // no token, so no git credential helpers, and REST
+        let started = Instant::now();
+        let Listed::Found(repos) = lookup.list_repos("big", started + Duration::from_millis(300))
+        else {
+            panic!("listed nothing");
+        };
+        assert!(started.elapsed() < Duration::from_secs(2), "stopped in time");
+        let pages = paths.lock().unwrap().clone();
+        assert!((2..20).contains(&pages.len()), "{pages:?}");
+        assert_eq!(repos.names.len(), pages.len() * PER_PAGE);
+        assert_eq!(repos.login, "Big");
+        assert_eq!(pages[1], "/orgs/big/repos?sort=pushed&per_page=100&page=2");
     }
 
     #[test]

@@ -338,6 +338,11 @@ const LISTING_WAIT: Duration = Duration::from_secs(10);
 /// How long a completion waits before showing a spinner, so a quick answer does not flicker.
 const SPINNER_DELAY: Duration = Duration::from_millis(150);
 
+/// How long a refresh lists an owner's repositories for: as many pages as GitHub gives in this
+/// time, which is a little less than completion waits, so the first completion of an owner gets
+/// what was listed.
+const LISTING_TIME: Duration = Duration::from_secs(8);
+
 /// How long a refresh of a listing may take before another is started in its place.
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -482,7 +487,7 @@ fn refresh_listing(config: &Config, owner: &str) -> ExitCode {
         return fail("h complete --refresh needs a store");
     };
     let path = store.github_listing(owner);
-    let listing = match lookup(config).list_repos(owner) {
+    let listing = match lookup(config).list_repos(owner, Instant::now() + LISTING_TIME) {
         github::Listed::Found(repos) => Listing::Repos(repos),
         github::Listed::Missing => Listing::NoSuchOwner,
         github::Listed::Unknown => return fail(&format!("could not list {owner}'s repositories")),

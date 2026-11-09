@@ -950,11 +950,11 @@ fn completion_offers_repositories_on_github() {
     let api = MockGitHub::serve(move |path, _| {
         let list = |owner, names: &[String]| (200, repo_list(owner, names));
         match path.split_once('?') {
-            Some(("/orgs/nixos/repos", "per_page=100&page=1")) => list("NixOS", &first),
-            Some(("/orgs/nixos/repos", "per_page=100&page=2")) => {
+            Some(("/orgs/nixos/repos", "sort=pushed&per_page=100&page=1")) => list("NixOS", &first),
+            Some(("/orgs/nixos/repos", "sort=pushed&per_page=100&page=2")) => {
                 list("NixOS", &["nixpkgs-vet".into()])
             }
-            Some(("/users/someone/repos", "per_page=100&page=1")) => {
+            Some(("/users/someone/repos", "sort=pushed&per_page=100&page=1")) => {
                 list("SomeOne", &["dotfiles".into()])
             }
             _ => (404, r#"{"message": "Not Found"}"#.into()),

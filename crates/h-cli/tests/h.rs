@@ -475,6 +475,42 @@ fn private_repos_are_looked_up_again_with_the_token() {
 }
 
 #[test]
+fn the_token_is_asked_for_once_a_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    for (src, url) in
+        [("one", "https://github.com/a/one.git"), ("two", "https://github.com/b/two.git")]
+    {
+        make_git_repo(&home.join(src));
+        rewrite_url(home, url, &home.join(src));
+    }
+    let asked = credential_helper(home, "s3cret");
+    // Two private repositories, each of which looks missing without the token.
+    let api = MockGitHub::serve(|path, head| {
+        let body = |owner: &str, name: &str| {
+            format!(r#"{{"name": "{name}", "owner": {{"login": "{owner}"}}}}"#)
+        };
+        match path {
+            _ if !head.to_ascii_lowercase().contains("bearer s3cret") => {
+                (404, r#"{"message": "Not Found"}"#.into())
+            }
+            "/repos/a/one" => (200, body("a", "one")),
+            "/repos/b/two" => (200, body("b", "two")),
+            _ => (404, r#"{"message": "Not Found"}"#.into()),
+        }
+    });
+
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, home);
+    cmd.current_dir(home).env("H_GITHUB_API", &api.url);
+    cmd.arg("--store").arg(home.join("store")).args(["store", "add", "a/one", "b/two"]);
+    let out = run(cmd.args(["--", "-c", "credential.username=Ident"]));
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let asked = fs::read_to_string(asked).unwrap();
+    assert_eq!(asked.matches("username=Ident\n").count(), 1, "{asked:?}");
+}
+
+#[test]
 fn github_tokens_go_only_to_github() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();

@@ -5,6 +5,7 @@
 //! the current directory so the shell stays put. Everything else is meant to be run directly,
 //! by people and by agents alike.
 
+use std::cell::OnceCell;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -67,6 +68,8 @@ struct Config {
     root: PathBuf,
     store: Option<Store>,
     git_opts: Vec<OsString>,
+    /// Made when first needed, and then shared, so the token is asked for at most once.
+    github: OnceCell<github::Lookup>,
 }
 
 fn main() -> ExitCode {
@@ -133,6 +136,7 @@ fn main() -> ExitCode {
         root: expand_tilde(&root),
         store: store.map(|s| Store::new(absolute(&s))),
         git_opts,
+        github: OnceCell::new(),
     };
 
     let Some((cmd, rest)) = command.split_first() else {
@@ -180,8 +184,8 @@ fn resolve_term(
 }
 
 /// GitHub lookups with the token git keeps for github.com for this identity, when one helps.
-fn lookup(config: &Config) -> github::Lookup {
-    github::Lookup::new(&config_pairs(&config.git_opts))
+fn lookup(config: &Config) -> &github::Lookup {
+    config.github.get_or_init(|| github::Lookup::new(&config_pairs(&config.git_opts)))
 }
 
 /// `h go <term> [clone options] [--container]`: print the directory, cloning if needed.
@@ -202,7 +206,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     let extra: Vec<OsString> = args[1..].iter().filter(|a| *a != "--container").cloned().collect();
 
     let lookup = lookup(config);
-    let resolution = match resolve_term(config, term, Casing::Local, &lookup) {
+    let resolution = match resolve_term(config, term, Casing::Local, lookup) {
         Ok(resolution) => resolution,
         Err(msg) => return fail_with_cwd(&msg),
     };
@@ -224,7 +228,7 @@ fn go(config: &Config, args: &[OsString]) -> ExitCode {
     if let Some(store) = ingests {
         let mut urls = vec![url.as_str()];
         urls.extend(resolution.upstream_url.as_deref());
-        let report = ingest::prefetch(store, &urls, &lookup);
+        let report = ingest::prefetch(store, &urls, lookup);
         say_renamed(&report);
         for name in &report.added {
             eprintln!("added {name} to the store");
@@ -419,7 +423,7 @@ fn resolve_upstream(
             }
         };
     }
-    let resolution = resolve_term(config, term, Casing::GitHub, &lookup(config))?;
+    let resolution = resolve_term(config, term, Casing::GitHub, lookup(config))?;
     let renames = Vec::new();
     match (resolution.remote, resolution.clone_url) {
         (Some(name), _) if existing.contains(&name) => Ok(Upstream { name, url: None, renames }),

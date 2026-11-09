@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 
 use crate::resolve::is_simple_name;
 
-/// The directories under a code root that a term can name.
+/// The directories under a code root that a term can name: its repositories, and the directories
+/// that hold them.
 ///
-/// Hidden directories are left out. A repository is in, but not what is inside it: its own
-/// directories are not projects, and leaving them out keeps the walk small however deep the code
-/// root goes.
+/// Hidden directories are left out, and so are those with no repository in them, such as a
+/// Python virtualenv or an empty directory. What is inside a repository is left out too: its own
+/// directories are not projects, and not looking keeps the walk small however deep the code root
+/// goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projects {
     root: PathBuf,
@@ -95,21 +97,24 @@ impl Projects {
     }
 }
 
+/// Add the projects below `dir`, which is at `segments` below the root, to `found`, and say
+/// whether `dir` is a repository or holds one.
 fn walk(
     dir: &Path,
     segments: &mut Vec<OsString>,
     ancestors: &mut Vec<(u64, u64)>,
     found: &mut Vec<Vec<OsString>>,
-) {
+) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
-        return;
+        return false;
     };
     let mut names: Vec<OsString> = entries.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
     if !segments.is_empty() && is_repository(&names) {
-        return;
+        return true;
     }
     names.sort();
 
+    let mut holds_repository = false;
     for name in names {
         if name.as_bytes().starts_with(b".") {
             continue;
@@ -124,12 +129,18 @@ fn walk(
             continue;
         }
         segments.push(name);
+        let at = found.len();
         found.push(segments.clone());
         ancestors.push(id);
-        walk(&path, segments, ancestors, found);
+        if walk(&path, segments, ancestors, found) {
+            holds_repository = true;
+        } else {
+            found.truncate(at);
+        }
         ancestors.pop();
         segments.pop();
     }
+    holds_repository
 }
 
 /// Whether a directory holding `names` is a repository: a git, Mercurial or Jujutsu checkout, or
@@ -151,10 +162,11 @@ mod tests {
         Projects::walk(root).list_completions(word)
     }
 
-    fn tree(dirs: &[&str]) -> tempfile::TempDir {
+    /// A code root with a checkout at each of `checkouts`.
+    fn tree(checkouts: &[&str]) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
-        for dir in dirs {
-            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+        for dir in checkouts {
+            fs::create_dir_all(tmp.path().join(dir).join(".git")).unwrap();
         }
         tmp
     }
@@ -175,8 +187,10 @@ mod tests {
 
     #[test]
     fn does_not_search_inside_repositories() {
-        let tmp = tree(&["a/repo/.git", "a/repo/sub", "hg/.hg", "hg/sub", "jj/.jj", "jj/sub"]);
-        fs::create_dir_all(tmp.path().join("bare.git/objects")).unwrap();
+        let tmp = tree(&["a/repo", "a/repo/sub"]);
+        for dir in ["hg/.hg", "hg/sub/.git", "jj/.jj", "jj/sub/.git", "bare.git/objects/x/.git"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+        }
         fs::create_dir_all(tmp.path().join("bare.git/refs")).unwrap();
         fs::write(tmp.path().join("bare.git/HEAD"), "ref: refs/heads/main\n").unwrap();
         assert_eq!(search(tmp.path(), "repo"), Some(tmp.path().join("a/repo")));
@@ -185,13 +199,14 @@ mod tests {
         // A worktree or submodule has a `.git` file instead of a directory.
         let tmp = tree(&["wt/sub"]);
         fs::write(tmp.path().join("wt/.git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(search(tmp.path(), "wt"), Some(tmp.path().join("wt")));
         assert_eq!(search(tmp.path(), "sub"), None);
     }
 
     #[test]
     fn survives_symlink_loops() {
         let tmp = tree(&["a/b"]);
-        std::os::unix::fs::symlink(tmp.path().join("a"), tmp.path().join("a/b/up")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("a"), tmp.path().join("a/up")).unwrap();
         assert_eq!(search(tmp.path(), "b"), Some(tmp.path().join("a/b")));
         assert_eq!(search(tmp.path(), "nope"), None);
     }
@@ -246,16 +261,29 @@ mod tests {
 
     #[test]
     fn ignores_files() {
-        let tmp = tree(&["a"]);
+        let tmp = tree(&["a/b"]);
         fs::write(tmp.path().join("a/proj"), "").unwrap();
         assert_eq!(search(tmp.path(), "proj"), None);
     }
 
     #[test]
     fn follows_symlinks() {
-        let tmp = tree(&["real/proj", "a"]);
+        let tmp = tree(&["real/proj"]);
+        fs::create_dir(tmp.path().join("a")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("a/link")).unwrap();
         assert_eq!(search(tmp.path(), "proj"), Some(tmp.path().join("a/link/proj")));
+    }
+
+    #[test]
+    fn leaves_out_directories_without_repositories() {
+        let tmp = tree(&["github.com/owner/proj"]);
+        for dir in ["venv/lib/python3/site-packages/pip", "github.com/owner/empty", "scratch"] {
+            fs::create_dir_all(tmp.path().join(dir)).unwrap();
+        }
+        assert_eq!(search(tmp.path(), "pip"), None);
+        assert_eq!(search(tmp.path(), "owner/empty"), None);
+        assert_eq!(list_completions(tmp.path(), ""), ["github.com", "owner", "proj"]);
+        assert_eq!(list_completions(tmp.path(), "owner/"), ["owner/proj"]);
     }
 
     #[test]
@@ -271,7 +299,8 @@ mod tests {
             "github.com/NixOS/nix",
             "github.com/nixos/mobile",
             "github.com/NixOS/marketing",
-            "git.kernel.org/pub/scm/torvalds/linux/.git",
+            "git.kernel.org/pub/scm/torvalds/linux",
+            "git.kernel.org/pub/scm/torvalds/linux/drivers",
             "gitlab.com/x/nixpkgs",
         ]);
         if fs::read_dir(tmp.path().join("github.com")).unwrap().count() < 2 {

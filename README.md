@@ -37,9 +37,10 @@ All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their versi
 | `h <term> --container` | clone with no working tree, for [worktrees only](#container-clones) |
 | `h store <command>` | the [object store](#the-object-store) commands |
 
-Names match in any case unless they contain a capital letter. The search does not look inside
-checkouts (git, Mercurial or Jujutsu) or bare repositories; when several projects match, the
-deepest wins.
+Names match in any case unless they contain a capital letter. Projects are repositories (git,
+Mercurial or Jujutsu checkouts, and bare git repositories) and the directories that hold them;
+the search does not look inside a repository, or in directories with none, such as a virtualenv.
+When several projects match, the deepest wins.
 
 `h store` with no command, or one it doesn't know, goes to a project named `store`.
 

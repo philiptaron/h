@@ -74,6 +74,14 @@ pub fn mkdirs(root: &Path, dirs: &[&str]) {
     }
 }
 
+/// Make a checkout, as far as finding projects goes, at each of `dirs` under `root`: a directory
+/// with a `.git` in it.
+pub fn checkouts(root: &Path, dirs: &[&str]) {
+    for dir in dirs {
+        fs::create_dir_all(root.join(dir).join(".git")).unwrap();
+    }
+}
+
 /// The canonical form of `path`, which is what `getcwd` reports.
 pub fn canonical(path: &Path) -> String {
     fs::canonicalize(path).unwrap().to_str().unwrap().to_string()

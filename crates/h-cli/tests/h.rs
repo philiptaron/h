@@ -79,7 +79,7 @@ fn go_requires_a_term() {
 #[test]
 fn legacy_resolve_flag_still_works() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/owner/proj"]);
+    checkouts(tmp.path(), &["github.com/owner/proj"]);
     let out = run(command(H).current_dir(tmp.path()).arg("--resolve").arg(tmp.path()).arg("proj"));
     assert_resolved(&out, &tmp.path().join("github.com/owner/proj"));
     let out = h(tmp.path(), &["--resolve"]);
@@ -89,7 +89,7 @@ fn legacy_resolve_flag_still_works() {
 #[test]
 fn finds_projects_by_name() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/owner/Proj", "proj", "gitlab.com/proj"]);
+    checkouts(tmp.path(), &["github.com/owner/Proj", "proj", "gitlab.com/proj"]);
     assert_resolved(&go(tmp.path(), "proj"), &tmp.path().join("github.com/owner/Proj"));
     assert_resolved(&go(tmp.path(), "Proj"), &tmp.path().join("github.com/owner/Proj"));
 }
@@ -113,7 +113,7 @@ fn reports_unknown_patterns() {
 fn goes_to_paths_starting_at_any_directory() {
     let tmp = tempfile::tempdir().unwrap();
     let linux = tmp.path().join("git.kernel.org/pub/scm/torvalds/linux");
-    std::fs::create_dir_all(&linux).unwrap();
+    std::fs::create_dir_all(linux.join(".git")).unwrap();
     for term in
         ["torvalds/linux", "pub/scm/torvalds/linux", "git.kernel.org/pub/scm/torvalds/linux"]
     {
@@ -129,7 +129,7 @@ fn goes_to_paths_starting_at_any_directory() {
 #[test]
 fn completes_words() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(
+    checkouts(
         tmp.path(),
         &["github.com/NixOS/nixpkgs", "github.com/NixOS/nix", "gitlab.com/g/nixpkgs"],
     );
@@ -154,7 +154,10 @@ fn reports_scp_urls_without_path() {
 #[test]
 fn root_comes_from_flag_env_or_default() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["code/example.com/proj", "src/example.com/proj", "env/example.com/proj"]);
+    checkouts(
+        tmp.path(),
+        &["code/example.com/proj", "src/example.com/proj", "env/example.com/proj"],
+    );
     let home = tmp.path();
     let out = run(command(H)
         .current_dir(home)
@@ -213,7 +216,7 @@ fn git_options_come_from_after_the_separator_or_else_the_environment() {
 #[test]
 fn resolve_never_clones() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/owner/proj"]);
+    checkouts(tmp.path(), &["github.com/owner/proj"]);
     let git = FakeGit::install(tmp.path());
     let mut cmd = command(H);
     git.apply(&mut cmd);
@@ -240,7 +243,7 @@ fn resolve_never_clones() {
 #[test]
 fn existing_checkouts_are_found_in_any_casing_without_github() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/ZimBatm/H"]);
+    checkouts(tmp.path(), &["github.com/ZimBatm/H"]);
     let api = MockGitHub::start(&[(
         "/repos/zimbatm/h",
         200,
@@ -267,7 +270,7 @@ fn existing_checkouts_are_found_in_any_casing_without_github() {
 fn failed_lookups_do_not_clone_a_second_casing() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("code");
-    mkdirs(&root, &["github.com/NixOS/nixpkgs"]);
+    checkouts(&root, &["github.com/NixOS/nixpkgs"]);
     let git = FakeGit::install(tmp.path());
     let api =
         MockGitHub::start(&[("/repos/nixos/nixpkgs", 500, "{}"), ("/repos/zimbatm/h", 500, "{}")]);
@@ -298,7 +301,7 @@ fn failed_lookups_do_not_clone_a_second_casing() {
 #[test]
 fn github_urls_resolve_to_github_paths() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["github.com/zimbatm/h"]);
+    checkouts(tmp.path(), &["github.com/zimbatm/h"]);
     let want = tmp.path().join("github.com/zimbatm/h");
     for term in [
         "https://github.com/zimbatm/h",
@@ -313,7 +316,7 @@ fn github_urls_resolve_to_github_paths() {
 #[test]
 fn other_urls_resolve_under_their_host() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["gitlab.com/group/sub/proj"]);
+    checkouts(tmp.path(), &["gitlab.com/group/sub/proj"]);
     let want = tmp.path().join("gitlab.com/group/sub/proj");
     for term in [
         "https://gitlab.com/group/sub/proj",
@@ -926,7 +929,7 @@ fn clones_borrow_from_an_existing_store() {
 #[test]
 fn does_not_clone_existing_directories() {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(tmp.path(), &["example.com/proj"]);
+    checkouts(tmp.path(), &["example.com/proj"]);
     let git = FakeGit::install(tmp.path());
     let mut cmd = command(H);
     git.apply(&mut cmd);

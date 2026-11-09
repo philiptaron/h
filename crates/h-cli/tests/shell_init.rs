@@ -95,7 +95,7 @@ fn h_init_code_root_defaults() {
 
 fn code_tree() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
-    mkdirs(
+    checkouts(
         tmp.path(),
         &["github.com/owner/project", "github.com/owner/other", "gitlab.com/group/deep"],
     );
@@ -188,7 +188,7 @@ fn bash_h_store_runs_in_place() {
 #[test]
 fn bash_h_store_jumps_to_a_project_named_store() {
     let tmp = code_tree();
-    mkdirs(tmp.path(), &["github.com/owner/store"]);
+    checkouts(tmp.path(), &["github.com/owner/store"]);
     let out = run(bash(
         tmp.path(),
         r#"eval "$("$H_SHELL_INIT" --store "$ROOT/the-store" "$ROOT")"

@@ -565,7 +565,7 @@ mod tests {
     fn resolves_names_by_search() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("example.com/owner/proj");
-        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(project.join(".git")).unwrap();
         let res = resolve(tmp.path(), "proj", Casing::Local, not_asked);
         let remote = Some("example.com/owner/proj".into());
         assert_eq!(
@@ -578,7 +578,7 @@ mod tests {
     fn resolves_paths_by_search() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("git.kernel.org/pub/scm/torvalds/linux");
-        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(project.join(".git")).unwrap();
         let remote = Some("git.kernel.org/pub/scm/torvalds/linux".into());
         let want = Ok(Resolution { path: project, clone_url: None, remote, upstream_url: None });
         assert_eq!(resolve(tmp.path(), "scm/torvalds/linux", Casing::Local, not_asked), want);
@@ -605,7 +605,10 @@ mod tests {
     fn search_results_keep_git_suffix() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("example.com/bare.git");
-        fs::create_dir_all(&project).unwrap();
+        // A bare repository.
+        fs::create_dir_all(project.join("objects")).unwrap();
+        fs::create_dir_all(project.join("refs")).unwrap();
+        fs::write(project.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         let res = resolve(tmp.path(), "bare.git", Casing::Local, unknown);
         let remote = Some("example.com/bare.git".into());
         assert_eq!(

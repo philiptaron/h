@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.4.0 (2026-11-09)
+
+Tab completion that works: for paths of any depth, in any case, and for repositories on GitHub
+that are not cloned yet. Terms follow one rule wherever the checkout lives, and the store keeps
+an index of the projects so neither completion nor `h <name>` walks the code root each time.
+
+### Completion
+
+- **Completion works again, for paths of any depth, in any case.** It only offered the last names
+  of directories three levels down, matched in the case typed, so `nixos/m<Tab>`, and anything
+  else with a `/`, completed to nothing. The shell functions now ask the new `h complete`, which
+  completes the end of any project's path with as many names as were typed (`nixos/m<Tab>`,
+  `torvalds/li<Tab>`, `scm/torvalds/<Tab>`).
+  - Case is ignored, but each completion is spelled as the directory is, and those closest to the
+    case typed come first: `nixos/m` offers `nixos/mobile` before `NixOS/marketing`.
+  - A directory holding repositories, such as an owner, completes with a `/` and no space, ready
+    for the next name. One that shares its name with its repository (`alacritty`) is offered both
+    ways.
+  - A name several repositories share, typed in full, completes to a longer term for each:
+    `proj<Tab>` offers `x/proj` and `y/proj`, the one `h proj` goes to first. zsh steps through
+    them with each Tab; bash lists them, and steps through them where Tab is bound to readline's
+    `menu-complete` (with `menu-complete-display-prefix` on, the first Tab still lists).
+- **`owner/<Tab>` offers the owner's repositories on GitHub.** With a store, completing
+  `owner/start` or `github.com/owner/start` also offers what the owner has on GitHub that is not
+  checked out, spelled as GitHub spells it, after the checkouts; choosing one clones it. zsh lists
+  the two under "checked out" and "on GitHub".
+  - The list is asked for with the identity's token, through GitHub's GraphQL API, so an
+    organization's private and internal repositories are in it, and the identity's own private
+    ones. Without a token, the REST API lists public repositories.
+  - It is kept in the store (`<store>/h/github/<owner>`) for a day, and fetched again in the
+    background once older. An owner GitHub does not know is kept as such, so the likes of `pub/`
+    do not ask GitHub on every Tab.
+  - The first completion of an owner waits up to ten seconds, with a spinner after the cursor
+    when the cursor is at the end of the line. Ctrl-C stops waiting and leaves the line as it
+    was; the list still arrives for the next Tab.
+  - Completion lists as many of an owner's repositories as eight seconds allow, the most recently
+    pushed to first. `h store maintain daily` lists every kept owner in full.
+- **bash keeps `h complete`'s order** where it can (bash 4.4 and later), rather than sorting it.
+
+### Terms
+
+- **One rule finds every term, in any case.** A term is a project's name or the end of its path,
+  with as many names as you like, and it goes to the checkout whose path ends that way wherever
+  it lives: `torvalds/linux` finds `git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux`, and
+  `gitlab.com/group/sub/project` works where it used to be an unknown pattern. Checkouts at any
+  depth are found, where the search used to stop three levels down.
+  - Every term matches in any case. One with a capital letter prefers projects in its own case;
+    then the deepest wins, then one in the term's case, then the first in sorted order. Before,
+    a term with a capital letter had to match exactly, so `MYPROJ` found nothing at all.
+  - `user/repo` is a term like any other until no checkout matches; only then is GitHub asked
+    and the repository cloned. So `h torvalds/linux` goes to git.kernel.org's checkout, and a
+    GitHub `user/repo` checked out elsewhere is found without asking GitHub.
+  - **A trailing `/` names the directory holding repositories**, so `h alacritty/` goes to the
+    owner, where `h alacritty` goes to github.com/alacritty/alacritty.
+  - **`github.com/user/repo` means GitHub's `user/repo`**, cloned when it is not checked out, as
+    `user/repo` is.
+- **Only repositories and the directories holding them are projects.** The search does not look
+  inside a repository, nor list directories with none in them, so a virtualenv no longer puts
+  `pip` and `__pycache__` among the completions, and `h pip` does not jump into it.
+
+### The object store
+
+- **An index of the projects.** With a store, `h` keeps what it finds under the code root in
+  `<store>/h/projects`, which git ignores, so completion and `h <name>` need not walk the code
+  root each time. A clone updates it, and a checkout made or removed some other way is noticed
+  the first time the index cannot answer, when the code root is walked again.
+- **`h store maintain` keeps h's own files fresh.** On every schedule it rewrites the index, for
+  the code root it was written for; daily, it lists every kept owner's repositories on GitHub
+  again, in full, however long that takes. Run from a timer without git options, it finds the
+  token with the store's own `credential.*` settings. An owner that cannot be listed is named and
+  keeps its old list; the rest are still done.
+- **The GitHub token is asked for once a run.** `h store add` with several private repositories
+  asked the credential helpers once for each.
+
+### Under the hood
+
+- **Tests** no longer reach the network: git in the tests may only use `file://` and the mock
+  servers' plain `http://`, so a test that fell through to cloning the real torvalds/linux now
+  fails at once instead of hanging. The tests' fake git is written once, which fixes a rare
+  "Text file busy" failure.
+- **Tests:** 298 unit and end-to-end tests.
+
 ## 0.3.6 (2026-11-03)
 
 Shorter, clearer failures, and nothing left behind when a clone fails.

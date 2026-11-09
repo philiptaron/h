@@ -17,10 +17,10 @@ use h_git::git::{GitError, config_pairs};
 use h_git::github;
 use h_git::hook;
 use h_git::ingest;
+use h_git::projects::Projects;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
 };
-use h_git::search::list_completions;
 use h_git::store::{FetchReport, Store};
 use h_git::submodules::SubmoduleOptions;
 
@@ -320,7 +320,7 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
     };
-    for term in list_completions(&config.root, word) {
+    for term in Projects::walk(&config.root).list_completions(word) {
         println!("{term}");
     }
     ExitCode::SUCCESS

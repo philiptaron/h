@@ -5,7 +5,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use crate::github::Answer;
-use crate::search::search;
+use crate::projects::Projects;
 
 /// What a search term refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,9 +217,9 @@ pub fn find_github_dir(
     found.into_iter().nth(exact.unwrap_or(0))
 }
 
-/// Search `code_root` for the directory `term` names, as [`search`] does.
+/// Search `code_root` for the project `term` names, as [`Projects::find`] does.
 fn search_code_root(code_root: &Path, term: &str) -> Option<Resolution> {
-    let path = search(code_root, term)?;
+    let path = Projects::walk(code_root).find(term)?;
     let remote = path.strip_prefix(code_root).ok().and_then(|p| p.to_str()).map(escape_name);
     Some(Resolution { path, clone_url: None, remote, upstream_url: None })
 }

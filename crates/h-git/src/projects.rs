@@ -1,4 +1,4 @@
-//! Searching the code root for a project directory by name.
+//! The project directories under a code root, and finding them by search term.
 
 use std::ffi::OsString;
 use std::fs;
@@ -8,83 +8,91 @@ use std::path::{Path, PathBuf};
 
 use crate::resolve::is_simple_name;
 
-/// Find the directory `term` names below `root`, at any depth.
+/// The directories under a code root that a term can name.
 ///
-/// A term is a name, or several joined by `/`, and names each directory whose path ends in those
-/// segments: any directory can be where it starts, so `nixos/nixpkgs` names
-/// `github.com/NixOS/nixpkgs`. The match is case-insensitive unless `term` contains an uppercase
-/// letter. Hidden directories are skipped, and so is everything inside a repository. Deeper
-/// matches win, since `<domain>/<owner>/<repo>` is the usual layout; among matches at the same
-/// depth, the first in sorted order wins.
-pub fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
-    let root = root.as_ref();
-    let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
-    let same = |name: &[u8], wanted: &str| match case_sensitive {
-        true => name == wanted.as_bytes(),
-        false => name.eq_ignore_ascii_case(wanted.as_bytes()),
-    };
-    let wanted: Vec<&str> = term.split('/').collect();
-    let mut best: Option<&Vec<OsString>> = None;
-    let projects = list_projects(root);
-    for segments in &projects {
-        let Some(tail) = segments.len().checked_sub(wanted.len()).map(|i| &segments[i..]) else {
-            continue;
-        };
-        let matches = tail.iter().zip(&wanted).all(|(name, wanted)| same(name.as_bytes(), wanted));
-        if matches && best.is_none_or(|b| segments.len() > b.len()) {
-            best = Some(segments);
+/// Hidden directories are left out. A repository is in, but not what is inside it: its own
+/// directories are not projects, and leaving them out keeps the walk small however deep the code
+/// root goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Projects {
+    root: PathBuf,
+    /// Each directory's path relative to `root`, split into segments, in sorted order.
+    paths: Vec<Vec<OsString>>,
+}
+
+impl Projects {
+    /// Walk `root` for its projects. Symbolic links are followed, except back into a directory
+    /// the walk is already in. A missing `root` has none.
+    pub fn walk(root: impl AsRef<Path>) -> Projects {
+        let root = root.as_ref().to_path_buf();
+        let mut paths = Vec::new();
+        if let Ok(meta) = fs::metadata(&root) {
+            let mut ancestors = vec![(meta.dev(), meta.ino())];
+            walk(&root, &mut Vec::new(), &mut ancestors, &mut paths);
         }
+        Projects { root, paths }
     }
-    best.map(|segments| segments.iter().fold(root.to_path_buf(), |path, s| path.join(s)))
-}
 
-/// List the terms that complete `word` to a directory below `root`, best first.
-///
-/// Each is the end of a directory's path, with as many segments as `word` has, spelled as the
-/// directory is: every segment of `word` but the last is a whole segment of it, and the last
-/// starts the last. Case is ignored, so `nixos/n` completes to `NixOS/nixpkgs`. The terms with
-/// the fewest letters whose case differs from `word` come first, then the rest in sorted order.
-/// Directories are the ones [`search`] looks through, and only those spelled as a term can be
-/// are offered.
-pub fn list_completions(root: impl AsRef<Path>, word: &str) -> Vec<String> {
-    let wanted = word.split('/').count();
-    let mut found: Vec<(usize, String)> = list_projects(root)
-        .into_iter()
-        .filter_map(|segments| {
-            let tail = &segments[segments.len().checked_sub(wanted)?..];
-            let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
-            if !tail.iter().all(|s| is_simple_name(s)) {
-                return None;
+    /// Find the directory `term` names.
+    ///
+    /// A term is a name, or several joined by `/`, and names each directory whose path ends in
+    /// those segments: any directory can be where it starts, so `nixos/nixpkgs` names
+    /// `github.com/NixOS/nixpkgs`. The match is case-insensitive unless `term` contains an
+    /// uppercase letter. Deeper matches win, since `<domain>/<owner>/<repo>` is the usual layout;
+    /// among matches at the same depth, the first in sorted order wins.
+    pub fn find(&self, term: &str) -> Option<PathBuf> {
+        let case_sensitive = term.bytes().any(|b| b.is_ascii_uppercase());
+        let same = |name: &[u8], wanted: &str| match case_sensitive {
+            true => name == wanted.as_bytes(),
+            false => name.eq_ignore_ascii_case(wanted.as_bytes()),
+        };
+        let wanted: Vec<&str> = term.split('/').collect();
+        let mut best: Option<&Vec<OsString>> = None;
+        for segments in &self.paths {
+            let Some(tail) = segments.len().checked_sub(wanted.len()).map(|i| &segments[i..])
+            else {
+                continue;
+            };
+            let matches =
+                tail.iter().zip(&wanted).all(|(name, wanted)| same(name.as_bytes(), wanted));
+            if matches && best.is_none_or(|b| segments.len() > b.len()) {
+                best = Some(segments);
             }
-            let term = tail.join("/");
-            let start = term.as_bytes().get(..word.len())?;
-            if !start.eq_ignore_ascii_case(word.as_bytes()) {
-                return None;
-            }
-            let differences = start.iter().zip(word.as_bytes()).filter(|(a, b)| a != b).count();
-            Some((differences, term))
-        })
-        .collect();
-    found.sort();
-    found.dedup();
-    found.into_iter().map(|(_, term)| term).collect()
-}
+        }
+        best.map(|segments| segments.iter().fold(self.root.clone(), |path, s| path.join(s)))
+    }
 
-/// List the directories below `root` a term can name, each as its path relative to `root` split
-/// into segments, in sorted order.
-///
-/// Hidden directories are skipped. A repository is listed, but not what is inside it: its own
-/// directories are not projects, and skipping them keeps the walk small however deep the code
-/// root goes. Symbolic links are followed, except back into a directory the walk is already in.
-fn list_projects(root: impl AsRef<Path>) -> Vec<Vec<OsString>> {
-    let root = root.as_ref();
-    let mut found = Vec::new();
-    let Ok(meta) = fs::metadata(root) else {
-        return found;
-    };
-    let mut ancestors = vec![(meta.dev(), meta.ino())];
-    walk(root, &mut Vec::new(), &mut ancestors, &mut found);
-    found
+    /// List the terms that complete `word`, best first.
+    ///
+    /// Each is the end of a project's path, with as many segments as `word` has, spelled as the
+    /// directory is: every segment of `word` but the last is a whole segment of it, and the last
+    /// starts the last. Case is ignored, so `nixos/n` completes to `NixOS/nixpkgs`. The terms
+    /// with the fewest letters whose case differs from `word` come first, then the rest in sorted
+    /// order. Only what can be spelled as a term is offered.
+    pub fn list_completions(&self, word: &str) -> Vec<String> {
+        let wanted = word.split('/').count();
+        let mut found: Vec<(usize, String)> = self
+            .paths
+            .iter()
+            .filter_map(|segments| {
+                let tail = &segments[segments.len().checked_sub(wanted)?..];
+                let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
+                if !tail.iter().all(|s| is_simple_name(s)) {
+                    return None;
+                }
+                let term = tail.join("/");
+                let start = term.as_bytes().get(..word.len())?;
+                if !start.eq_ignore_ascii_case(word.as_bytes()) {
+                    return None;
+                }
+                let differences = start.iter().zip(word.as_bytes()).filter(|(a, b)| a != b).count();
+                Some((differences, term))
+            })
+            .collect();
+        found.sort();
+        found.dedup();
+        found.into_iter().map(|(_, term)| term).collect()
+    }
 }
 
 fn walk(
@@ -134,6 +142,14 @@ fn is_repository(names: &[OsString]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
+        Projects::walk(root).find(term)
+    }
+
+    fn list_completions(root: impl AsRef<Path>, word: &str) -> Vec<String> {
+        Projects::walk(root).list_completions(word)
+    }
 
     fn tree(dirs: &[&str]) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();

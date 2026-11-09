@@ -1005,6 +1005,61 @@ fn completion_offers_repositories_on_github() {
     assert_eq!(api.requests().len(), asked + 2);
 }
 
+#[test]
+fn completion_waits_for_github_with_a_spinner_when_it_can() {
+    let sb = Sandbox::new();
+    sb.ok(&["init"]);
+    let root = sb.tmp.path().join("code");
+    // A GitHub slow enough to wait on.
+    let api = MockGitHub::serve(|path, _| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        match path.split_once('?') {
+            Some(("/orgs/slow/repos" | "/orgs/slower/repos", _)) => {
+                (200, repo_list("Slow", &["repo".into()]))
+            }
+            _ => (404, r#"{"message": "Not Found"}"#.into()),
+        }
+    });
+    let complete = |args: &[&str]| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        cmd.current_dir(sb.root()).env("H_GITHUB_API", &api.url).env("LANG", "C.UTF-8");
+        cmd.arg("--root").arg(&root).arg("--store").arg(&sb.store);
+        let out = run(cmd.arg("complete").args(args).arg("--"));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout
+    };
+
+    // Waited for without a spinner, when there is nowhere to draw it.
+    assert_eq!(complete(&["slow/"]), "\nSlow/repo\n");
+    let tty = sb.tmp.path().join("tty");
+    fs::write(&tty, "").unwrap();
+    let out = complete(&["--progress-to", tty.to_str().unwrap(), "slower/"]);
+    assert_eq!(out, "\nSlow/repo\n", "waited for");
+    let drawn = fs::read_to_string(&tty).unwrap();
+    assert!(
+        drawn.starts_with("\x1b7\x1b[?7l ⠋ asking GitHub about slower…\x1b[?7h\x1b8"),
+        "{drawn:?}"
+    );
+    assert!(drawn.ends_with("\x1b[K"), "wiped: {drawn:?}");
+    // Ctrl-C while the spinner is up stops the wait, but wipes the spinner first.
+    fs::write(&tty, "").unwrap();
+    let mut cmd = command(H);
+    isolate_git(&mut cmd, sb.root());
+    cmd.current_dir(sb.root()).env("H_GITHUB_API", &api.url);
+    cmd.arg("--root").arg(&root).arg("--store").arg(&sb.store);
+    cmd.args(["complete", "--progress-to", tty.to_str().unwrap(), "slowest/", "--"]);
+    let child = cmd.stdout(std::process::Stdio::piped()).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let kill = std::process::Command::new("kill").args(["-INT", &child.id().to_string()]).status();
+    assert!(kill.unwrap().success());
+    let out = child.wait_with_output().unwrap();
+    assert_eq!((out.status.code(), out.stdout.as_slice()), (Some(130), &b""[..]));
+    let drawn = fs::read_to_string(&tty).unwrap();
+    assert!(drawn.contains("asking GitHub about slowest"), "{drawn:?}");
+    assert!(drawn.ends_with("\x1b[K"), "wiped: {drawn:?}");
+}
+
 /// Publish a bare repository of `commits` commits, unrelated to any other, at `url`.
 fn publish_history(sb: &Sandbox, url: &str, commits: usize) {
     let dir = sb.tmp.path().join("src/history.git");

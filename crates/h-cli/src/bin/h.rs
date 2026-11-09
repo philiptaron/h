@@ -8,10 +8,12 @@
 use std::cell::OnceCell;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
+use h_cli::spinner::{Spinner, catch_interrupts, is_interrupted, is_utf8_locale};
 use h_core::args::split_words;
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
 use h_core::path::expand_tilde;
@@ -329,8 +331,12 @@ fn find_shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> 
     resolution.remote.clone().into_iter().chain(parent).map(in_store).collect()
 }
 
-/// How long a completion waits for GitHub when nothing of an owner's repositories is kept yet.
-const LISTING_WAIT: Duration = Duration::from_millis(1500);
+/// How long a completion waits for GitHub when nothing of an owner's repositories is kept yet,
+/// which is only the first time it completes that owner: afterwards what is kept answers at once.
+const LISTING_WAIT: Duration = Duration::from_secs(10);
+
+/// How long a completion waits before showing a spinner, so a quick answer does not flicker.
+const SPINNER_DELAY: Duration = Duration::from_millis(150);
 
 /// How long a refresh of a listing may take before another is started in its place.
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -339,17 +345,21 @@ const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
 /// projects', and then, with a store, those of the owner's repositories on GitHub that are not
 /// among them, after a blank line that sets them apart.
 ///
+/// With `--progress-to <terminal>` (none when empty), a spinner is drawn there while waiting
+/// for GitHub; see [`Spinner`].
+///
 /// `h complete --refresh <owner>`, which completion starts in the background, asks GitHub for the
 /// owner's repositories and keeps them in the store.
 fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
-    if let [flag, owner] = args
-        && flag == "--refresh"
-    {
-        return refresh_listing(config, &owner.to_string_lossy());
-    }
-    let [word] = args else {
-        return fail("Usage: h complete <word>");
+    let (progress, word) = match args {
+        [flag, owner] if flag == "--refresh" => {
+            return refresh_listing(config, &owner.to_string_lossy());
+        }
+        [flag, tty, word] if flag == "--progress-to" => (Some(Path::new(tty)), word),
+        [word] => (None, word),
+        _ => return fail("Usage: h complete [--progress-to <terminal>] <word>"),
     };
+    let progress = progress.filter(|tty| !tty.as_os_str().is_empty());
     // A word that is not UTF-8 cannot start a term.
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
@@ -359,7 +369,7 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let mut on_github = Vec::new();
     if let Some(store) = store
         && let Some(github) = GitHubWord::parse(word)
-        && let Some(repos) = read_github_repos(config, store, github.owner)
+        && let Some(repos) = read_github_repos(config, store, github.owner, progress)
     {
         let is_new = |term: &String| !checkouts.iter().any(|t| t.eq_ignore_ascii_case(term));
         on_github = github.list_completions(&repos).into_iter().filter(is_new).collect();
@@ -378,8 +388,14 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
 
 /// Read what `store` keeps of `owner`'s repositories on GitHub. When it is out of date, GitHub
 /// is asked again in the background, for the next completion; when there is nothing yet, this
-/// one waits for the answer, but only for [`LISTING_WAIT`].
-fn read_github_repos(config: &Config, store: &Store, owner: &str) -> Option<github::OwnerRepos> {
+/// one waits for the answer, but only for [`LISTING_WAIT`], with a spinner on `progress`, the
+/// terminal, when there is one.
+fn read_github_repos(
+    config: &Config,
+    store: &Store,
+    owner: &str,
+    progress: Option<&Path>,
+) -> Option<github::OwnerRepos> {
     let path = store.github_listing(owner);
     let kept = match read_listing(&path) {
         Some(kept) => {
@@ -390,20 +406,36 @@ fn read_github_repos(config: &Config, store: &Store, owner: &str) -> Option<gith
         }
         None => {
             start_refresh(config, store, owner);
+            let mut tty =
+                progress.and_then(|tty| fs::OpenOptions::new().write(true).open(tty).ok());
+            let mut spinner = None;
             let started = Instant::now();
-            loop {
+            for round in 1.. {
                 std::thread::sleep(Duration::from_millis(25));
                 let kept = read_listing(&path);
                 if kept.is_some() || started.elapsed() > LISTING_WAIT {
-                    break kept;
+                    return kept.and_then(|kept| kept.listing.into_repos());
+                }
+                if started.elapsed() > SPINNER_DELAY
+                    && let Some(tty) = tty.take()
+                {
+                    catch_interrupts();
+                    let message = format!("asking GitHub about {owner}…");
+                    spinner = Some(Spinner::new(tty, &message, is_utf8_locale()));
+                }
+                if is_interrupted() {
+                    drop(spinner); // wipes it
+                    std::process::exit(130);
+                }
+                // A frame every 100ms.
+                if let Some(spinner) = spinner.as_mut().filter(|_| round % 4 == 0) {
+                    spinner.tick();
                 }
             }
+            unreachable!("the wait ends")
         }
     };
-    match kept?.listing {
-        Listing::Repos(repos) => Some(repos),
-        Listing::NoSuchOwner => None,
-    }
+    kept?.listing.into_repos()
 }
 
 /// The file that marks a refresh of the listing at `path` as under way.
@@ -434,8 +466,9 @@ fn start_refresh(config: &Config, store: &Store, owner: &str) {
     cmd.arg("--root").arg(&config.root).arg("--store").arg(&store.path);
     cmd.args(["complete", "--refresh", owner, "--"]).args(&config.git_opts);
     // Nothing of it reaches the terminal, and the shell, reading what completion prints, does
-    // not wait for it.
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // not wait for it. In a process group of its own, it lives through a Ctrl-C that gives up on
+    // the completion waiting for it, so the next completion has the answer.
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
     if cmd.spawn().is_err() {
         let _ = fs::remove_file(&marker);
     }

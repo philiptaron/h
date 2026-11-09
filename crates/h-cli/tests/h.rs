@@ -147,7 +147,10 @@ fn completes_words() {
     let out = complete("nope/");
     assert_eq!((out.code, out.stdout.as_str()), (Some(0), ""));
     let out = run(command(H).arg("--root").arg(tmp.path()).arg("complete"));
-    assert_eq!((out.code, out.stderr.as_str()), (Some(1), "Usage: h complete <word>\n"));
+    assert_eq!(
+        (out.code, out.stderr.as_str()),
+        (Some(1), "Usage: h complete [--progress-to <terminal>] <word>\n")
+    );
 }
 
 #[test]

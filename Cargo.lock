@@ -112,6 +112,7 @@ version = "0.3.6"
 dependencies = [
  "h-core",
  "h-git",
+ "libc",
  "tempfile",
 ]
 

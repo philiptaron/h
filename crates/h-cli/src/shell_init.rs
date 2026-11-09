@@ -112,15 +112,20 @@ pub fn render_h_init(
     // they are, since only matching terms are listed. A term ending in `/` gets no space after
     // it, so the next segment can follow. A blank line sets the repositories only on GitHub apart
     // from the checkouts: zsh lists them under a heading of their own, and bash, splitting on
-    // newlines, never sees it. `h complete` gets the store and identity `h` itself
+    // newlines, never sees it. While `h complete` waits for GitHub it draws a spinner after the
+    // cursor, which it can wipe without a trace only when nothing follows the cursor on the line;
+    // so `/dev/tty` is passed for it only then. `h complete` gets the store and identity `h` itself
     // gets; whatever it says on stderr would only garble the command line.
-    let complete = |word: &str| format!("{common} complete \"{word}\"{tail} 2>/dev/null");
+    let complete = |word: &str| {
+        format!("{common} complete --progress-to \"$tty\" \"{word}\"{tail} 2>/dev/null")
+    };
     let (zsh_complete, bash_complete) =
         (complete("$PREFIX"), complete("${COMP_WORDS[COMP_CWORD]}"));
     match shell {
         Shell::Zsh => out.push_str(&format!(
             "_{name}_complete() {{\n\
-             \x20 local term\n\
+             \x20 local term tty=\n\
+             \x20 (( CURSOR == ${{#BUFFER}} )) && tty=/dev/tty\n\
              \x20 local -a group=(-V checkouts -X 'checked out')\n\
              \x20 for term in \"${{(@f)$({zsh_complete})}}\"; do\n\
              \x20   if [[ -z $term ]]; then\n\
@@ -136,7 +141,8 @@ pub fn render_h_init(
         )),
         Shell::Bash => out.push_str(&format!(
             "_{name}_complete() {{\n\
-             \x20 local IFS=$'\\n'\n\
+             \x20 local IFS=$'\\n' tty=\n\
+             \x20 (( COMP_POINT == ${{#COMP_LINE}} )) && tty=/dev/tty\n\
              \x20 COMPREPLY=($({bash_complete}))\n\
              \x20 if [[ ${{#COMPREPLY[@]}} -eq 1 && ${{COMPREPLY[0]}} == */ ]]; then\n\
              \x20   compopt -o nospace 2>/dev/null\n\
@@ -274,8 +280,9 @@ mod tests {
         assert_eq!(
             completion,
             r#"_h_complete() {
-  local IFS=$'\n'
-  COMPREPLY=($(command /bin/h --root "/code" complete "${COMP_WORDS[COMP_CWORD]}" 2>/dev/null))
+  local IFS=$'\n' tty=
+  (( COMP_POINT == ${#COMP_LINE} )) && tty=/dev/tty
+  COMPREPLY=($(command /bin/h --root "/code" complete --progress-to "$tty" "${COMP_WORDS[COMP_CWORD]}" 2>/dev/null))
   if [[ ${#COMPREPLY[@]} -eq 1 && ${COMPREPLY[0]} == */ ]]; then
     compopt -o nospace 2>/dev/null
   fi
@@ -290,7 +297,7 @@ complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
         let opts =
             HInitOptions { git_opts: "-c credential.username=Me".into(), ..Default::default() };
         let out = render_h_init(&opts, "/bin/h", "/code", Some("/store"), Shell::Bash);
-        let want = r#"COMPREPLY=($(command /bin/h --root "/code" --store "/store" complete "${COMP_WORDS[COMP_CWORD]}" -- -c credential.username=Me 2>/dev/null))"#;
+        let want = r#"COMPREPLY=($(command /bin/h --root "/code" --store "/store" complete --progress-to "$tty" "${COMP_WORDS[COMP_CWORD]}" -- -c credential.username=Me 2>/dev/null))"#;
         assert!(out.contains(want), "{out}");
     }
 
@@ -302,9 +309,10 @@ complete -o nosort -F _h_complete h 2>/dev/null || complete -F _h_complete h
         assert_eq!(
             completion,
             r#"_j_complete() {
-  local term
+  local term tty=
+  (( CURSOR == ${#BUFFER} )) && tty=/dev/tty
   local -a group=(-V checkouts -X 'checked out')
-  for term in "${(@f)$(command /bin/h --root "/code" complete "$PREFIX" 2>/dev/null)}"; do
+  for term in "${(@f)$(command /bin/h --root "/code" complete --progress-to "$tty" "$PREFIX" 2>/dev/null)}"; do
     if [[ -z $term ]]; then
       group=(-V github -X 'on GitHub')
     elif [[ $term == */ ]]; then

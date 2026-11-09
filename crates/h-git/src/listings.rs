@@ -25,6 +25,16 @@ pub enum Listing {
     NoSuchOwner,
 }
 
+impl Listing {
+    /// The repositories listed, if the owner has any.
+    pub fn into_repos(self) -> Option<OwnerRepos> {
+        match self {
+            Listing::Repos(repos) => Some(repos),
+            Listing::NoSuchOwner => None,
+        }
+    }
+}
+
 /// A listing read back, and whether it is younger than [`FRESH_FOR`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kept {

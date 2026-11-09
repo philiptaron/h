@@ -9,7 +9,7 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 /// An API address where nothing listens, so GitHub lookups fail fast without touching the network.
@@ -129,24 +129,41 @@ pub struct FakeGit {
     pub log: PathBuf,
 }
 
+/// The fake git's script.
+const FAKE_GIT: &str = "#!/bin/sh\n\
+    case \" $* \" in *' credential fill '*) exit 1 ;; esac\n\
+    { for arg; do printf '%s\\n' \"$arg\"; done; echo; } >> \"$FAKE_GIT_LOG\"\n\
+    printf '%s\\n' \"${FAKE_GIT_STDOUT-fake git stdout}\"\n\
+    for last; do :; done\n\
+    [ -n \"$FAKE_GIT_MKDIR\" ] && mkdir -p \"$last\"\n\
+    exit \"${FAKE_GIT_EXIT:-0}\"\n";
+
+/// The directory holding the fake git, which every test shares.
+///
+/// The script is written once, and not at all when it is already there, since writing it is a
+/// race: a test that forks while it is open for writing holds it open until its child execs, and
+/// running it before then fails with "Text file busy". It is written aside and renamed into
+/// place, so that no test ever runs a script half written.
+fn fake_git_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fake-bin");
+        let git = dir.join("git");
+        if fs::read_to_string(&git).ok().as_deref() != Some(FAKE_GIT) {
+            fs::create_dir_all(&dir).unwrap();
+            let written = dir.join(format!("git.{}", std::process::id()));
+            fs::write(&written, FAKE_GIT).unwrap();
+            fs::set_permissions(&written, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::rename(&written, &git).unwrap();
+        }
+        dir
+    })
+}
+
 impl FakeGit {
+    /// A fake git whose invocations are recorded in `dir`.
     pub fn install(dir: &Path) -> FakeGit {
-        let bin_dir = dir.join("fake-bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        let git = bin_dir.join("git");
-        fs::write(
-            &git,
-            "#!/bin/sh\n\
-             case \" $* \" in *' credential fill '*) exit 1 ;; esac\n\
-             { for arg; do printf '%s\\n' \"$arg\"; done; echo; } >> \"$FAKE_GIT_LOG\"\n\
-             printf '%s\\n' \"${FAKE_GIT_STDOUT-fake git stdout}\"\n\
-             for last; do :; done\n\
-             [ -n \"$FAKE_GIT_MKDIR\" ] && mkdir -p \"$last\"\n\
-             exit \"${FAKE_GIT_EXIT:-0}\"\n",
-        )
-        .unwrap();
-        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
-        FakeGit { bin_dir, log: dir.join("fake-git.log") }
+        FakeGit { bin_dir: fake_git_dir().to_path_buf(), log: dir.join("fake-git.log") }
     }
 
     /// Put the fake git first on the command's `PATH`.

@@ -619,7 +619,9 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let tmp = tempfile::tempdir().unwrap();
         let odd = OsStr::from_bytes(b"caf\xe9 dir");
-        fs::create_dir_all(tmp.path().join(odd).join("proj/.git")).unwrap();
+        if fs::create_dir_all(tmp.path().join(odd).join("proj/.git")).is_err() {
+            return; // a filesystem that only takes UTF-8 names, such as macOS's, cannot hold it
+        }
         let index = tmp.path().join("index");
         let walked = walk_root(tmp.path());
         write_index(&index, tmp.path(), &walked).unwrap();

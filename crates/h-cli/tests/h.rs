@@ -774,6 +774,14 @@ fn forks_push_to_the_remote_the_clone_has() {
 }
 
 #[test]
+fn tests_cannot_clone_over_the_network() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = go(tmp.path(), "zimbatm/h");
+    assert_eq!(out.code, Some(128), "{out:?}");
+    assert!(out.stderr.contains("transport 'https' not allowed"), "{out:?}");
+}
+
+#[test]
 fn clones_other_urls_verbatim() {
     let tmp = tempfile::tempdir().unwrap();
     let git = FakeGit::install(tmp.path());

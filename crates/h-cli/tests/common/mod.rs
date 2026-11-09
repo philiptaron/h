@@ -16,7 +16,9 @@ use std::thread;
 pub const UNREACHABLE_API: &str = "http://127.0.0.1:1";
 
 /// A command with an environment insulated from the user's: no proxies, no direnv, no real
-/// GitHub, no code root or store from the user's shell, and none of the variables that tie git
+/// GitHub (its API, or git over HTTPS: only `file://` and the mock servers' plain `http://` are
+/// allowed, so a clone that was meant to be local fails at once instead of fetching from the
+/// internet), no code root or store from the user's shell, and none of the variables that tie git
 /// to a repository, as a hook or `git rebase --exec` would have them, `git -c` settings included.
 /// Git sees none of the user's configuration either, so no test asks their credential helpers
 /// for a GitHub token; [`isolate_git`] gives it a configuration of its own.
@@ -41,6 +43,7 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         cmd.env_remove(var);
     }
     cmd.env("H_GITHUB_API", UNREACHABLE_API)
+        .env("GIT_ALLOW_PROTOCOL", "file:http")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd

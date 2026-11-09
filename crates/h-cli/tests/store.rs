@@ -928,6 +928,83 @@ fn the_store_keeps_an_index_of_the_projects() {
     assert_eq!(run(sb.git(&sb.store).args(["fsck", "--no-progress"])).code, Some(0));
 }
 
+/// A GitHub list of `owner`'s repositories named `names`.
+fn repo_list(owner: &str, names: &[String]) -> String {
+    let repos: Vec<String> = names
+        .iter()
+        .map(|name| format!(r#"{{"name": "{name}", "owner": {{"login": "{owner}"}}}}"#))
+        .collect();
+    format!("[{}]", repos.join(","))
+}
+
+#[test]
+fn completion_offers_repositories_on_github() {
+    let sb = Sandbox::new();
+    sb.ok(&["init"]);
+    let root = sb.tmp.path().join("code");
+    checkouts(&root, &["github.com/NixOS/nix"]);
+    // NixOS has two pages of repositories, the first full; SomeOne is a user, not an
+    // organization; nobody is no one.
+    let mut first: Vec<String> = (0..98).map(|i| format!("r{i:02}")).collect();
+    first.extend(["nix".into(), "nixpkgs".into()]);
+    let api = MockGitHub::serve(move |path, _| {
+        let list = |owner, names: &[String]| (200, repo_list(owner, names));
+        match path.split_once('?') {
+            Some(("/orgs/nixos/repos", "per_page=100&page=1")) => list("NixOS", &first),
+            Some(("/orgs/nixos/repos", "per_page=100&page=2")) => {
+                list("NixOS", &["nixpkgs-vet".into()])
+            }
+            Some(("/users/someone/repos", "per_page=100&page=1")) => {
+                list("SomeOne", &["dotfiles".into()])
+            }
+            _ => (404, r#"{"message": "Not Found"}"#.into()),
+        }
+    });
+    let complete = |word: &str| {
+        let mut cmd = command(H);
+        isolate_git(&mut cmd, sb.root());
+        cmd.current_dir(sb.root()).env("H_GITHUB_API", &api.url);
+        cmd.arg("--root").arg(&root).arg("--store").arg(&sb.store);
+        let out = run(cmd.args(["complete", word, "--"]));
+        assert_eq!(out.code, Some(0), "{out:?}");
+        out.stdout
+    };
+
+    // The checkout first, then what is only on GitHub, spelled as GitHub spells it.
+    let want = "NixOS/nix\nNixOS/nixpkgs\nNixOS/nixpkgs-vet\n";
+    assert_eq!(complete("nixos/nix"), want);
+    assert_eq!(api.requests().len(), 2, "both pages");
+    assert_eq!(
+        complete("github.com/NixOS/nixpkgs"),
+        "github.com/NixOS/nixpkgs\ngithub.com/NixOS/nixpkgs-vet\n"
+    );
+    assert_eq!(complete("someone/"), "SomeOne/dotfiles\n");
+    assert_eq!(complete("nobody/"), "");
+    let asked = api.requests().len();
+    assert_eq!(asked, 6, "an organization, then a user, for each of someone and nobody");
+    // What was listed is kept, nobody's absence too, so GitHub is not asked again.
+    assert_eq!(complete("nixos/nixpkgs-v"), "NixOS/nixpkgs-vet\n");
+    assert_eq!(complete("nobody/x"), "");
+    // Nor about what cannot be a GitHub owner.
+    assert_eq!(complete("example.com/"), "");
+    assert_eq!(api.requests().len(), asked);
+
+    // A day later, what was kept still answers at once, and GitHub is asked again behind it.
+    let listing = sb.store.join("h/github/someone");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(25 * 60 * 60);
+    fs::File::options().write(true).open(&listing).unwrap().set_modified(old).unwrap();
+    assert_eq!(complete("someone/"), "SomeOne/dotfiles\n");
+    let fresh = || fs::metadata(&listing).unwrap().modified().unwrap() > old;
+    for _ in 0..200 {
+        if fresh() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(fresh(), "refreshed in the background");
+    assert_eq!(api.requests().len(), asked + 2);
+}
+
 /// Publish a bare repository of `commits` commits, unrelated to any other, at `url`.
 fn publish_history(sb: &Sandbox, url: &str, commits: usize) {
     let dir = sb.tmp.path().join("src/history.git");

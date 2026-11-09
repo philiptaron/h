@@ -8,6 +8,7 @@ pub mod git;
 pub mod github;
 pub mod hook;
 pub mod ingest;
+pub mod listings;
 pub mod projects;
 pub mod resolve;
 pub mod store;

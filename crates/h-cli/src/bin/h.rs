@@ -7,8 +7,10 @@
 
 use std::cell::OnceCell;
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 use h_core::args::split_words;
 use h_core::output::{fail, fail_with_cwd, print_cwd, print_path};
@@ -18,6 +20,7 @@ use h_git::git::{GitError, config_pairs};
 use h_git::github;
 use h_git::hook;
 use h_git::ingest;
+use h_git::listings::{GitHubWord, Listing, read_listing, write_listing};
 use h_git::projects::Projects;
 use h_git::resolve::{
     Casing, Resolution, Target, escape_segment, parse_term, remote_name, resolve,
@@ -326,8 +329,24 @@ fn find_shared_upstreams(store: &Store, resolution: &Resolution) -> Vec<String> 
     resolution.remote.clone().into_iter().chain(parent).map(in_store).collect()
 }
 
-/// `h complete <word>`: print the terms that complete `word`, one per line, best first.
+/// How long a completion waits for GitHub when nothing of an owner's repositories is kept yet.
+const LISTING_WAIT: Duration = Duration::from_millis(1500);
+
+/// How long a refresh of a listing may take before another is started in its place.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `h complete <word>`: print the terms that complete `word`, one per line, best first: the
+/// projects', and then, with a store, those of the owner's repositories on GitHub that are not
+/// among them.
+///
+/// `h complete --refresh <owner>`, which completion starts in the background, asks GitHub for the
+/// owner's repositories and keeps them in the store.
 fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
+    if let [flag, owner] = args
+        && flag == "--refresh"
+    {
+        return refresh_listing(config, &owner.to_string_lossy());
+    }
     let [word] = args else {
         return fail("Usage: h complete <word>");
     };
@@ -335,10 +354,108 @@ fn print_completions(config: &Config, args: &[OsString]) -> ExitCode {
     let Some(word) = word.to_str() else {
         return ExitCode::SUCCESS;
     };
-    for term in projects(config).list_completions(word) {
+    let mut terms = projects(config).list_completions(word);
+    let store = config.store.as_ref().filter(|store| store.exists());
+    if let Some(store) = store
+        && let Some(github) = GitHubWord::parse(word)
+        && let Some(repos) = read_github_repos(config, store, github.owner)
+    {
+        for term in github.list_completions(&repos) {
+            if !terms.iter().any(|t| t.eq_ignore_ascii_case(&term)) {
+                terms.push(term);
+            }
+        }
+    }
+    for term in terms {
         println!("{term}");
     }
     ExitCode::SUCCESS
+}
+
+/// Read what `store` keeps of `owner`'s repositories on GitHub. When it is out of date, GitHub
+/// is asked again in the background, for the next completion; when there is nothing yet, this
+/// one waits for the answer, but only for [`LISTING_WAIT`].
+fn read_github_repos(config: &Config, store: &Store, owner: &str) -> Option<github::OwnerRepos> {
+    let path = store.github_listing(owner);
+    let kept = match read_listing(&path) {
+        Some(kept) => {
+            if !kept.is_fresh {
+                start_refresh(config, store, owner);
+            }
+            Some(kept)
+        }
+        None => {
+            start_refresh(config, store, owner);
+            let started = Instant::now();
+            loop {
+                std::thread::sleep(Duration::from_millis(25));
+                let kept = read_listing(&path);
+                if kept.is_some() || started.elapsed() > LISTING_WAIT {
+                    break kept;
+                }
+            }
+        }
+    };
+    match kept?.listing {
+        Listing::Repos(repos) => Some(repos),
+        Listing::NoSuchOwner => None,
+    }
+}
+
+/// The file that marks a refresh of the listing at `path` as under way.
+fn refresh_marker(path: &Path) -> PathBuf {
+    let mut marker = path.as_os_str().to_owned();
+    marker.push(".refreshing");
+    PathBuf::from(marker)
+}
+
+/// Start `h complete --refresh <owner>` in the background, with this run's store and identity,
+/// unless one is under way already. One marked as under way for longer than [`REFRESH_TIMEOUT`]
+/// has died, or could not reach GitHub, and is tried again.
+fn start_refresh(config: &Config, store: &Store, owner: &str) {
+    let marker = refresh_marker(&store.github_listing(owner));
+    let age = fs::metadata(&marker).and_then(|meta| meta.modified()).map(|t| t.elapsed());
+    if age.is_ok_and(|age| age.is_ok_and(|age| age < REFRESH_TIMEOUT)) {
+        return;
+    }
+    let _ = fs::remove_file(&marker);
+    let _ = marker.parent().map(fs::create_dir_all);
+    if fs::File::create_new(&marker).is_err() {
+        return; // another completion got there first
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("--root").arg(&config.root).arg("--store").arg(&store.path);
+    cmd.args(["complete", "--refresh", owner, "--"]).args(&config.git_opts);
+    // Nothing of it reaches the terminal, and the shell, reading what completion prints, does
+    // not wait for it.
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if cmd.spawn().is_err() {
+        let _ = fs::remove_file(&marker);
+    }
+}
+
+/// `h complete --refresh <owner>`: ask GitHub for `owner`'s repositories and keep them in the
+/// store. When GitHub cannot be reached, the refresh stays marked as under way, so that
+/// completion does not try again until [`REFRESH_TIMEOUT`] has passed.
+fn refresh_listing(config: &Config, owner: &str) -> ExitCode {
+    let Some(store) = config.store.as_ref().filter(|store| store.exists()) else {
+        return fail("h complete --refresh needs a store");
+    };
+    let path = store.github_listing(owner);
+    let listing = match lookup(config).list_repos(owner) {
+        github::Listed::Found(repos) => Listing::Repos(repos),
+        github::Listed::Missing => Listing::NoSuchOwner,
+        github::Listed::Unknown => return fail(&format!("could not list {owner}'s repositories")),
+    };
+    let written = write_listing(&path, &listing);
+    let _ = fs::remove_file(refresh_marker(&path));
+    match written {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => fail(&format!("could not write {}: {err}", path.display())),
+    }
 }
 
 /// `h resolve <term>`: print the directory, or fail when it does not exist.

@@ -90,6 +90,12 @@ impl Store {
         self.path.join("h").join("projects")
     }
 
+    /// The file what GitHub listed of `owner`'s repositories is kept in between runs, which is
+    /// h's own too. GitHub logins ignore case, so it is named in lowercase.
+    pub fn github_listing(&self, owner: &str) -> PathBuf {
+        self.path.join("h").join("github").join(owner.to_ascii_lowercase())
+    }
+
     /// Whether the store has been created.
     pub fn exists(&self) -> bool {
         self.path.join("objects").is_dir() && self.path.join("HEAD").is_file()

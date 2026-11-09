@@ -25,6 +25,13 @@ A directory holding repositories, such as an owner, completes with a `/` at the 
 next name; when it shares its name with a repository (`alacritty` and `alacritty/`), both are
 offered.
 
+With a [store](#the-object-store), `owner/<Tab>` (or `github.com/owner/<Tab>`) also offers the
+owner's repositories on GitHub that are not checked out, after the ones that are; choosing one
+clones it. The list comes from GitHub with the identity's token, so an organization's private
+repositories are in it, and is kept in the store (`<store>/h/github/<owner>`) for a day, then fetched
+again in the background. The first completion of an owner waits a moment for GitHub, and offers
+only the checkouts if GitHub is slower than that.
+
 All four programs (`h`, `h-shell-init`, `up`, `up-shell-init`) print their version with
 `-V`/`--version`.
 

@@ -6,6 +6,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use crate::resolve::is_simple_name;
+
 /// Find the directory `term` names below `root`, at any depth.
 ///
 /// A term is a name, or several joined by `/`, and names each directory whose path ends in those
@@ -34,6 +36,38 @@ pub fn search(root: impl AsRef<Path>, term: &str) -> Option<PathBuf> {
         }
     }
     best.map(|segments| segments.iter().fold(root.to_path_buf(), |path, s| path.join(s)))
+}
+
+/// List the terms that complete `word` to a directory below `root`, best first.
+///
+/// Each is the end of a directory's path, with as many segments as `word` has, spelled as the
+/// directory is: every segment of `word` but the last is a whole segment of it, and the last
+/// starts the last. Case is ignored, so `nixos/n` completes to `NixOS/nixpkgs`. The terms with
+/// the fewest letters whose case differs from `word` come first, then the rest in sorted order.
+/// Directories are the ones [`search`] looks through, and only those spelled as a term can be
+/// are offered.
+pub fn list_completions(root: impl AsRef<Path>, word: &str) -> Vec<String> {
+    let wanted = word.split('/').count();
+    let mut found: Vec<(usize, String)> = list_projects(root)
+        .into_iter()
+        .filter_map(|segments| {
+            let tail = &segments[segments.len().checked_sub(wanted)?..];
+            let tail: Vec<&str> = tail.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
+            if !tail.iter().all(|s| is_simple_name(s)) {
+                return None;
+            }
+            let term = tail.join("/");
+            let start = term.as_bytes().get(..word.len())?;
+            if !start.eq_ignore_ascii_case(word.as_bytes()) {
+                return None;
+            }
+            let differences = start.iter().zip(word.as_bytes()).filter(|(a, b)| a != b).count();
+            Some((differences, term))
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found.into_iter().map(|(_, term)| term).collect()
 }
 
 /// List the directories below `root` a term can name, each as its path relative to `root` split
@@ -211,5 +245,41 @@ mod tests {
     #[test]
     fn missing_root_finds_nothing() {
         assert_eq!(search("/nonexistent/h-test-root", "proj"), None);
+        assert!(list_completions("/nonexistent/h-test-root", "").is_empty());
+    }
+
+    #[test]
+    fn completes_names_and_paths_in_any_case() {
+        let tmp = tree(&[
+            "github.com/NixOS/nixpkgs",
+            "github.com/NixOS/nix",
+            "github.com/nixos/mobile",
+            "github.com/NixOS/marketing",
+            "git.kernel.org/pub/scm/torvalds/linux/.git",
+            "gitlab.com/x/nixpkgs",
+        ]);
+        if fs::read_dir(tmp.path().join("github.com")).unwrap().count() < 2 {
+            return; // a case-insensitive filesystem cannot hold both NixOS and nixos
+        }
+        let complete = |word| list_completions(tmp.path(), word);
+        assert_eq!(complete("nixp"), ["nixpkgs"]);
+        assert_eq!(complete("NIX"), ["NixOS", "nix", "nixos", "nixpkgs"]);
+        assert_eq!(complete("nixos/nixp"), ["NixOS/nixpkgs"]);
+        assert_eq!(complete("github.com/nixos/nixp"), ["github.com/NixOS/nixpkgs"]);
+        assert_eq!(complete("torvalds/l"), ["torvalds/linux"]);
+        assert_eq!(complete("scm/torvalds/"), ["scm/torvalds/linux"]);
+        assert_eq!(complete("pub/torvalds/"), Vec::<String>::new());
+        // Nothing inside a checkout is offered.
+        assert_eq!(complete("linux/"), Vec::<String>::new());
+        // The fewest letters in another case first.
+        assert_eq!(complete("nixos/m"), ["nixos/mobile", "NixOS/marketing"]);
+        assert_eq!(complete("NixOS/m"), ["NixOS/marketing", "nixos/mobile"]);
+    }
+
+    #[test]
+    fn completes_only_what_a_term_can_spell() {
+        let tmp = tree(&["a/with space", "a/caf\u{e9}", "a/fine", "a/.hidden"]);
+        assert_eq!(list_completions(tmp.path(), "a/"), ["a/fine"]);
+        assert_eq!(list_completions(tmp.path(), ""), ["a", "fine"]);
     }
 }

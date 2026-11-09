@@ -54,7 +54,7 @@ fn is_valid_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')
 }
 
-fn is_simple_name(s: &str) -> bool {
+pub(crate) fn is_simple_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(is_valid_name_char)
 }
 

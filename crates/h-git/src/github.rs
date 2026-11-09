@@ -8,8 +8,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
 use std::time::Duration;
 
-use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
+use ureq::{Agent, Body, http};
 
 use crate::git;
 
@@ -113,6 +113,38 @@ impl Answer {
     }
 }
 
+/// How many repositories a page of a list holds, which is the most GitHub gives.
+const PER_PAGE: usize = 100;
+
+/// How many pages of an owner's repositories are listed at most.
+pub const MAX_LISTED_PAGES: usize = 10;
+
+/// An owner's repositories on GitHub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerRepos {
+    /// The owner's login, as GitHub spells it.
+    pub login: String,
+    pub names: Vec<String>,
+}
+
+/// What GitHub said about an owner's repositories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listed {
+    Found(OwnerRepos),
+    /// There is no such user or organization, as far as the token's account can see.
+    Missing,
+    /// GitHub could not be asked, or gave no answer to go by.
+    Unknown,
+}
+
+/// The body of `response` when it is a 200, as [`Reply::Body`].
+fn read_reply(mut response: http::Response<Body>) -> Reply {
+    if response.status() != 200 {
+        return Reply::Failed;
+    }
+    response.body_mut().read_to_string().map_or(Reply::Failed, Reply::Body)
+}
+
 /// What GitHub replied to a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Reply {
@@ -186,19 +218,7 @@ impl Lookup {
     /// helpers, even when GitHub turns it down: git uses it for more than the API, and h did not
     /// store it.
     fn get(&self, path: &str) -> Reply {
-        let url = format!("{}{path}", self.api);
-        let send = |token: Option<&str>| {
-            let mut request = self
-                .agent
-                .get(&url)
-                .header("User-Agent", "h-cli")
-                .header("Accept", "application/vnd.github.v3+json");
-            if let Some(token) = token {
-                request = request.header("Authorization", format!("Bearer {token}"));
-            }
-            request.call().ok()
-        };
-        let Some(mut response) = send(None) else {
+        let Some(mut response) = self.send(path, None) else {
             return Reply::Failed;
         };
         let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
@@ -208,8 +228,8 @@ impl Lookup {
             header("retry-after").is_some(),
         );
         if could_help {
-            let token = self.token.get_or_init(|| ask_credential_token(&self.api, &self.config));
-            let Some(again) = token.as_deref().and_then(|token| send(Some(token))) else {
+            let Some(again) = self.ask_token().and_then(|token| self.send(path, Some(token)))
+            else {
                 return Reply::Failed;
             };
             response = again;
@@ -217,10 +237,70 @@ impl Lookup {
                 return Reply::Missing;
             }
         }
-        if response.status() != 200 {
-            return Reply::Failed;
+        read_reply(response)
+    }
+
+    /// Get `path` from the API with the token from the start, if there is one: for lists, where
+    /// a token's account may see more than anyone can, and an answer without it would look
+    /// whole. A 404 is [`Reply::Missing`] either way.
+    fn get_with_token(&self, path: &str) -> Reply {
+        match self.send(path, self.ask_token()) {
+            Some(response) if response.status() == 404 => Reply::Missing,
+            Some(response) => read_reply(response),
+            None => Reply::Failed,
         }
-        response.body_mut().read_to_string().map_or(Reply::Failed, Reply::Body)
+    }
+
+    /// Ask git for the token, the first time only.
+    fn ask_token(&self) -> Option<&str> {
+        let token = self.token.get_or_init(|| ask_credential_token(&self.api, &self.config));
+        token.as_deref()
+    }
+
+    /// Send a request for `path`, with `token` if there is one. `None` when no reply came.
+    fn send(&self, path: &str, token: Option<&str>) -> Option<http::Response<Body>> {
+        let mut request = self
+            .agent
+            .get(format!("{}{path}", self.api))
+            .header("User-Agent", "h-cli")
+            .header("Accept", "application/vnd.github.v3+json");
+        if let Some(token) = token {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+        request.call().ok()
+    }
+
+    /// List the repositories `owner`, a user or an organization, has on GitHub, as far as the
+    /// identity's token lets it see: an organization's private ones too, with a token from one
+    /// of its members, but only a user's public ones. Owners with more than
+    /// [`MAX_LISTED_PAGES`] pages of them are listed only in part.
+    pub fn list_repos(&self, owner: &str) -> Listed {
+        'kinds: for kind in ["orgs", "users"] {
+            let (mut login, mut names) = (None, Vec::new());
+            for page in 1..=MAX_LISTED_PAGES {
+                let path = format!("/{kind}/{owner}/repos?per_page={PER_PAGE}&page={page}");
+                let repos = match self.get_with_token(&path) {
+                    Reply::Body(body) => parse_repo_list(&body),
+                    Reply::Missing if page == 1 => continue 'kinds,
+                    Reply::Missing | Reply::Failed => None,
+                };
+                let Some(repos) = repos else {
+                    return Listed::Unknown;
+                };
+                let last = repos.len() < PER_PAGE;
+                for (owner, name) in repos {
+                    login.get_or_insert(owner);
+                    names.push(name);
+                }
+                if last {
+                    break;
+                }
+            }
+            // An owner with no repositories says nothing of how it spells its name.
+            let login = login.unwrap_or_else(|| owner.to_string());
+            return Listed::Found(OwnerRepos { login, names });
+        }
+        Listed::Missing
     }
 }
 
@@ -234,6 +314,16 @@ fn token_could_help(status: u16, ratelimit_remaining: Option<&str>, retry_after:
         403 => ratelimit_remaining.is_some_and(|n| n.trim() == "0") || retry_after,
         _ => false,
     }
+}
+
+/// Extract each repository's `owner.login` and `name` from a GitHub list of repositories.
+fn parse_repo_list(body: &str) -> Option<Vec<(String, String)>> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let repo = |repo: &serde_json::Value| {
+        let owner = repo.get("owner")?.get("login")?.as_str()?;
+        Some((owner.to_string(), repo.get("name")?.as_str()?.to_string()))
+    };
+    json.as_array()?.iter().map(repo).collect()
 }
 
 /// Extract `owner.login`, `name` and, for a fork, `parent.full_name` from a GitHub repository
@@ -283,6 +373,17 @@ mod tests {
         assert_eq!(parse_repo_info(r#"{"owner": {"login": 3}, "name": "h"}"#), None);
         assert_eq!(parse_repo_info(r#"{"owner": {"login": "z"}, "name": null}"#), None);
         assert_eq!(parse_repo_info(r#"{"message": "Not Found"}"#), None);
+    }
+
+    #[test]
+    fn parses_repo_lists() {
+        let body = r#"[{"name": "nixpkgs", "owner": {"login": "NixOS"}},
+                       {"name": "nix", "owner": {"login": "NixOS"}, "fork": false}]"#;
+        let want = [("NixOS", "nixpkgs"), ("NixOS", "nix")].map(|(o, n)| (o.into(), n.into()));
+        assert_eq!(parse_repo_list(body), Some(want.to_vec()));
+        assert_eq!(parse_repo_list("[]"), Some(vec![]));
+        assert_eq!(parse_repo_list(r#"[{"name": "x"}]"#), None);
+        assert_eq!(parse_repo_list(r#"{"message": "Not Found"}"#), None);
     }
 
     #[test]
